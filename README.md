@@ -1,7 +1,7 @@
 <h1 align="center">Video Course Cards</h1>
 
 <p align="center">
-  <strong>A local lecture-processing system with controlled experiments in slide OCR, grounded generation, and card-level RAG.</strong>
+  <strong>A research platform for studying grounded generation with structured concept representations.</strong>
 </p>
 
 <p align="center">
