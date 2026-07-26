@@ -11,6 +11,8 @@
   &nbsp;|&nbsp;
   <a href="docs/RAG%20retrieval%20and%20graph%20study.md">RAG report</a>
   &nbsp;|&nbsp;
+  <a href="docs/Reasoning-guided%20adaptive%20retrieval%20research%20plan.md">Controller research plan</a>
+  &nbsp;|&nbsp;
   <a href="backend/rag_lab/README.md">Reproduction</a>
 </p>
 
@@ -310,7 +312,8 @@ cd backend
 uv run pytest
 ```
 
-Current verification: `302 passed, 1 warning`.
+Current verification: `415 passed, 1 warning`; frontend ESLint and TypeScript
+checks pass.
 
 | Experiment | Main entry point | Record |
 | --- | --- | --- |
@@ -320,6 +323,7 @@ Current verification: `302 passed, 1 warning`.
 | Retrieval baselines | `backend/rag_lab/run_retrieval_experiment.py` | [R2 result](docs/experiments/rag_r2_development_results.json) |
 | Grounded generation | `backend/rag_lab/run_grounded_answer_experiment.py` | [R3/R4 result](docs/experiments/rag_r3_r4_development_results.json) |
 | Graph audit | `backend/rag_lab/run_graph_organization_audit.py` | [Graph result](docs/experiments/rag_graph_organization_audit_v1.json) |
+| Adaptive controller smoke runner | `backend/rag_lab/run_controller_experiment.py` | [Smoke artifact](docs/experiments/rag_controller_smoke_v1.json) |
 
 Videos, extracted frames, line crops, full prediction logs, embeddings, and
 checkpoints remain under ignored `backend/data/` paths. Git tracks code,

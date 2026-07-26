@@ -1,6 +1,6 @@
 # RAG Research Roadmap
 
-Last updated: 2026-07-21
+Last updated: 2026-07-25
 
 ## Objective
 
@@ -62,6 +62,37 @@ Development finding: one graph win, 39 ties, and no multi-hop generation gain.
 
 See `docs/RAG retrieval and graph study.md` for methods and results.
 
+### Controller Foundation: New Versioned Track
+
+The repository now has an independent controller experiment foundation:
+
+- closed, discriminated concept/evidence/graph/verify/answer/abstain actions;
+- structured evidence-gap state without unrestricted chain-of-thought;
+- frozen card-proxy concepts, claim evidence nodes, and directed typed edges;
+- fixed Dense, fixed Dense-plus-typed-graph, and rule evidence-gap policies;
+- replayable hashed traces, per-action budgets, duplicate/loop guards, and
+  resumable JSONL runs;
+- controller-specific recall, stopping, path, and cost metrics;
+- an independent benchmark v2 contract with evidence alternatives, typed
+  paths, graph-authoring independence, double review, adjudication, and seal
+  audits.
+
+Three two-question development smoke runs exercise every policy entry point.
+The typed-graph baseline always expands the graph; the evidence-gap baseline
+does so only when its public-text need heuristic classifies a question as
+prerequisite or relational. They are plumbing checks only: the old benchmark
+and graph are candidate annotations, and the deterministic verifier/answerer
+is not a semantic answer model. Every artifact is therefore marked
+`paper_claim_eligible=false`.
+
+The v2 evaluator is also development-diagnostic only. It audits the declared
+memory membership and trace metadata, but formal use remains blocked until the
+canonical source artifacts can reconstruct the memory and the exact
+retriever/runner execution can be replayed.
+
+See `docs/Reasoning-guided adaptive retrieval research plan.md` for the thesis,
+falsification criteria, experiment gates, and implementation ledger.
+
 ## Required Before Formal Test
 
 1. Independently review all benchmark questions, gold claims, evidence spans,
@@ -94,10 +125,13 @@ See `docs/Graph as associative knowledge structure.md` and the compact artifact
 
 ### R5: Harder Multi-hop Benchmark
 
-- More lectures and independently authored paths
-- Two- and three-evidence questions
-- Hard negatives from neighboring concepts
-- Typed relation-path labels
+- Use the independent controller benchmark v2 contract.
+- Begin with a 36-question, development-only pilot: 12 true multi-hop, 12
+  implicit-prerequisite, and 12 structured unanswerable items.
+- Separate graph construction from question authoring and path review.
+- Add two- and three-relation paths, evidence alternatives, in-domain missing
+  bridges, and high-overlap hard negatives.
+- Require double review and adjudication before any seal.
 
 ### R6: Stronger Graph Retrieval
 
@@ -115,7 +149,7 @@ See `docs/Graph as associative knowledge structure.md` and the compact artifact
 
 ### R8: Learned Router
 
-Only after R1-R7 are measured:
+Only after independently reviewed C1 and oracle trajectories are frozen:
 
 ```text
 query representation

@@ -90,3 +90,90 @@ scores are frozen.
 
 The runner blocks test access until the benchmark is sealed and the annotation
 review is marked `human_verified`.
+
+## Reasoning-Guided Controller Track
+
+The controller track is a new experiment family. It reads the frozen R1/R2
+artifacts but does not modify their schemas, hashes, protocols, or results.
+
+Its implementation is separated into:
+
+```text
+controller_schemas.py             closed state/action/trace contracts
+controller_memory.py              card-proxy and evidence memory adapter
+controller_policy.py              fixed and public-cue evidence-gap baselines
+controller_runner.py              action guard, pure reducer, budgets, replay
+controller_metrics.py             retrieval, stopping, and cost metrics
+controller_benchmark/             independent v2 annotation and seal contract
+run_controller_experiment.py      frozen provenance, locked runs, and resume
+```
+
+The current executable verifier and answerer are deterministic smoke
+components. Their outputs are always marked `paper_claim_eligible=false`; they
+test the experiment plumbing and must not be reported as answer-quality
+evidence.
+
+Run a small development smoke experiment from `backend/`:
+
+```powershell
+uv run python -B -m rag_lab.run_controller_experiment `
+  --corpus data/rag_lab/r1/corpus-v1.json `
+  --benchmark data/rag_lab/r1/benchmark-candidate-v2.json `
+  --review data/rag_lab/r1/annotation-review-candidate-v2.json `
+  --embeddings data/rag_lab/r2/<R2_RUN_ID>/card_embeddings.json `
+  --output-dir data/rag_lab/controller `
+  --policy fixed_dense `
+  --split development `
+  --top-k 5 `
+  --max-items 2
+```
+
+Replace `fixed_dense` with `fixed_dense_typed_graph` or `evidence_gap` to
+exercise the other policy entry points. `evidence_gap` is still a deterministic
+single-need baseline: public question cues select concept, prerequisite, or
+relation need type; it is not the planned semantic need decomposer. A run
+writes:
+
+```text
+resolved_protocol.json
+memory_snapshot.json
+episodes.jsonl
+metrics.json
+manifest.json
+```
+
+Resume without duplicating completed questions:
+
+```powershell
+uv run python -B -m rag_lab.run_controller_experiment `
+  --corpus data/rag_lab/r1/corpus-v1.json `
+  --benchmark data/rag_lab/r1/benchmark-candidate-v2.json `
+  --review data/rag_lab/r1/annotation-review-candidate-v2.json `
+  --embeddings data/rag_lab/r2/<R2_RUN_ID>/card_embeddings.json `
+  --resume-run-dir data/rag_lab/controller/<CONTROLLER_RUN_ID> `
+  --split development
+```
+
+The resolved protocol binds the exact local query-encoder files, corpus,
+review, benchmark, embedding records, BM25 parameters, controller/evaluator
+code, dependency lock, and runtime versions. State transitions and observation
+costs are replayed before a trace is accepted. A sibling run lock prevents a
+new run and a resume from writing the same directory concurrently; a
+syntactically truncated final JSONL record is removed with its hash recorded,
+while a complete but semantically invalid record fails closed.
+
+The v2 benchmark evaluator is intentionally a development diagnostic. It
+checks sealed annotation structure and verifies trace IDs and metadata against
+the declared frozen memory, but it does not yet reconstruct that memory from
+canonical source artifacts or replay the Dense/BM25 retrievers and runner.
+Its report therefore fixes `paper_claim_eligible=false`, including for exact
+match. Canonical source reconstruction and deterministic execution replay are
+Phase 6 prerequisites, not current capabilities.
+
+This smoke runner is development-only. It refuses the test split even after the
+existing formal review gate; confirmatory access remains blocked until the v2
+one-use access ledger and separated test-gold loader are implemented.
+
+The complete research thesis, falsification criteria, phases, and current
+limitations are recorded in
+`docs/Reasoning-guided adaptive retrieval research plan.md`.

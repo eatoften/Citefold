@@ -1,0 +1,130 @@
+{
+  "schema_version": "1.0",
+  "experiment_id": "rag-controller-smoke-v1",
+  "created_at": "2026-07-25T04:36:12.1728498Z",
+  "scope": "development_pipeline_smoke_only",
+  "paper_claim_eligible": false,
+  "limitations": [
+    "Only the first two sorted development questions were executed.",
+    "The existing questions and graph are model-assisted candidates.",
+    "The evidence verifier is a deterministic lexical-overlap smoke component.",
+    "The answerer concatenates retrieved claim text and is not an answer-quality model.",
+    "The evidence-gap policy initializes one public-question need whose type is selected by deterministic public-text cues; it is not semantic decomposition.",
+    "The v2 evaluator audits declared memory membership and metadata but does not yet reconstruct canonical sources or replay the retriever and runner.",
+    "The worktree was dirty, so the manifest binds the exact composite code hash in addition to the Git commit.",
+    "The existing confirmatory test split was not accessed."
+  ],
+  "source_file_sha256s": {
+    "corpus": "bbc4985cddc859f453a33023b868425e34da9f71694e61615f288f942fc8e0a4",
+    "benchmark": "c32b29cd353ffc3ddb2677611332eeea1ab47c8824ae04dc56d70d21d5855fdd",
+    "review": "6a73918655906b3f1b6679b478afeda669c24b38e23f2261e4dec58621fdfbf4",
+    "embeddings": "0636f61a8eb1ed561328ea55be5d6731eef1e9201a772f72f14f752f65cc7a07"
+  },
+  "memory_sha256": "81b1a3b5fdbd894e62fdcba97c3d26f805547b9a1ab4c9da9882ed39daa27a03",
+  "query_encoder_sha256": "97859e21968c7313b537ff4d14bae998d2eaa2358b942765a25d8801e1a9035b",
+  "retrieval_config_sha256": "e37f23f6a9c7131968546eb7b3c0998aaa5b51e14aeec90327db54f07f9926f5",
+  "code_sha256": "c464996a4f06d45739b647255a11fd98a79b1422fcab52c8a2a33846d6f8e573",
+  "verification": {
+    "all_current_run_artifact_hashes_match_manifest": true,
+    "controller_related_tests_passed": 113,
+    "full_backend_tests_passed": 415,
+    "full_backend_warning_count": 1
+  },
+  "runs": [
+    {
+      "run_id": "controller-fixed_dense-20260725T043521.185217Z-e2ac07c8526e",
+      "policy": "fixed_dense",
+      "protocol_sha256": "b00083e9515ddd5eeeeb4ff10b9b159105bf120d44992c627023cd459d723836",
+      "question_count": 2,
+      "failed_count": 0,
+      "mean_retrieval_calls": 2.0,
+      "mean_concept_searches": 1.0,
+      "mean_evidence_searches": 1.0,
+      "mean_graph_expansions": 0.0,
+      "mean_verifications": 1.0,
+      "mean_steps": 4.0,
+      "mean_unique_concepts": 5.0,
+      "mean_unique_evidence": 5.0,
+      "mean_context_characters": 3244.5,
+      "mean_prompt_characters": 7264.0,
+      "mean_completion_tokens": 0.0,
+      "mean_elapsed_milliseconds": 3652.3883499758085,
+      "action_sequence_per_item": [
+        "search_concept",
+        "search_evidence",
+        "verify_support",
+        "answer"
+      ],
+      "artifact_sha256s": {
+        "resolved_protocol.json": "d43d94d96f05a54061d099c8351de2c395c97eabd228bdfedf5c187fdc7ecc0a",
+        "memory_snapshot.json": "217d6e116731bcc0a241af91474614f16e165d157edf9c31ac1dba589018542a",
+        "episodes.jsonl": "17f21da79652495fc809551967856a7cfc5301713a1aba9697dd4835c6129e6a",
+        "metrics.json": "83d29854bcec9d095926c1020c34aac0619644764571ce836c412328f1460c62"
+      }
+    },
+    {
+      "run_id": "controller-fixed_dense_typed_graph-20260725T043538.220034Z-10f5daa05ff3",
+      "policy": "fixed_dense_typed_graph",
+      "protocol_sha256": "17b1ff0c9100f81b912cc513645bd2e2021f232795d9c1c640cdf788e93afe47",
+      "question_count": 2,
+      "failed_count": 0,
+      "mean_retrieval_calls": 3.0,
+      "mean_concept_searches": 1.0,
+      "mean_evidence_searches": 1.0,
+      "mean_graph_expansions": 1.0,
+      "mean_verifications": 1.0,
+      "mean_steps": 5.0,
+      "mean_unique_concepts": 6.0,
+      "mean_unique_evidence": 5.0,
+      "mean_context_characters": 4389.0,
+      "mean_prompt_characters": 9367.5,
+      "mean_completion_tokens": 0.0,
+      "mean_elapsed_milliseconds": 1603.5152500044205,
+      "action_sequence_per_item": [
+        "search_concept",
+        "expand_typed_neighbor",
+        "search_evidence",
+        "verify_support",
+        "answer"
+      ],
+      "artifact_sha256s": {
+        "resolved_protocol.json": "bbf6efa7d0eb596114aa8d47a93ddbd640a303061318cc83aa3d85d1733d43b6",
+        "memory_snapshot.json": "3a2509d8951db29483fc896aecacf52f79352bd35901b796e94d48fdcf0f451e",
+        "episodes.jsonl": "dc8865b876f426dfbf66b771773852bb97376bbfeb9285659fe2baa6dab80ca7",
+        "metrics.json": "54212e0679c924af325efdcff729c930389f450bad630ebd2b69395f7a358533"
+      }
+    },
+    {
+      "run_id": "controller-evidence_gap-20260725T043558.024623Z-ebe00460606b",
+      "policy": "evidence_gap",
+      "protocol_sha256": "62de1a09413b2cbaa2d4f3e9002bd6fdc7a5c5705a1173ef2683f3f42f9288c5",
+      "question_count": 2,
+      "failed_count": 0,
+      "mean_retrieval_calls": 3.0,
+      "mean_concept_searches": 1.0,
+      "mean_evidence_searches": 1.0,
+      "mean_graph_expansions": 1.0,
+      "mean_verifications": 1.0,
+      "mean_steps": 5.0,
+      "mean_unique_concepts": 6.0,
+      "mean_unique_evidence": 5.0,
+      "mean_context_characters": 4389.0,
+      "mean_prompt_characters": 9373.0,
+      "mean_completion_tokens": 0.0,
+      "mean_elapsed_milliseconds": 1540.7863999862457,
+      "action_sequence_per_item": [
+        "search_concept",
+        "expand_typed_neighbor",
+        "search_evidence",
+        "verify_support",
+        "answer"
+      ],
+      "artifact_sha256s": {
+        "resolved_protocol.json": "67cf8e0853698a6ff89866ec45a66bcceb2c7266e2f002858739df61a806d1db",
+        "memory_snapshot.json": "6b07b335d221bd6ab936d996f40ce2831b34b6d8352d4b606d13ce63bb7cbd12",
+        "episodes.jsonl": "1c88fd952b1fd10676f27445bbad13f850320f2a78cbe5cdc20990817578946c",
+        "metrics.json": "0813d770340e75a587d19d493e2acb851f3c83caf0e58a28ccb5eb9c5bef8075"
+      }
+    }
+  ]
+}

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import TypeVar
 
@@ -33,20 +35,32 @@ def sha256_file(path: Path) -> str:
 
 
 def write_model_atomic(path: Path, model: BaseModel) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(model.model_dump_json(indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    _write_text_atomic(path, model.model_dump_json(indent=2) + "\n")
 
 
 def write_json_atomic(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
+    _write_text_atomic(
+        path,
         json.dumps(value, ensure_ascii=True, indent=2) + "\n",
-        encoding="utf-8",
     )
-    temporary.replace(path)
+
+
+def _write_text_atomic(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def load_model(path: Path, model_type: type[ModelT]) -> ModelT:
