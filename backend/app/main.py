@@ -18,6 +18,7 @@ from . import auto_card_generation_service
 from . import card_embedding_service
 from . import card_relation_service
 from . import card_service
+from . import chat_service
 from . import course_source_service
 from . import course_service
 from . import export_service
@@ -46,6 +47,14 @@ from .course_source import (
     SourceSearchResponse,
 )
 from .card_generation_run import AutoCardGenerationRequest, CardGenerationRun
+from .chat import (
+    ChatConversation,
+    ChatConversationCreate,
+    ChatConversationDetail,
+    ChatConversationUpdate,
+    ChatMessageCreate,
+    ChatTurnResponse,
+)
 from .card_embedding import CardEmbeddingBatchResult, CardEmbeddingStatus
 from .card_relation import (
     CardRelatedCardsResponse,
@@ -629,6 +638,52 @@ def raise_rag_http_error(exc: rag_service.RagServiceError) -> None:
     ) from exc
 
 
+def raise_chat_http_error(exc: chat_service.ChatServiceError) -> None:
+    if isinstance(
+        exc,
+        chat_service.ChatConversationNotFoundError,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+    if isinstance(
+        exc,
+        (
+            chat_service.ChatTurnConflictError,
+            chat_service.ChatSourceChangedError,
+        ),
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+    if isinstance(exc, chat_service.ChatRetrievalError):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+
+    if isinstance(exc, chat_service.ChatGenerationTimeoutError):
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=str(exc),
+        ) from exc
+
+    if isinstance(exc, chat_service.ChatGenerationError):
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Unexpected chat service error.",
+    ) from exc
+
+
 def archive_response(archive: export_service.MarkdownArchive) -> Response:
     return Response(
         content=archive.content,
@@ -644,6 +699,7 @@ def archive_response(archive: export_service.MarkdownArchive) -> Response:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    chat_service.recover_interrupted_chat_turns()
     for course in course_service.list_video_courses():
         course_source_service.reconcile_course_sources(course.id)
 
@@ -994,6 +1050,106 @@ def search_course_sources(
         raise_course_source_http_error(exc)
     except source_search_service.SourceSearchServiceError as exc:
         raise_source_search_http_error(exc)
+
+
+@app.get(
+    "/courses/{course_id}/chat/conversations",
+    response_model=list[ChatConversation],
+)
+def list_chat_conversations(
+    course_id: str,
+) -> list[ChatConversation]:
+    try:
+        return chat_service.list_chat_conversations(course_id)
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+
+
+@app.post(
+    "/courses/{course_id}/chat/conversations",
+    response_model=ChatConversation,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_chat_conversation(
+    course_id: str,
+    request: ChatConversationCreate,
+) -> ChatConversation:
+    try:
+        return chat_service.create_chat_conversation(course_id, request)
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except course_source_service.CourseSourceServiceError as exc:
+        raise_course_source_http_error(exc)
+    except chat_service.ChatServiceError as exc:
+        raise_chat_http_error(exc)
+
+
+@app.get(
+    "/chat/conversations/{conversation_id}",
+    response_model=ChatConversationDetail,
+)
+def get_chat_conversation(
+    conversation_id: str,
+) -> ChatConversationDetail:
+    try:
+        return chat_service.get_chat_conversation(conversation_id)
+    except chat_service.ChatServiceError as exc:
+        raise_chat_http_error(exc)
+
+
+@app.patch(
+    "/chat/conversations/{conversation_id}",
+    response_model=ChatConversation,
+)
+def update_chat_conversation(
+    conversation_id: str,
+    request: ChatConversationUpdate,
+) -> ChatConversation:
+    try:
+        return chat_service.update_chat_conversation(
+            conversation_id,
+            request,
+        )
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except course_source_service.CourseSourceServiceError as exc:
+        raise_course_source_http_error(exc)
+    except chat_service.ChatServiceError as exc:
+        raise_chat_http_error(exc)
+
+
+@app.delete(
+    "/chat/conversations/{conversation_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_chat_conversation(conversation_id: str) -> Response:
+    try:
+        chat_service.delete_chat_conversation(conversation_id)
+    except chat_service.ChatServiceError as exc:
+        raise_chat_http_error(exc)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post(
+    "/chat/conversations/{conversation_id}/messages",
+    response_model=ChatTurnResponse,
+)
+def send_chat_message(
+    conversation_id: str,
+    request: ChatMessageCreate,
+) -> ChatTurnResponse:
+    try:
+        return chat_service.send_chat_message(
+            conversation_id,
+            request,
+            llm_client=get_llm_client(),
+        )
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except course_source_service.CourseSourceServiceError as exc:
+        raise_course_source_http_error(exc)
+    except chat_service.ChatServiceError as exc:
+        raise_chat_http_error(exc)
 
 
 @app.get(

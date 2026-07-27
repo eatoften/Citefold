@@ -4,6 +4,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Callable, Sequence
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -111,11 +112,294 @@ def _create_unified_source_index(conn: sqlite3.Connection) -> None:
     _validate_source_backfill(conn)
 
 
+def _create_grounded_chat(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE chat_conversations (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'active',
+            selected_source_ids_json TEXT NOT NULL DEFAULT '[]',
+            next_sequence INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CHECK (status IN ('active', 'archived')),
+            CHECK (next_sequence >= 1)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_chat_conversations_course_updated
+        ON chat_conversations (course_id, updated_at DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE chat_turns (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            client_request_id TEXT NOT NULL,
+            user_message_id TEXT NOT NULL UNIQUE,
+            assistant_message_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            source_ids_json TEXT NOT NULL,
+            retrieval_query TEXT,
+            provider TEXT,
+            model TEXT,
+            generation_token TEXT,
+            refusal_reason TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            UNIQUE (conversation_id, client_request_id),
+            CHECK (
+                status IN (
+                    'pending',
+                    'retrieving',
+                    'generating',
+                    'validating',
+                    'completed',
+                    'refused',
+                    'abstained',
+                    'failed'
+                )
+            )
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_chat_turns_conversation_created
+        ON chat_turns (conversation_id, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX idx_chat_turns_one_active_per_conversation
+        ON chat_turns (conversation_id)
+        WHERE status IN (
+            'pending',
+            'retrieving',
+            'generating',
+            'validating'
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE chat_messages (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            turn_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            status TEXT NOT NULL,
+            answer_status TEXT,
+            reply_to_message_id TEXT,
+            error_message TEXT,
+            provider TEXT,
+            model TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (conversation_id, sequence),
+            UNIQUE (turn_id, role),
+            CHECK (sequence >= 1),
+            CHECK (role IN ('user', 'assistant')),
+            CHECK (status IN ('generating', 'complete', 'failed')),
+            CHECK (
+                answer_status IS NULL
+                OR answer_status IN ('answered', 'abstained')
+            )
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_chat_messages_conversation_sequence
+        ON chat_messages (conversation_id, sequence)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE chat_citations (
+            id TEXT PRIMARY KEY,
+            message_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            source_id TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            chunk_text_hash TEXT NOT NULL,
+            source_title TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            quote TEXT NOT NULL,
+            score REAL NOT NULL,
+            locator_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (message_id, ordinal),
+            UNIQUE (message_id, chunk_id),
+            CHECK (ordinal >= 1),
+            CHECK (score >= -1.0 AND score <= 1.0)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_chat_citations_message
+        ON chat_citations (message_id, ordinal)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE chat_citation_spans (
+            id TEXT PRIMARY KEY,
+            message_id TEXT NOT NULL,
+            citation_id TEXT NOT NULL,
+            sentence_index INTEGER NOT NULL,
+            start_offset INTEGER NOT NULL,
+            end_offset INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (
+                message_id,
+                citation_id,
+                sentence_index,
+                start_offset,
+                end_offset
+            ),
+            CHECK (sentence_index >= 0),
+            CHECK (start_offset >= 0),
+            CHECK (end_offset > start_offset)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_chat_citation_spans_message_sentence
+        ON chat_citation_spans (message_id, sentence_index, start_offset)
+        """
+    )
+
+
+def _align_grounded_chat_turn_contract(conn: sqlite3.Connection) -> None:
+    """Align already-applied v2 databases with the runtime turn contract."""
+
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(chat_turns)").fetchall()
+    }
+    source_scope_expression = (
+        (
+            "CASE WHEN source_scope_mode IN ('conversation', 'explicit') "
+            "THEN source_scope_mode ELSE 'explicit' END"
+        )
+        if "source_scope_mode" in columns
+        else "'explicit'"
+    )
+    conn.execute("DROP INDEX IF EXISTS idx_chat_turns_conversation_created")
+    conn.execute(
+        "DROP INDEX IF EXISTS idx_chat_turns_one_active_per_conversation"
+    )
+    conn.execute(
+        "ALTER TABLE chat_turns RENAME TO chat_turns_v2_contract"
+    )
+    conn.execute(
+        """
+        CREATE TABLE chat_turns (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            client_request_id TEXT NOT NULL,
+            user_message_id TEXT NOT NULL UNIQUE,
+            assistant_message_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            source_ids_json TEXT NOT NULL,
+            source_scope_mode TEXT NOT NULL DEFAULT 'explicit',
+            retrieval_query TEXT,
+            provider TEXT,
+            model TEXT,
+            generation_token TEXT,
+            refusal_reason TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            UNIQUE (conversation_id, client_request_id),
+            CHECK (
+                status IN (
+                    'pending',
+                    'retrieving',
+                    'generating',
+                    'validating',
+                    'completed',
+                    'refused',
+                    'failed'
+                )
+            ),
+            CHECK (source_scope_mode IN ('conversation', 'explicit'))
+        )
+        """
+    )
+    conn.execute(
+        f"""
+        INSERT INTO chat_turns (
+            id, conversation_id, client_request_id, user_message_id,
+            assistant_message_id, status, source_ids_json, source_scope_mode,
+            retrieval_query, provider, model, generation_token,
+            refusal_reason, error_code, error_message, created_at, updated_at,
+            started_at, completed_at
+        )
+        SELECT
+            id, conversation_id, client_request_id, user_message_id,
+            assistant_message_id,
+            CASE WHEN status = 'abstained' THEN 'refused' ELSE status END,
+            source_ids_json, {source_scope_expression}, retrieval_query,
+            provider, model, generation_token, refusal_reason, error_code,
+            error_message, created_at, updated_at, started_at, completed_at
+        FROM chat_turns_v2_contract
+        """
+    )
+    conn.execute("DROP TABLE chat_turns_v2_contract")
+    conn.execute(
+        """
+        CREATE INDEX idx_chat_turns_conversation_created
+        ON chat_turns (conversation_id, created_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX idx_chat_turns_one_active_per_conversation
+        ON chat_turns (conversation_id)
+        WHERE status IN (
+            'pending',
+            'retrieving',
+            'generating',
+            'validating'
+        )
+        """
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version=1,
         name="unified_source_index",
         apply=_create_unified_source_index,
+    ),
+    Migration(
+        version=2,
+        name="grounded_chat",
+        apply=_create_grounded_chat,
+    ),
+    Migration(
+        version=3,
+        name="align_grounded_chat_turn_contract",
+        apply=_align_grounded_chat_turn_contract,
     ),
 )
 
@@ -133,7 +417,7 @@ def prepare_migration_backup(
     if not db_path.is_file() or db_path.stat().st_size == 0:
         return None
 
-    with sqlite3.connect(db_path) as source:
+    with closing(sqlite3.connect(db_path)) as source:
         applied = _read_applied_versions(source)
         pending = [
             migration
@@ -158,10 +442,10 @@ def prepare_migration_backup(
             backup_dir
             / f"{db_path.stem}.pre-migration-v{target_version}-{stamp}.db"
         )
-        with sqlite3.connect(backup_path) as destination:
+        with closing(sqlite3.connect(backup_path)) as destination:
             source.backup(destination)
 
-    with sqlite3.connect(backup_path) as backup:
+    with closing(sqlite3.connect(backup_path)) as backup:
         backup_check = backup.execute("PRAGMA quick_check").fetchone()
         if backup_check is None or backup_check[0] != "ok":
             backup_path.unlink(missing_ok=True)

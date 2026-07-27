@@ -1,19 +1,19 @@
 <h1 align="center">Video Course Cards</h1>
 
 <p align="center">
-  <strong>A research platform for studying grounded generation with structured concept representations.</strong>
+  <strong>A local-first course notebook with source-grounded chat, timestamped learning artifacts, and reproducible research.</strong>
 </p>
 
 <p align="center">
   <a href="https://github.com/eatoften/Video_Course_Cards/releases/latest"><strong>Windows release</strong></a>
   &nbsp;|&nbsp;
+  <a href="docs/roadmap.md"><strong>Product roadmap</strong></a>
+  &nbsp;|&nbsp;
+  <a href="docs/productization-log.md">Engineering log</a>
+  &nbsp;|&nbsp;
   <a href="docs/Multimodal%20CNN%20ViT%20reader%20study.md">CNN vs ViT report</a>
   &nbsp;|&nbsp;
   <a href="docs/RAG%20retrieval%20and%20graph%20study.md">RAG report</a>
-  &nbsp;|&nbsp;
-  <a href="docs/Reasoning-guided%20adaptive%20retrieval%20research%20plan.md">Controller research plan</a>
-  &nbsp;|&nbsp;
-  <a href="backend/rag_lab/README.md">Reproduction</a>
 </p>
 
 <p align="center">
@@ -28,12 +28,37 @@
 Video Course Cards contains two connected components:
 
 - a FastAPI, React, SQLite, and Tauri application that transcribes local course
-  videos, performs semantic chunking, generates evidence-linked cards with a
-  local Qwen model, and supports course organization, review, retrieval, and
-  Markdown export;
+  videos, unifies videos and documents as locatable Sources, persists
+  source-scoped conversations, and produces local-model answers with
+  server-owned sentence citation snapshots. It also supports evidence-linked
+  cards, Study documents, FSRS review, Course Map, and Markdown export;
 - isolated research packages for controlled multimodal reading and RAG
   experiments, with versioned protocols, lecture-level splits, dataset hashes,
   sealed evaluation gates, and machine-readable results.
+
+The active direction is a NotebookLM-style, video-course-native product. The
+research controller is paused until the core Sources -> Chat -> Studio loop is
+complete and reliable.
+
+## Product status
+
+Implemented:
+
+- one canonical Source / Chunk / typed Locator contract for videos, transcripts,
+  PDFs, PPTX, DOCX, Markdown, text, and imported audio/video;
+- persistent multi-turn Chat with Source selection, bounded history,
+  idempotent requests, explicit insufficient-evidence refusal, and durable
+  sentence-level citation snapshots;
+- timestamped knowledge cards, versioned Study documents, FSRS Review, Course
+  Map, graph exploration, and local Markdown export;
+- recoverable SQLite schema migrations with validated pre-migration backups.
+
+The next product gates are clickable citations that open the exact video time,
+page, slide, or paragraph; a Sources / Chat / Studio information architecture;
+and durable task, backup/restore, Notes, and product-polish workflows. See the
+[active roadmap](docs/roadmap.md) and
+[append-only engineering log](docs/productization-log.md) for verified scope,
+tradeoffs, tests, and known limitations.
 
 ## Results
 
@@ -312,8 +337,8 @@ cd backend
 uv run pytest
 ```
 
-Current verification: `415 passed, 1 warning`; frontend ESLint and TypeScript
-checks pass.
+Current verification: `504 passed, 1 warning`; frontend ESLint and the
+TypeScript/Vite production build pass.
 
 | Experiment | Main entry point | Record |
 | --- | --- | --- |

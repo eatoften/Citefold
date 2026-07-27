@@ -101,6 +101,7 @@ def update_video_course(
 
 
 def delete_video_course(course_id: str) -> None:
+    from . import chat_service
     from . import course_source_service
 
     course = get_video_course(course_id)
@@ -112,6 +113,10 @@ def delete_video_course(course_id: str) -> None:
     move_learning_documents_to_course(course.id, DEFAULT_COURSE_ID)
     move_source_assets_to_course(course.id, DEFAULT_COURSE_ID)
     course_source_service.move_course_sources(
+        course.id,
+        DEFAULT_COURSE_ID,
+    )
+    chat_service.move_course_conversations(
         course.id,
         DEFAULT_COURSE_ID,
     )

@@ -17,6 +17,7 @@ from app.migrations import (
 
 
 NOW = "2026-07-27T00:00:00+00:00"
+SOURCE_MIGRATIONS = MIGRATIONS[:1]
 
 
 def _connect(path: Path) -> sqlite3.Connection:
@@ -211,9 +212,9 @@ def test_unified_source_migration_backfills_legacy_rows_without_reading_video(
     monkeypatch.setattr(builtins, "open", reject_video_reads)
 
     with _connect(db_path) as conn:
-        completed = apply_migrations(conn)
+        completed = apply_migrations(conn, migrations=SOURCE_MIGRATIONS)
 
-        assert completed == [latest_schema_version()]
+        assert completed == [latest_schema_version(SOURCE_MIGRATIONS)]
         assert {
             "sources",
             "source_chunks",
@@ -280,13 +281,16 @@ def test_unified_source_migration_is_idempotent(tmp_path: Path) -> None:
     _create_legacy_database(db_path)
 
     with _connect(db_path) as conn:
-        assert apply_migrations(conn) == [latest_schema_version()]
+        assert apply_migrations(
+            conn,
+            migrations=SOURCE_MIGRATIONS,
+        ) == [latest_schema_version(SOURCE_MIGRATIONS)]
         first_counts = (
             conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0],
             conn.execute("SELECT COUNT(*) FROM source_chunks").fetchone()[0],
         )
 
-        assert apply_migrations(conn) == []
+        assert apply_migrations(conn, migrations=SOURCE_MIGRATIONS) == []
         second_counts = (
             conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0],
             conn.execute("SELECT COUNT(*) FROM source_chunks").fetchone()[0],
@@ -366,7 +370,7 @@ def test_migration_preserves_linked_video_asset_locator(
             ),
         )
 
-        apply_migrations(conn)
+        apply_migrations(conn, migrations=SOURCE_MIGRATIONS)
 
         source_metadata = json.loads(
             conn.execute(

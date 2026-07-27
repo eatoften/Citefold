@@ -403,3 +403,427 @@ P0.2 will add durable conversations and messages, bounded multi-turn context,
 source-scoped retrieval, grounded local answer generation, explicit abstention,
 and persisted sentence-level citation records. P0.3 will make those citations
 open their exact original location.
+
+## P0.2 - Durable Grounded Chat
+
+**Status:** Complete
+
+**Date:** 2026-07-27
+
+**Branch:** `codex/notebooklm-product-core`
+
+### User outcome
+
+Ask is now a persistent, source-grounded conversation rather than a list of
+similar cards. A learner can choose the course Sources, ask a question, follow
+up using bounded conversation context, reopen the conversation after restart,
+and distinguish an evidence refusal from a failed local-model request.
+
+Every published answer item has at least one server-owned citation snapshot.
+The UI expands the supporting quote and typed locator beside the sentence.
+Opening that locator in the original video or document remains the explicit
+P0.3 boundary.
+
+### Why this stage now
+
+P0.1 supplied one canonical index for original videos and documents. The
+highest-value next step was to prove that this evidence could support a durable
+question-answer loop without falling back to derived cards or model-written
+citations.
+
+Doing the persistence and failure model before a full Chat page also prevents
+the future Sources / Chat / Studio navigation from being built around transient
+component state. The reusable feature slice can move from the existing Ask rail
+into the P0.4 workspace without changing its data contract.
+
+### Scope and non-goals
+
+Included:
+
+- persistent course-scoped conversations, turns, and ordered messages;
+- per-conversation and per-turn Source snapshots;
+- bounded multi-turn retrieval and generation context;
+- local dense retrieval over canonical source chunks;
+- strict local-LLM JSON generation with one repair attempt;
+- deterministic insufficient-evidence refusal;
+- immutable citation and sentence-span snapshots;
+- request idempotency across a lost browser response;
+- startup recovery of interrupted turns;
+- a React Chat feature slice with Source selection, history, recommendations,
+  evidence previews, explicit states, and bounded status polling;
+- compatibility for the existing `/rag/retrieve` card endpoint;
+- a resume-facing README update that presents the verified product direction
+  before the paused research program.
+
+Not included:
+
+- clicking a citation does not yet seek a video or open a document location;
+- the top-level navigation is not yet Sources / Chat / Studio;
+- answer streaming, cancellation, durable background execution, and task-level
+  retry belong to P0.5;
+- note capture and Studio output generation belong to P1.1-P1.2;
+- frontend unit/component test infrastructure belongs to P1.4.
+
+### Storage and API contract
+
+Migration v2 adds five normalized tables:
+
+| Table | Responsibility |
+| --- | --- |
+| `chat_conversations` | Course, title, archive state, selected Source snapshot, and list metadata |
+| `chat_turns` | Request ID, state machine, Source snapshot, generation token, query, refusal, and safe failure |
+| `chat_messages` | Ordered user messages and reserved/final assistant messages |
+| `chat_citations` | One immutable Source/chunk/quote/locator snapshot per cited chunk and message |
+| `chat_citation_spans` | Every answer sentence range supported by a citation snapshot |
+
+The active development database had already applied an earlier, uncommitted v2
+before independent review added `source_scope_mode` and removed a redundant
+turn state. Rewriting v2 would make fresh tests pass while leaving that real
+database incompatible. Forward migration v3 therefore rebuilds `chat_turns`
+atomically, preserves existing rows, maps legacy `abstained` turns to
+`refused`, adds the scope mode, and recreates both turn indexes.
+
+The local API is:
+
+```text
+GET    /courses/{course_id}/chat/conversations
+POST   /courses/{course_id}/chat/conversations
+GET    /chat/conversations/{conversation_id}
+PATCH  /chat/conversations/{conversation_id}
+DELETE /chat/conversations/{conversation_id}
+POST   /chat/conversations/{conversation_id}/messages
+```
+
+The message request includes a browser-owned `client_request_id`. Replaying the
+same ID and payload returns the existing terminal result; a different payload
+is rejected. A partial unique index permits only one active turn per
+conversation.
+
+### Decisions and alternatives
+
+1. **Persist a state machine, not just chat text.** A turn transitions through
+   `pending -> retrieving -> generating -> validating` and finishes as
+   `completed`, `refused`, or `failed`.
+2. **Reserve before inference.** The user message and assistant placeholder are
+   created atomically before embedding or generation. Inference runs outside
+   SQLite transactions; generation-token compare-and-swap protects every
+   transition and final commit.
+3. **Snapshot Source scope per turn.** Later selection changes do not rewrite
+   the meaning of historical answers.
+4. **Make the server own evidence.** The model may cite only temporary labels
+   assigned to current retrieval results. The server replaces them with
+   immutable Source, chunk, quote, locator, hash, and score records.
+5. **Fail closed.** No Sources or no evidence returns a deterministic refusal
+   without loading the LLM. Invalid JSON is repaired once; a second invalid
+   response becomes a safe failure rather than uncited prose.
+6. **Treat history as context, never evidence.** Only current retrieval results
+   may support factual answer items.
+7. **Keep the request synchronous for P0.2.** Durable terminal state and
+   recovery are proven before adding streaming and cancellation.
+
+Extending the card-only retrieval route, storing one JSON conversation blob,
+trusting model-authored citations, holding a database transaction through
+inference, and resolving historical Source scope dynamically were rejected.
+The complete rationale is
+[`ADR-0003`](decisions/ADR-0003-durable-grounded-chat-state-machine.md).
+
+### Context and grounding budgets
+
+| Budget | Bound |
+| --- | ---: |
+| Retrieval history | current question + 2 recent user questions |
+| Retrieval query | 1,500 characters |
+| Generation history | 6 complete messages |
+| Generation history text | 6,000 characters |
+| Evidence count | 8 chunks |
+| Evidence per chunk | 3,000 characters |
+| Evidence total | 16,000 characters |
+| Generated output | 2,048 tokens |
+| Dense cosine floor | 0.25 |
+
+The `0.25` floor is deliberately conservative. On an isolated copy of the real
+CS231n corpus, two in-domain English questions produced top scores of `0.569`
+and `0.666`; three unrelated English questions produced `0.186`, `0.165`, and
+`0.192`. A previous `0.15` floor admitted all three unrelated examples and was
+raised before acceptance. This is a small product calibration, not a general
+retrieval benchmark.
+
+### Technology and responsibilities
+
+| Component | Technology | Responsibility |
+| --- | --- | --- |
+| API contract | FastAPI + Pydantic | Validate conversation, turn, message, grounding, and typed locator states |
+| Durable state | SQLite | Persist conversations, lifecycle transitions, idempotency, messages, and citation snapshots |
+| Concurrency | SQLite transactions, partial unique index, generation-token CAS | Reserve once, allow one active turn, reject stale completion |
+| Retrieval | P0.1 Source index + MiniLM cosine search | Retrieve original source chunks inside the selected Source scope |
+| Generation | Existing Ollama-compatible local LLM client | Produce strict grounded JSON without cloud dependency |
+| Grounding | Pydantic discriminated output + server evidence allow-list | Reject unknown labels, multi-sentence items, and uncited prose |
+| UI | React 19 + TypeScript feature slice | Manage conversations, Source selection, request envelope, polling, and citation previews |
+| Styling | Scoped CSS | Support full-page reuse and the compact Ask rail with visible keyboard focus |
+| Verification | pytest, ESLint, TypeScript, Vite, browser inspection | State-machine, API, regression, build, and interaction gates |
+
+### Problems encountered and resolutions
+
+1. **The old Ask path was not an answer system.** It searched generated cards
+   and rendered them in local component state. The new path uses canonical
+   original-source chunks and durable messages; the legacy endpoint remains
+   compatible but no longer powers Ask.
+2. **A successful server turn could be duplicated after a lost HTTP response.**
+   The first UI implementation generated a new request ID for every Retry.
+   Independent acceptance caught the gap. The UI now retains the complete send
+   envelope—question, request ID, Source snapshot, and model—and replays it
+   unchanged while delivery is uncertain. A server-confirmed failed message
+   instead offers “Ask again as a new turn.”
+3. **A turn could be stranded immediately after reservation.** Conversation
+   title/Source updates originally happened in a second unguarded call before
+   the failure finalizer. Reservation now resolves and validates the Source
+   snapshot and applies the initial title atomically, so there is no
+   post-reservation update window.
+4. **Conversation edits could be overwritten by stale objects.** Narrow
+   transactional patches and reservation-owned metadata replace whole-row
+   updates in concurrent paths.
+5. **Same-course evidence was not enough isolation.** A regressed or forged
+   search result could reference an unselected Source in the same course.
+   Final citation commit now enforces the turn's persisted Source allow-list in
+   addition to course membership.
+6. **A replayed failed request changed HTTP semantics.** Stored timeout,
+   retrieval, and Source-change error codes now replay as the original 504,
+   503, and 409 classes rather than collapsing to a generic 502.
+7. **Deleted or moved selected Sources could produce a misleading conversation
+   404.** Source scope is now resolved transactionally at reservation and maps
+   stale selection to an explicit Source-changed conflict.
+8. **The database and API turn-state vocabularies drifted.** The unused
+   `abstained` database value was removed; `refused` is the one persisted
+   insufficient-evidence terminal state. Because the real development
+   database had already recorded the earlier v2, this was repaired through a
+   forward v3 migration instead of silently rewriting migration history.
+9. **“Sentence-level” initially trusted model formatting too much.** Strict
+   output validation now rejects an item containing multiple detectable
+   natural-language sentences before citation spans are computed.
+10. **The model could invent plausible evidence metadata.** It now sees only
+    temporary labels. Labels outside the server allow-list, duplicated labels,
+    extra keys, malformed JSON, or missing citations fail validation.
+11. **Sources can change during generation.** The final transaction rechecks
+    course, turn Source scope, Source enabled state, chunk active state, text
+    hash, quote, and typed locator before publishing the answer.
+12. **Prompt injection can live in both history and Sources.** The prompt
+    labels the question, history, titles, evidence, and repair candidate as
+    untrusted data. History may resolve references but cannot support a claim.
+13. **Refusal and infrastructure failure were easy to conflate.** `refused`
+    produces a complete assistant message with no citations; retrieval/model
+    failures persist safe error codes and messages without exposing local
+    machine paths.
+14. **Browser and Python count Unicode differently from UTF-16 string
+    offsets.** The frontend maps citation spans over Unicode code points so
+    emoji and supplementary characters align with Python offsets.
+15. **Conditional compact-rail rows caused hidden overflow.** Browser
+    inspection measured the panel and workspace scroll bounds, exposed the
+    grid-row bug, and verified the corrected fixed row placement in both
+    collapsed and expanded Source states.
+16. **A remounted panel could show a generating message forever.** A bounded,
+    abortable, course- and conversation-guarded poll now refreshes persisted
+    state for up to one minute and exposes a manual refresh state afterward.
+17. **Native inputs lost their focus indicator.** Hidden Source checkboxes and
+    the composer now transfer visible focus styling to their container.
+18. **SQLite backup files remained locked on Windows.** Python's SQLite
+    connection context manager commits or rolls back but does not close the
+    connection. Migration backup source, destination, and validation
+    connections now close explicitly. A regression opens, closes, renames, and
+    deletes the backup in the same process.
+19. **The UI initially treated a disabled but processed Source as ready.** The
+    backend correctly rejected it, but the picker still offered it and counted
+    it toward send readiness. Selection, Select all, send snapshots, counts,
+    status labels, and disabled controls now share the same
+    `enabled && ready` rule while still allowing an already-selected disabled
+    Source to be unchecked.
+
+### Verification
+
+Focused Source migration and Chat regression after the final Windows backup
+handle fix:
+
+```text
+66 passed, 1 warning
+```
+
+Complete backend regression after all review fixes:
+
+```text
+504 passed, 1 warning in 100.52 s
+```
+
+Backend bytecode compilation and whitespace validation also passed. The final
+backup-handle change was followed by the 66-test focused run because it touches
+only migration backup connection lifetime. A final 20-test Chat API pass added
+and verified both disabled-Source race cases before the complete 504-test run.
+
+Frontend repository gates:
+
+```text
+ESLint: passed
+TypeScript + Vite production build: passed
+```
+
+Manual browser inspection of the compact Ask rail verified:
+
+```text
+collapsed panel: no panel or workspace overflow
+expanded Sources: no panel or workspace overflow
+console warnings/errors: none
+```
+
+The final focus selectors were then reviewed statically and passed ESLint and
+the production build. The one backend warning is the existing Starlette
+TestClient deprecation notice for its legacy `httpx` bridge; it is unrelated
+to this stage.
+
+#### Real database migration
+
+Starting the normal local backend first applied migrations v1 and v2 to the
+active database and automatically created:
+
+```text
+backend/data/backups/jobs.pre-migration-v2-20260727T060725400205Z.db
+```
+
+This was an expected application-startup write, but it was not the intended
+read-only UI inspection path and is recorded explicitly. Independent review
+then found the already-applied-v2 compatibility issue described above.
+
+The v2-to-v3 upgrade was rehearsed on an isolated copy before the real database
+was touched:
+
+```text
+before / after quick_check:  ok / ok
+migration time:              0.030072 s
+business and chat counts:    unchanged
+source_scope_mode:           present
+legacy abstained CHECK:      removed
+turn indexes:                both present
+generated backup:            quick_check ok, schema version 2
+temporary cleanup:           succeeded in the same process
+real input SHA-256:          unchanged
+```
+
+The real database then followed that same migration path and created:
+
+```text
+backend/data/backups/jobs.pre-migration-v3-20260727T065434325947Z.db
+```
+
+The active file, pre-v3 backup, and original legacy backup were checked:
+
+```text
+active quick_check:      ok
+pre-v3 backup check:     ok
+legacy backup check:     ok
+jobs:                     5
+knowledge_cards:        118
+card_embeddings:        101
+canonical sources:        8
+canonical chunks:       491
+source embeddings:         0
+chat table rows:           0 in all five tables
+active migrations:        1 unified_source_index
+                          2 grounded_chat
+                          3 align_grounded_chat_turn_contract
+pre-v3 migrations:        1 unified_source_index
+                          2 grounded_chat
+active SHA-256:         f097ce715543bbc1dca502dc3319d836a304efb3b9a1929f24d137014ba44060
+pre-v3 SHA-256:         539f08a04903f4c4b25cba981e5bd66bf0a1b8d6e15e471d5c536b9e93904e5a
+legacy SHA-256:         0b5706687f70f78af9959ef1e9de5a7ba2a07032a750c4a9d15c71369f18ec50
+```
+
+The pre-v3 backup preserves the complete version-2 database. The earlier
+pre-v2 backup is independently readable and contains the unchanged legacy data
+without `schema_migrations`.
+
+The complete v1-to-v3 sequence was repeated on an isolated temporary copy of
+that legacy backup:
+
+```text
+migration time:           0.047402 s
+migrated quick_check:     ok
+generated backup check:   ok
+migrations:               [(1, unified_source_index),
+                           (2, grounded_chat),
+                           (3, align_grounded_chat_turn_contract)]
+jobs/cards/vectors:       5 / 118 / 101
+sources/chunks:           8 / 491
+source embeddings:        0
+chat table rows:          0 in all five tables
+legacy input hash:        unchanged
+temporary files:          removed
+```
+
+#### Retrieval calibration
+
+The real corpus was copied to an isolated temporary database and indexed there;
+the active database retained zero source embeddings. Scores were:
+
+```text
+in-domain English:        0.569, 0.666
+unrelated English:        0.186, 0.165, 0.192
+Chinese -> English source 0.198
+unrelated Chinese:        0.178
+```
+
+This supports the conservative `0.25` default for the current English corpus
+and also exposes the cross-language limitation rather than hiding it.
+Temporary databases and generated vectors were removed.
+
+### Known limitations
+
+- P0.3 must connect the stored typed locator to the video player and document
+  viewers. P0.2 displays the quote and location but does not claim click-through.
+- The synchronous POST cannot stream tokens or cancel local inference. P0.5
+  will place long work behind recoverable, cancellable tasks.
+- Dense MiniLM retrieval has no lexical fallback, query expansion, or reranker.
+- `all-MiniLM-L6-v2` is not a reliable Chinese-to-English retriever. The current
+  conservative floor refuses the sampled Chinese question; multilingual
+  retrieval requires an explicit model/evaluation decision.
+- Citation coverage, Source allow-list, and immutable snapshots do not prove
+  semantic entailment between every claim and quote. A versioned evaluation
+  set and optional entailment/claim verifier remain future work.
+- Chunks longer than 3,000 characters are skipped rather than truncated so the
+  stored quote and hash stay exact. Chunk splitting should be improved for long
+  PDF pages.
+- History is bounded by recent complete messages, not guaranteed whole
+  user/assistant turn pairs.
+- Conversation detail is not paginated and will eventually need windowing.
+- Automatic conversation creation is not itself idempotent; a lost create
+  response can leave an extra empty conversation, though it cannot duplicate a
+  turn or LLM call.
+- Frontend behavior is covered by type/lint/build gates, backend black-box API
+  tests, and manual browser inspection. Component and end-to-end automation
+  remain a P1.4 requirement.
+- The feature boundary is clearer, but `chat_store.py` and `useChat.ts` are
+  still large modules. P1.4 should split SQL persistence/state transitions and
+  browser synchronization/polling into independently tested units.
+- Polling is bounded to one minute. A slow synchronous generation may require
+  manual refresh until P0.5 owns durable task progress and cancellation.
+- Process-local coordination matches the current desktop runtime, not a future
+  multi-worker server.
+
+### Git checkpoint
+
+Intended commit subject:
+
+```text
+feat(chat): add persistent source-grounded conversations
+```
+
+### Next gate
+
+P0.3 will make every persisted citation actionable. Clicking an answer
+sentence or citation chip must:
+
+- seek the exact video timestamp;
+- open a PDF at its page;
+- open a PPTX at its slide;
+- open a DOCX at its paragraph;
+- or open a text/Markdown Source at its section.
+
+The acceptance gate includes stale/missing local files, deleted Sources,
+locator-version handling, keyboard activation, and a visible fallback rather
+than a dead click.
