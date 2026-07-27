@@ -40,6 +40,11 @@ export type ChatPanelProps = {
   model?: string | null
   compact?: boolean
   recommendedQuestions?: readonly string[]
+  initialConversationId?: string | null
+  onConversationChange?: (
+    conversationId: string | null,
+    mode: 'push' | 'replace',
+  ) => void
   onOpenCitation?: (
     citation: ChatCitation,
     trigger: HTMLButtonElement,
@@ -289,9 +294,17 @@ export function ChatPanel({
   model,
   compact = false,
   recommendedQuestions = DEFAULT_RECOMMENDED_QUESTIONS,
+  initialConversationId = null,
+  onConversationChange,
   onOpenCitation,
 }: ChatPanelProps) {
-  const chat = useChat({ apiBaseUrl, courseId, model })
+  const chat = useChat({
+    apiBaseUrl,
+    courseId,
+    model,
+    initialConversationId,
+    onConversationChange,
+  })
   const [draft, setDraft] = useState('')
   const [isSourcePickerOpen, setIsSourcePickerOpen] = useState(!compact)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -428,7 +441,7 @@ export function ChatPanel({
         <header className="chat-header">
           <div>
             <span className="chat-eyebrow">Grounded course chat</span>
-            <h1>{courseTitle ?? 'Course notebook'}</h1>
+            <h2>{courseTitle ?? 'Course notebook'}</h2>
             <p>
               Answers use only the sources selected for this conversation.
             </p>
@@ -551,9 +564,12 @@ export function ChatPanel({
           </div>
         )}
 
-        <main
+        <div
           className="chat-message-stream"
+          role="log"
+          aria-label="Conversation messages"
           aria-live="polite"
+          aria-relevant="additions text"
           aria-busy={chat.isSending}
         >
           {chat.isLoadingConversation && !messages.length ? (
@@ -631,7 +647,7 @@ export function ChatPanel({
             </>
           )}
           <div ref={messagesEndRef} />
-        </main>
+        </div>
 
         <footer className="chat-composer">
           {chat.selectedReadySourceCount === 0 && (
@@ -648,7 +664,8 @@ export function ChatPanel({
               rows={3}
               value={draft}
               maxLength={8000}
-              disabled={isBusy}
+              readOnly={isBusy}
+              aria-busy={chat.isSending}
               placeholder="Ask a question grounded in your sources…"
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {

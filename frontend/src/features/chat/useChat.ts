@@ -45,6 +45,11 @@ type UseChatOptions = {
   apiBaseUrl: string
   courseId: string | null
   model?: string | null
+  initialConversationId?: string | null
+  onConversationChange?: (
+    conversationId: string | null,
+    mode: 'push' | 'replace',
+  ) => void
 }
 
 export type UseChatResult = {
@@ -133,6 +138,8 @@ export function useChat({
   apiBaseUrl,
   courseId,
   model,
+  initialConversationId = null,
+  onConversationChange,
 }: UseChatOptions): UseChatResult {
   const [conversations, setConversations] = useState<ChatConversation[]>([])
   const [conversation, setConversation] =
@@ -162,6 +169,33 @@ export function useChat({
   const detailControllerRef = useRef<AbortController | null>(null)
   const activeConversationIdRef = useRef<string | null>(null)
   const conversationRef = useRef<ChatConversationDetail | null>(null)
+  const initialConversationIdRef = useRef(initialConversationId)
+  const previousRouteConversationIdRef =
+    useRef(initialConversationId)
+  const onConversationChangeRef = useRef(onConversationChange)
+
+  useEffect(() => {
+    initialConversationIdRef.current = initialConversationId
+  }, [initialConversationId])
+
+  useEffect(() => {
+    onConversationChangeRef.current = onConversationChange
+  }, [onConversationChange])
+
+  const activateConversation = useCallback(
+    (
+      conversationId: string | null,
+      mode: 'push' | 'replace',
+      notify = true,
+    ): void => {
+      setActiveConversationId(conversationId)
+      activeConversationIdRef.current = conversationId
+      if (notify) {
+        onConversationChangeRef.current?.(conversationId, mode)
+      }
+    },
+    [],
+  )
 
   useEffect(() => {
     activeConversationIdRef.current = activeConversationId
@@ -246,15 +280,22 @@ export function useChat({
         setConversations(nextConversations)
         setSources(nextSources)
         setWorkspaceCourseId(courseId)
-        const firstConversation = nextConversations[0] ?? null
+        const requestedConversation = nextConversations.find(
+          (item) => item.id === initialConversationIdRef.current,
+        )
+        const firstConversation =
+          requestedConversation ?? nextConversations[0] ?? null
         const defaultSourceIds = nextSources
           .filter(
             (source) =>
               source.enabled && source.content_status === 'ready',
           )
           .map((source) => source.id)
-        setActiveConversationId(firstConversation?.id ?? null)
-        activeConversationIdRef.current = firstConversation?.id ?? null
+        activateConversation(
+          firstConversation?.id ?? null,
+          'replace',
+          firstConversation?.id !== initialConversationIdRef.current,
+        )
         setSelectedSourceIds(
           firstConversation?.selected_source_ids ?? defaultSourceIds,
         )
@@ -289,6 +330,7 @@ export function useChat({
     }
   }, [
     apiBaseUrl,
+    activateConversation,
     courseId,
     finishRequest,
     isCurrentEpoch,
@@ -530,18 +572,73 @@ export function useChat({
       setError(null)
       setConversation(null)
       conversationRef.current = null
-      setActiveConversationId(conversationId)
-      activeConversationIdRef.current = conversationId
+      activateConversation(conversationId, 'push')
       setSelectedSourceIds(nextConversation.selected_source_ids)
     },
     [
       conversations,
+      activateConversation,
       courseId,
       isSending,
       isUpdatingSources,
       workspaceCourseId,
     ],
   )
+
+  useEffect(() => {
+    const previousConversationId =
+      previousRouteConversationIdRef.current
+    previousRouteConversationIdRef.current =
+      initialConversationId
+
+    if (
+      workspaceCourseId !== courseId
+    ) {
+      return
+    }
+    if (!initialConversationId) {
+      if (
+        previousConversationId &&
+        activeConversationId
+      ) {
+        setError(null)
+        setConversation(null)
+        conversationRef.current = null
+        activateConversation(null, 'replace', false)
+        setSelectedSourceIds(
+          sources
+            .filter(
+              (source) =>
+                source.enabled &&
+                source.content_status === 'ready',
+            )
+            .map((source) => source.id),
+        )
+      }
+      return
+    }
+    if (initialConversationId === activeConversationId) {
+      return
+    }
+    const nextConversation = conversations.find(
+      (item) => item.id === initialConversationId,
+    )
+    if (!nextConversation) return
+
+    setError(null)
+    setConversation(null)
+    conversationRef.current = null
+    activateConversation(initialConversationId, 'replace', false)
+    setSelectedSourceIds(nextConversation.selected_source_ids)
+  }, [
+    activeConversationId,
+    activateConversation,
+    conversations,
+    courseId,
+    initialConversationId,
+    sources,
+    workspaceCourseId,
+  ])
 
   const createConversation = useCallback(async (): Promise<
     ChatConversation | null
@@ -569,8 +666,7 @@ export function useChat({
       setConversations((current) =>
         upsertConversation(current, created),
       )
-      setActiveConversationId(created.id)
-      activeConversationIdRef.current = created.id
+      activateConversation(created.id, 'push')
       setConversation({ ...created, messages: [] })
       conversationRef.current = { ...created, messages: [] }
       setSelectedSourceIds(created.selected_source_ids)
@@ -595,6 +691,7 @@ export function useChat({
     }
   }, [
     apiBaseUrl,
+    activateConversation,
     courseId,
     finishRequest,
     isCreatingConversation,
@@ -785,8 +882,7 @@ export function useChat({
           setConversations((current) =>
             upsertConversation(current, created),
           )
-          setActiveConversationId(created.id)
-          activeConversationIdRef.current = created.id
+          activateConversation(created.id, 'push')
           const detail = { ...created, messages: [] }
           setConversation(detail)
           conversationRef.current = detail
@@ -857,6 +953,7 @@ export function useChat({
     },
     [
       apiBaseUrl,
+      activateConversation,
       abortDetailRequest,
       courseId,
       finishRequest,

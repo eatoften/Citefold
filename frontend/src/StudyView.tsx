@@ -16,7 +16,6 @@ import {
   Save,
   Sparkles,
   Trash2,
-  Upload,
 } from 'lucide-react'
 import type {
   LearningDocument,
@@ -34,9 +33,16 @@ type StudyViewProps = {
   courses: StudyCourse[]
   selectedCourseId: string | null
   selectedModel: string
+  showCourseSelector?: boolean
   initialCardId: string | null
   initialDocumentId: string | null
   onSelectCourse: (courseId: string) => void
+  onManageSources?: () => void
+  onDocumentRouteChange?: (
+    documentId: string | null,
+    cardId: string | null,
+    mode: 'push' | 'replace',
+  ) => void
 }
 
 
@@ -61,13 +67,6 @@ async function fetchJson<T>(
 }
 
 
-function formatBytes(size: number): string {
-  if (size < 1024) return `${size} B`
-  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`
-}
-
-
 function sourceLocation(source: LearningDocumentSource): string {
   const locator = source.locator
   if (typeof locator.slide_number === 'number') return `Slide ${locator.slide_number}`
@@ -82,18 +81,33 @@ function sourceLocation(source: LearningDocumentSource): string {
 }
 
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+
+const EMPTY_STUDY_CARDS: StudyCard[] = []
+const EMPTY_STUDY_DOCUMENTS: LearningDocument[] = []
+const EMPTY_SOURCE_ASSETS: SourceAsset[] = []
+
+
 export function StudyView({
   apiBaseUrl,
   courses,
   selectedCourseId,
   selectedModel,
+  showCourseSelector = true,
   initialCardId,
   initialDocumentId,
   onSelectCourse,
+  onManageSources,
+  onDocumentRouteChange,
 }: StudyViewProps) {
   const [cards, setCards] = useState<StudyCard[]>([])
   const [documents, setDocuments] = useState<LearningDocument[]>([])
   const [assets, setAssets] = useState<SourceAsset[]>([])
+  const [libraryCourseId, setLibraryCourseId] =
+    useState<string | null>(null)
   const [selectedCardId, setSelectedCardId] = useState(initialCardId ?? '')
   const [selectedDocumentId, setSelectedDocumentId] = useState(initialDocumentId ?? '')
   const [document, setDocument] = useState<LearningDocumentDetail | null>(null)
@@ -108,27 +122,97 @@ export function StudyView({
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
-  const [isUploading, setIsUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const activeCourseIdRef = useRef(selectedCourseId)
+  const libraryRequestEpochRef = useRef(0)
+  const libraryRequestControllerRef =
+    useRef<AbortController | null>(null)
+  const documentRequestEpochRef = useRef(0)
+  const documentRequestControllerRef =
+    useRef<AbortController | null>(null)
+  const onDocumentRouteChangeRef =
+    useRef(onDocumentRouteChange)
+
+  useEffect(() => {
+    activeCourseIdRef.current = selectedCourseId
+  }, [selectedCourseId])
+
+  useEffect(() => {
+    onDocumentRouteChangeRef.current =
+      onDocumentRouteChange
+  }, [onDocumentRouteChange])
 
   const loadLibrary = useCallback(async () => {
-    if (!selectedCourseId) return
+    const courseId = selectedCourseId
+    libraryRequestControllerRef.current?.abort()
+    const requestEpoch = ++libraryRequestEpochRef.current
+
+    if (
+      !courseId ||
+      activeCourseIdRef.current !== courseId
+    ) {
+      setIsLoading(false)
+      return
+    }
+
+    const controller = new AbortController()
+    libraryRequestControllerRef.current = controller
     setIsLoading(true)
     setError(null)
     try {
       const [nextCards, nextDocuments, nextAssets] = await Promise.all([
-        fetchJson<StudyCard[]>(apiBaseUrl, `/courses/${selectedCourseId}/card-index`),
+        fetchJson<StudyCard[]>(
+          apiBaseUrl,
+          `/courses/${courseId}/card-index`,
+          { signal: controller.signal },
+        ),
         fetchJson<LearningDocument[]>(
           apiBaseUrl,
-          `/courses/${selectedCourseId}/learning-documents`,
+          `/courses/${courseId}/learning-documents`,
+          { signal: controller.signal },
         ),
-        fetchJson<SourceAsset[]>(apiBaseUrl, `/courses/${selectedCourseId}/source-assets`),
+        fetchJson<SourceAsset[]>(
+          apiBaseUrl,
+          `/courses/${courseId}/source-assets`,
+          { signal: controller.signal },
+        ),
       ])
+      if (
+        controller.signal.aborted ||
+        requestEpoch !== libraryRequestEpochRef.current ||
+        activeCourseIdRef.current !== courseId
+      ) {
+        return
+      }
+      setLibraryCourseId(courseId)
       setCards(nextCards)
       setDocuments(nextDocuments)
       setAssets(nextAssets)
+      const initialCardIsValid =
+        Boolean(initialCardId) &&
+        nextCards.some((card) => card.id === initialCardId)
+      const initialDocumentIsValid =
+        Boolean(initialDocumentId) &&
+        nextDocuments.some(
+          (item) => item.id === initialDocumentId,
+        )
+      if (initialCardId && !initialCardIsValid) {
+        onDocumentRouteChangeRef.current?.(
+          initialDocumentIsValid ? initialDocumentId : null,
+          null,
+          'replace',
+        )
+      } else if (
+        initialDocumentId &&
+        !initialDocumentIsValid
+      ) {
+        onDocumentRouteChangeRef.current?.(
+          null,
+          initialCardIsValid ? initialCardId : null,
+          'replace',
+        )
+      }
       setSelectedCardId((current) => {
         if (initialCardId && nextCards.some((card) => card.id === initialCardId)) {
           return initialCardId
@@ -145,27 +229,112 @@ export function StudyView({
         return nextDocuments[0]?.id ?? ''
       })
     } catch (loadError) {
+      if (
+        controller.signal.aborted ||
+        requestEpoch !== libraryRequestEpochRef.current ||
+        activeCourseIdRef.current !== courseId ||
+        isAbortError(loadError)
+      ) {
+        return
+      }
       setError(loadError instanceof Error ? loadError.message : 'Study library failed.')
     } finally {
-      setIsLoading(false)
+      if (
+        requestEpoch === libraryRequestEpochRef.current &&
+        activeCourseIdRef.current === courseId
+      ) {
+        if (libraryRequestControllerRef.current === controller) {
+          libraryRequestControllerRef.current = null
+        }
+        setIsLoading(false)
+      }
     }
-  }, [apiBaseUrl, initialCardId, initialDocumentId, selectedCourseId])
+  }, [
+    apiBaseUrl,
+    initialCardId,
+    initialDocumentId,
+    selectedCourseId,
+  ])
 
   useEffect(() => {
+    libraryRequestControllerRef.current?.abort()
+    libraryRequestControllerRef.current = null
+    libraryRequestEpochRef.current += 1
+    documentRequestControllerRef.current?.abort()
+    documentRequestControllerRef.current = null
+    documentRequestEpochRef.current += 1
+
+    setCards([])
+    setDocuments([])
+    setAssets([])
+    setLibraryCourseId(null)
+    setSelectedCardId('')
+    setSelectedDocumentId('')
+    setDocument(null)
+    setTitle('')
+    setSummary('')
+    setBody('')
+    setStatus('draft')
+    setMode('preview')
+    setSelectedAssetIds(new Set())
+    setSupportingCardIds(new Set())
+    setFocus('')
+    setError(null)
+    setMessage(null)
+    setIsLoading(Boolean(selectedCourseId))
+    setIsSaving(false)
+    setIsGenerating(false)
+
     void loadLibrary()
-  }, [loadLibrary])
+
+    return () => {
+      libraryRequestEpochRef.current += 1
+      libraryRequestControllerRef.current?.abort()
+      libraryRequestControllerRef.current = null
+      documentRequestEpochRef.current += 1
+      documentRequestControllerRef.current?.abort()
+      documentRequestControllerRef.current = null
+    }
+  }, [loadLibrary, selectedCourseId])
 
   useEffect(() => {
-    if (!selectedDocumentId) {
+    documentRequestControllerRef.current?.abort()
+    const requestEpoch = ++documentRequestEpochRef.current
+    const courseId = selectedCourseId
+    const belongsToCourse = documents.some(
+      (item) =>
+        item.id === selectedDocumentId &&
+        item.course_id === courseId,
+    )
+
+    setDocument(null)
+    setTitle('')
+    setSummary('')
+    setBody('')
+    setStatus('draft')
+    setSupportingCardIds(new Set())
+
+    if (!courseId || !selectedDocumentId || !belongsToCourse) {
+      documentRequestControllerRef.current = null
       setDocument(null)
       return
     }
-    let active = true
+
+    const controller = new AbortController()
+    documentRequestControllerRef.current = controller
     void fetchJson<LearningDocumentDetail>(
       apiBaseUrl,
       `/learning-documents/${selectedDocumentId}`,
+      { signal: controller.signal },
     ).then((detail) => {
-      if (!active) return
+      if (
+        controller.signal.aborted ||
+        requestEpoch !== documentRequestEpochRef.current ||
+        activeCourseIdRef.current !== courseId ||
+        detail.course_id !== courseId
+      ) {
+        return
+      }
       setDocument(detail)
       setTitle(detail.title)
       setSummary(detail.summary)
@@ -180,25 +349,69 @@ export function StudyView({
             .map((link) => link.card_id),
         ),
       )
-      const url = new URL(window.location.href)
-      url.searchParams.set('document', detail.id)
-      if (primary) url.searchParams.set('card', primary.card_id)
-      window.history.replaceState({}, '', url)
+      onDocumentRouteChangeRef.current?.(
+        detail.id,
+        primary?.card_id ?? null,
+        'replace',
+      )
     }).catch((loadError) => {
-      if (active) setError(loadError instanceof Error ? loadError.message : 'Document failed.')
+      if (
+        controller.signal.aborted ||
+        requestEpoch !== documentRequestEpochRef.current ||
+        activeCourseIdRef.current !== courseId ||
+        isAbortError(loadError)
+      ) {
+        return
+      }
+      setError(loadError instanceof Error ? loadError.message : 'Document failed.')
     })
-    return () => { active = false }
-  }, [apiBaseUrl, selectedDocumentId])
+    return () => {
+      if (requestEpoch === documentRequestEpochRef.current) {
+        documentRequestEpochRef.current += 1
+      }
+      controller.abort()
+      if (documentRequestControllerRef.current === controller) {
+        documentRequestControllerRef.current = null
+      }
+    }
+  }, [
+    apiBaseUrl,
+    documents,
+    selectedCourseId,
+    selectedDocumentId,
+  ])
 
-  const primaryCard = cards.find((card) => card.id === selectedCardId) ?? null
-  const readyAssets = assets.filter((asset) => asset.extraction_status === 'ready')
+  const hasCurrentLibrary =
+    Boolean(selectedCourseId) &&
+    libraryCourseId === selectedCourseId
+  const scopedCards = hasCurrentLibrary
+    ? cards
+    : EMPTY_STUDY_CARDS
+  const scopedDocuments = hasCurrentLibrary
+    ? documents
+    : EMPTY_STUDY_DOCUMENTS
+  const scopedAssets = hasCurrentLibrary
+    ? assets
+    : EMPTY_SOURCE_ASSETS
+  const scopedDocument =
+    document?.course_id === selectedCourseId ? document : null
+  const primaryCard =
+    scopedCards.find((card) => card.id === selectedCardId) ??
+    null
+  const readyAssets = scopedAssets.filter(
+    (asset) => asset.extraction_status === 'ready',
+  )
   const supportCandidates = useMemo(
-    () => cards.filter((card) => card.id !== selectedCardId),
-    [cards, selectedCardId],
+    () =>
+      scopedCards.filter(
+        (card) => card.id !== selectedCardId,
+      ),
+    [scopedCards, selectedCardId],
   )
 
   async function createDocument() {
-    if (!selectedCardId) return
+    const courseId = selectedCourseId
+    if (!courseId || !selectedCardId) return
     setIsSaving(true)
     setError(null)
     try {
@@ -211,20 +424,39 @@ export function StudyView({
           body: JSON.stringify({}),
         },
       )
+      if (
+        activeCourseIdRef.current !== courseId ||
+        created.course_id !== courseId
+      ) {
+        return
+      }
       setSelectedDocumentId(created.id)
       setMode('edit')
       setMessage('Study document created.')
+      onDocumentRouteChangeRef.current?.(
+        created.id,
+        selectedCardId,
+        'push',
+      )
       await loadLibrary()
-      setSelectedDocumentId(created.id)
+      if (activeCourseIdRef.current === courseId) {
+        setSelectedDocumentId(created.id)
+      }
     } catch (createError) {
-      setError(createError instanceof Error ? createError.message : 'Create failed.')
+      if (activeCourseIdRef.current === courseId) {
+        setError(createError instanceof Error ? createError.message : 'Create failed.')
+      }
     } finally {
-      setIsSaving(false)
+      if (activeCourseIdRef.current === courseId) {
+        setIsSaving(false)
+      }
     }
   }
 
   async function saveDocument() {
     if (!document) return
+    const courseId = document.course_id
+    if (activeCourseIdRef.current !== courseId) return
     setIsSaving(true)
     setError(null)
     try {
@@ -237,19 +469,33 @@ export function StudyView({
           body: JSON.stringify({ title, summary, body_markdown: body, status }),
         },
       )
+      if (
+        activeCourseIdRef.current !== courseId ||
+        updated.course_id !== courseId
+      ) {
+        return
+      }
       setDocument(updated)
       setMessage(`Saved version ${updated.versions[0]?.version_number ?? ''}.`)
       await loadLibrary()
-      setSelectedDocumentId(updated.id)
+      if (activeCourseIdRef.current === courseId) {
+        setSelectedDocumentId(updated.id)
+      }
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Save failed.')
+      if (activeCourseIdRef.current === courseId) {
+        setError(saveError instanceof Error ? saveError.message : 'Save failed.')
+      }
     } finally {
-      setIsSaving(false)
+      if (activeCourseIdRef.current === courseId) {
+        setIsSaving(false)
+      }
     }
   }
 
   async function generateDocument() {
     if (!document) return
+    const courseId = document.course_id
+    if (activeCourseIdRef.current !== courseId) return
     setIsGenerating(true)
     setError(null)
     setMessage(null)
@@ -268,6 +514,12 @@ export function StudyView({
           }),
         },
       )
+      if (
+        activeCourseIdRef.current !== courseId ||
+        result.document.course_id !== courseId
+      ) {
+        return
+      }
       setDocument(result.document)
       setTitle(result.document.title)
       setSummary(result.document.summary)
@@ -278,69 +530,51 @@ export function StudyView({
         `${result.selected_cards} cards and ${result.selected_source_units} source units used.${result.warning ? ` ${result.warning}` : ''}`,
       )
       await loadLibrary()
-      setSelectedDocumentId(result.document.id)
+      if (activeCourseIdRef.current === courseId) {
+        setSelectedDocumentId(result.document.id)
+      }
     } catch (generationError) {
-      setError(
-        generationError instanceof Error ? generationError.message : 'Generation failed.',
-      )
+      if (activeCourseIdRef.current === courseId) {
+        setError(
+          generationError instanceof Error ? generationError.message : 'Generation failed.',
+        )
+      }
     } finally {
-      setIsGenerating(false)
-    }
-  }
-
-  async function uploadAsset(file: File) {
-    if (!selectedCourseId) return
-    setIsUploading(true)
-    setError(null)
-    const form = new FormData()
-    form.append('file', file)
-    try {
-      await fetchJson(apiBaseUrl, `/courses/${selectedCourseId}/source-assets`, {
-        method: 'POST',
-        body: form,
-      })
-      setMessage(`${file.name} imported.`)
-      await loadLibrary()
-    } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : 'Import failed.')
-    } finally {
-      setIsUploading(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    }
-  }
-
-  async function deleteAsset(asset: SourceAsset) {
-    if (!window.confirm(`Delete source "${asset.original_filename}"?`)) return
-    try {
-      await fetchJson<void>(apiBaseUrl, `/source-assets/${asset.id}`, { method: 'DELETE' })
-      setSelectedAssetIds((current) => {
-        const next = new Set(current)
-        next.delete(asset.id)
-        return next
-      })
-      await loadLibrary()
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : 'Delete failed.')
+      if (activeCourseIdRef.current === courseId) {
+        setIsGenerating(false)
+      }
     }
   }
 
   async function deleteDocument() {
     if (!document || !window.confirm(`Delete "${document.title}"?`)) return
+    const courseId = document.course_id
+    if (activeCourseIdRef.current !== courseId) return
     try {
       await fetchJson<void>(apiBaseUrl, `/learning-documents/${document.id}`, {
         method: 'DELETE',
       })
+      if (activeCourseIdRef.current !== courseId) return
       setSelectedDocumentId('')
       setDocument(null)
       setMessage('Study document deleted.')
+      onDocumentRouteChangeRef.current?.(
+        null,
+        selectedCardId || null,
+        'push',
+      )
       await loadLibrary()
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : 'Delete failed.')
+      if (activeCourseIdRef.current === courseId) {
+        setError(deleteError instanceof Error ? deleteError.message : 'Delete failed.')
+      }
     }
   }
 
   async function restoreVersion(versionNumber: number) {
     if (!document || !window.confirm(`Restore version ${versionNumber}?`)) return
+    const courseId = document.course_id
+    if (activeCourseIdRef.current !== courseId) return
     try {
       const restored = await fetchJson<LearningDocumentDetail>(
         apiBaseUrl,
@@ -351,13 +585,21 @@ export function StudyView({
           body: JSON.stringify({ version_number: versionNumber }),
         },
       )
+      if (
+        activeCourseIdRef.current !== courseId ||
+        restored.course_id !== courseId
+      ) {
+        return
+      }
       setDocument(restored)
       setTitle(restored.title)
       setSummary(restored.summary)
       setBody(restored.body_markdown)
       setMessage(`Version ${versionNumber} restored as a new version.`)
     } catch (restoreError) {
-      setError(restoreError instanceof Error ? restoreError.message : 'Restore failed.')
+      if (activeCourseIdRef.current === courseId) {
+        setError(restoreError instanceof Error ? restoreError.message : 'Restore failed.')
+      }
     }
   }
 
@@ -366,21 +608,34 @@ export function StudyView({
       <header className="study-toolbar">
         <div>
           <div className="panel-title">Concept learning</div>
-          <h1>Study documents</h1>
+          <h2>Study documents</h2>
           <p>Grow grounded cards into editable, source-backed explanations.</p>
         </div>
-        <label>
-          <span>Course</span>
-          <select value={selectedCourseId ?? ''} onChange={(event) => onSelectCourse(event.target.value)}>
-            {courses.map((course) => (
-              <option key={course.id} value={course.id}>{course.title}</option>
-            ))}
-          </select>
-        </label>
+        {showCourseSelector && (
+          <label>
+            <span>Course</span>
+            <select value={selectedCourseId ?? ''} onChange={(event) => onSelectCourse(event.target.value)}>
+              {courses.map((course) => (
+                <option key={course.id} value={course.id}>{course.title}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <label>
           <span>Anchor card</span>
-          <select value={selectedCardId} onChange={(event) => setSelectedCardId(event.target.value)}>
-            {cards.map((card) => (
+          <select
+            value={selectedCardId}
+            onChange={(event) => {
+              const cardId = event.target.value
+              setSelectedCardId(cardId)
+              onDocumentRouteChangeRef.current?.(
+                selectedDocumentId || null,
+                cardId || null,
+                'push',
+              )
+            }}
+          >
+            {scopedCards.map((card) => (
               <option key={card.id} value={card.id}>{card.title}</option>
             ))}
           </select>
@@ -391,7 +646,10 @@ export function StudyView({
       </header>
 
       {(error || message) && (
-        <div className={error ? 'study-notice error' : 'study-notice success'}>
+        <div
+          className={error ? 'study-notice error' : 'study-notice success'}
+          role={error ? 'alert' : 'status'}
+        >
           {error ?? message}
         </div>
       )}
@@ -400,60 +658,40 @@ export function StudyView({
         <aside className="study-library">
           <section>
             <div className="study-section-heading">
-              <div><strong>Documents</strong><span>{documents.length}</span></div>
+              <div><strong>Documents</strong><span>{scopedDocuments.length}</span></div>
               <BookOpenText size={16} />
             </div>
             <div className="study-document-list">
-              {documents.map((item) => (
+              {scopedDocuments.map((item) => (
                 <button
                   type="button"
                   key={item.id}
                   className={item.id === selectedDocumentId ? 'selected' : ''}
-                  onClick={() => setSelectedDocumentId(item.id)}
+                  onClick={() => {
+                    setSelectedDocumentId(item.id)
+                    onDocumentRouteChangeRef.current?.(
+                      item.id,
+                      selectedCardId || null,
+                      'push',
+                    )
+                  }}
                 >
                   <strong>{item.title}</strong>
                   <span>{item.summary || 'No summary'}</span>
                   <small>{item.status} · {item.generation_mode}</small>
                 </button>
               ))}
-              {!documents.length && !isLoading && <div className="study-empty-small">No study documents yet.</div>}
+              {!scopedDocuments.length && !isLoading && <div className="study-empty-small">No study documents yet.</div>}
             </div>
           </section>
 
-          <section>
-            <div className="study-section-heading">
-              <div><strong>Local sources</strong><span>{assets.length}</span></div>
-              <Upload size={16} />
-            </div>
-            <input
-              ref={fileInputRef}
-              className="study-file-input"
-              type="file"
-              accept=".pptx,.pdf,.docx,.txt,.md,.markdown"
-              disabled={isUploading}
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                if (file) void uploadAsset(file)
-              }}
-            />
-            <div className="study-asset-list">
-              {assets.map((asset) => (
-                <div key={asset.id}>
-                  <div>
-                    <strong>{asset.original_filename}</strong>
-                    <span>{asset.asset_type} · {asset.unit_count} units · {formatBytes(asset.size_bytes)}</span>
-                  </div>
-                  <button type="button" title="Delete source" aria-label={`Delete ${asset.original_filename}`} onClick={() => void deleteAsset(asset)}>
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </section>
         </aside>
 
-        <main className="study-document-workspace">
-          {document ? (
+        <section
+          className="study-document-workspace"
+          aria-label="Study document workspace"
+        >
+          {scopedDocument ? (
             <>
               <div className="study-document-toolbar">
                 <div className="study-mode-toggle">
@@ -495,10 +733,10 @@ export function StudyView({
               <p>{primaryCard ? `Use ${primaryCard.title} as the anchor.` : 'Choose an anchor card first.'}</p>
             </div>
           )}
-        </main>
+        </section>
 
         <aside className="study-inspector">
-          {document ? (
+          {scopedDocument ? (
             <>
               <section>
                 <div className="study-section-heading">
@@ -523,7 +761,21 @@ export function StudyView({
                       <span>{asset.original_filename}</span>
                     </label>
                   ))}
+                  {!readyAssets.length && (
+                    <p className="study-empty-small">
+                      No ready document sources.
+                    </p>
+                  )}
                 </div>
+                {onManageSources && (
+                  <button
+                    className="study-manage-sources"
+                    type="button"
+                    onClick={onManageSources}
+                  >
+                    Manage sources
+                  </button>
+                )}
                 <div className="study-check-list supporting">
                   <div className="study-list-label">Supporting cards</div>
                   {supportCandidates.map((card) => (
@@ -549,28 +801,28 @@ export function StudyView({
 
               <section>
                 <div className="study-section-heading">
-                  <div><strong>References</strong><span>{document.sources.length}</span></div>
+                  <div><strong>References</strong><span>{scopedDocument.sources.length}</span></div>
                   <Link2 size={16} />
                 </div>
                 <div className="study-reference-list">
-                  {document.sources.map((source) => (
+                  {scopedDocument.sources.map((source) => (
                     <div key={source.id}>
                       <strong>[{source.label}] {sourceLocation(source)}</strong>
                       <span>{source.source_type === 'card_claim' ? 'course evidence' : 'supplementary source'}</span>
                       <p>{source.quote}</p>
                     </div>
                   ))}
-                  {!document.sources.length && <div className="study-empty-small">No generated references yet.</div>}
+                  {!scopedDocument.sources.length && <div className="study-empty-small">No generated references yet.</div>}
                 </div>
               </section>
 
               <section>
                 <div className="study-section-heading">
-                  <div><strong>Versions</strong><span>{document.versions.length}</span></div>
+                  <div><strong>Versions</strong><span>{scopedDocument.versions.length}</span></div>
                   <History size={16} />
                 </div>
                 <div className="study-version-list">
-                  {document.versions.map((version) => (
+                  {scopedDocument.versions.map((version) => (
                     <button key={version.id} type="button" onClick={() => void restoreVersion(version.version_number)}>
                       <strong>v{version.version_number}</strong>
                       <span>{version.change_source} · {new Date(version.created_at).toLocaleString()}</span>

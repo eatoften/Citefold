@@ -20,6 +20,7 @@ type ReviewViewProps = {
   apiBaseUrl: string
   courses: ReviewCourse[]
   selectedCourseId: string | null
+  showCourseSelector?: boolean
   onSelectCourse: (courseId: string) => void
   onOpenWorkspaceCard: (cardId: string) => void
 }
@@ -62,10 +63,16 @@ function readClockMilliseconds(): number {
 }
 
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'AbortError'
+}
+
+
 export function ReviewView({
   apiBaseUrl,
   courses,
   selectedCourseId,
+  showCourseSelector = true,
   onSelectCourse,
   onOpenWorkspaceCard,
 }: ReviewViewProps) {
@@ -80,9 +87,30 @@ export function ReviewView({
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const startedAtRef = useRef(0)
+  const activeCourseIdRef = useRef(selectedCourseId)
+  const queueRequestEpochRef = useRef(0)
+  const queueRequestControllerRef =
+    useRef<AbortController | null>(null)
+
+  useEffect(() => {
+    activeCourseIdRef.current = selectedCourseId
+  }, [selectedCourseId])
 
   const loadQueue = useCallback(async () => {
-    if (!selectedCourseId) return
+    const courseId = selectedCourseId
+    queueRequestControllerRef.current?.abort()
+    const requestEpoch = ++queueRequestEpochRef.current
+
+    if (
+      !courseId ||
+      activeCourseIdRef.current !== courseId
+    ) {
+      setIsLoading(false)
+      return
+    }
+
+    const controller = new AbortController()
+    queueRequestControllerRef.current = controller
     setIsLoading(true)
     setError(null)
     const params = new URLSearchParams({ limit: '100' })
@@ -91,13 +119,24 @@ export function ReviewView({
       const [nextQueue, nextMap] = await Promise.all([
         fetchJson<ReviewQueue>(
           apiBaseUrl,
-          `/courses/${selectedCourseId}/review/queue?${params}`,
+          `/courses/${courseId}/review/queue?${params}`,
+          { signal: controller.signal },
         ),
         fetchJson<CourseMapPayload>(
           apiBaseUrl,
-          `/courses/${selectedCourseId}/map`,
+          `/courses/${courseId}/map`,
+          { signal: controller.signal },
         ),
       ])
+      if (
+        controller.signal.aborted ||
+        requestEpoch !== queueRequestEpochRef.current ||
+        activeCourseIdRef.current !== courseId ||
+        nextQueue.course_id !== courseId ||
+        nextMap.course_id !== courseId
+      ) {
+        return
+      }
       setQueue(nextQueue)
       setCourseMap(nextMap)
       setCurrentIndex(0)
@@ -105,34 +144,80 @@ export function ReviewView({
       setSelfAnswer('')
       startedAtRef.current = readClockMilliseconds()
     } catch (loadError) {
+      if (
+        controller.signal.aborted ||
+        requestEpoch !== queueRequestEpochRef.current ||
+        activeCourseIdRef.current !== courseId ||
+        isAbortError(loadError)
+      ) {
+        return
+      }
       setError(loadError instanceof Error ? loadError.message : 'Review queue failed.')
     } finally {
-      setIsLoading(false)
+      if (
+        requestEpoch === queueRequestEpochRef.current &&
+        activeCourseIdRef.current === courseId
+      ) {
+        if (queueRequestControllerRef.current === controller) {
+          queueRequestControllerRef.current = null
+        }
+        setIsLoading(false)
+      }
     }
   }, [apiBaseUrl, selectedCourseId, topicId])
 
   useEffect(() => {
+    queueRequestEpochRef.current += 1
+    queueRequestControllerRef.current?.abort()
+    queueRequestControllerRef.current = null
+    setQueue(null)
+    setCourseMap(null)
+    setTopicId('')
+    setCurrentIndex(0)
+    setRevealed(false)
+    setSelfAnswer('')
+    setError(null)
+    setMessage(null)
+    setIsLoading(Boolean(selectedCourseId))
+    setIsRating(false)
+    startedAtRef.current = 0
+  }, [apiBaseUrl, selectedCourseId])
+
+  useEffect(() => {
     void loadQueue()
+
+    return () => {
+      queueRequestEpochRef.current += 1
+      queueRequestControllerRef.current?.abort()
+      queueRequestControllerRef.current = null
+    }
   }, [loadQueue])
 
-  const currentItem = queue?.items[currentIndex] ?? null
+  const scopedQueue =
+    queue?.course_id === selectedCourseId ? queue : null
+  const scopedCourseMap =
+    courseMap?.course_id === selectedCourseId
+      ? courseMap
+      : null
+  const currentItem = scopedQueue?.items[currentIndex] ?? null
 
   const topicDueCounts = useMemo(() => {
     const counts = new Map<string, number>()
-    for (const item of queue?.items ?? []) {
+    for (const item of scopedQueue?.items ?? []) {
       if (item.topic_id) counts.set(item.topic_id, (counts.get(item.topic_id) ?? 0) + 1)
     }
     return [...counts.entries()]
       .map(([id, count]) => ({
         id,
-        title: courseMap?.topics.find((topic) => topic.id === id)?.title ?? 'Unknown',
+        title: scopedCourseMap?.topics.find((topic) => topic.id === id)?.title ?? 'Unknown',
         count,
       }))
       .sort((left, right) => right.count - left.count)
-  }, [courseMap, queue])
+  }, [scopedCourseMap, scopedQueue])
 
   async function rateCurrent(rating: ReviewRating) {
     if (!currentItem) return
+    const courseId = selectedCourseId
     setIsRating(true)
     setError(null)
     try {
@@ -151,7 +236,10 @@ export function ReviewView({
           }),
         },
       )
-      const remainingItems = queue?.items.filter(
+      if (activeCourseIdRef.current !== courseId) {
+        return
+      }
+      const remainingItems = scopedQueue?.items.filter(
         (item) => item.review_item.id !== currentItem.review_item.id,
       ) ?? []
       setQueue((current) => current ? {
@@ -165,9 +253,13 @@ export function ReviewView({
       setMessage(`Rated ${rating}.`)
       startedAtRef.current = readClockMilliseconds()
     } catch (ratingError) {
-      setError(ratingError instanceof Error ? ratingError.message : 'Rating failed.')
+      if (activeCourseIdRef.current === courseId) {
+        setError(ratingError instanceof Error ? ratingError.message : 'Rating failed.')
+      }
     } finally {
-      setIsRating(false)
+      if (activeCourseIdRef.current === courseId) {
+        setIsRating(false)
+      }
     }
   }
 
@@ -202,22 +294,24 @@ export function ReviewView({
       <header className="review-toolbar">
         <div>
           <div className="panel-title">Spaced repetition</div>
-          <h1>Review</h1>
+          <h2>Review</h2>
           <p>Recall first, reveal evidence, then rate honestly.</p>
         </div>
-        <label>
-          <span>Course</span>
-          <select value={selectedCourseId ?? ''} onChange={(event) => onSelectCourse(event.target.value)}>
-            {courses.map((course) => (
-              <option key={course.id} value={course.id}>{course.title}</option>
-            ))}
-          </select>
-        </label>
+        {showCourseSelector && (
+          <label>
+            <span>Course</span>
+            <select value={selectedCourseId ?? ''} onChange={(event) => onSelectCourse(event.target.value)}>
+              {courses.map((course) => (
+                <option key={course.id} value={course.id}>{course.title}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <label>
           <span>Topic</span>
           <select value={topicId} onChange={(event) => setTopicId(event.target.value)}>
             <option value="">All topics</option>
-            {(courseMap?.topics ?? []).filter((topic) => topic.status !== 'hidden').map((topic) => (
+            {(scopedCourseMap?.topics ?? []).filter((topic) => topic.status !== 'hidden').map((topic) => (
               <option key={topic.id} value={topic.id}>{topic.title}</option>
             ))}
           </select>
@@ -228,7 +322,10 @@ export function ReviewView({
       </header>
 
       {(error || message) && (
-        <div className={error ? 'review-notice error' : 'review-notice success'}>
+        <div
+          className={error ? 'review-notice error' : 'review-notice success'}
+          role={error ? 'alert' : 'status'}
+        >
           {error ?? message}
         </div>
       )}
@@ -236,10 +333,10 @@ export function ReviewView({
       <div className="review-layout">
         <aside className="review-overview">
           <div className="review-summary-grid">
-            <div><strong>{queue?.due_count ?? 0}</strong><span>Due now</span></div>
-            <div><strong>{queue?.new_count ?? 0}</strong><span>New</span></div>
-            <div><strong>{queue?.learning_count ?? 0}</strong><span>Learning</span></div>
-            <div><strong>{queue?.review_count ?? 0}</strong><span>Review</span></div>
+            <div><strong>{scopedQueue?.due_count ?? 0}</strong><span>Due now</span></div>
+            <div><strong>{scopedQueue?.new_count ?? 0}</strong><span>New</span></div>
+            <div><strong>{scopedQueue?.learning_count ?? 0}</strong><span>Learning</span></div>
+            <div><strong>{scopedQueue?.review_count ?? 0}</strong><span>Review</span></div>
           </div>
           <section>
             <div className="review-section-title">Due by topic</div>
@@ -254,7 +351,7 @@ export function ReviewView({
           <section>
             <div className="review-section-title">Session queue</div>
             <div className="review-session-list">
-              {(queue?.items ?? []).map((item, index) => (
+              {(scopedQueue?.items ?? []).map((item, index) => (
                 <button
                   key={item.review_item.id}
                   type="button"
@@ -274,7 +371,7 @@ export function ReviewView({
           </section>
         </aside>
 
-        <main className="review-session">
+        <section className="review-session" aria-label="Review session">
           {currentItem ? (
             <div className="review-card-session">
               <div className="review-card-context">
@@ -334,7 +431,7 @@ export function ReviewView({
               <p>No review items are due under this filter.</p>
             </div>
           )}
-        </main>
+        </section>
 
         <aside className="review-details">
           {currentItem ? (

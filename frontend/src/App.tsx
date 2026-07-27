@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   lazy,
   useMemo,
@@ -9,10 +10,22 @@ import {
   type MouseEvent,
 } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { AppSidebar, type AppView } from './AppSidebar'
+import { AppSidebar } from './AppSidebar'
 import { CourseMapView } from './CourseMapView'
 import { restoreCitationFocus } from './features/citations/citationFormat'
-import { ChatPanel, type ChatCitation } from './features/chat'
+import { type ChatCitation } from './features/chat'
+import { ChatWorkspace } from './features/chat/ChatWorkspace'
+import {
+  buildAppRouteUrl,
+  canonicalizeAppRoute,
+  parseAppRoute,
+  type AppRouteDestination,
+  type PrimaryView,
+  type StudioTool,
+} from './features/navigation/appRoute'
+import { SourcesLibrary } from './features/sources/SourcesLibrary'
+import { CardsWorkspace } from './features/studio/CardsWorkspace'
+import { StudioWorkspace } from './features/studio/StudioWorkspace'
 import { GraphView } from './GraphView'
 import { ReviewView } from './ReviewView'
 import './App.css'
@@ -214,7 +227,6 @@ type CardDraftResponse = {
 }
 
 type CardGenerationMode = 'manual' | 'auto'
-type CardRailTab = 'cards' | 'ask'
 type CardGenerationRunStatus =
   | 'pending'
   | 'running'
@@ -369,19 +381,6 @@ const runningStatuses: JobStatus[] = [
 
 function isTauriRuntime(): boolean {
   return Boolean(window[TAURI_INTERNALS_KEY])
-}
-
-function getViewFromUrl(): AppView {
-  const view = new URL(window.location.href).searchParams.get('view')
-  if (
-    view === 'course-map' ||
-    view === 'study' ||
-    view === 'review' ||
-    view === 'graph'
-  ) {
-    return view
-  }
-  return 'workspace'
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -702,9 +701,24 @@ function App() {
   const cardGenerationAbortRef = useRef<AbortController | null>(null)
   const citationTriggerRef = useRef<HTMLButtonElement | null>(null)
   const citationCourseIdRef = useRef<string | null>(null)
-  const [appView, setAppView] = useState<AppView>(getViewFromUrl)
+  const cardRailToggleRef = useRef<HTMLButtonElement | null>(null)
+  const cardRailCloseRef = useRef<HTMLButtonElement | null>(null)
+  const activeCourseIdRef = useRef<string | null>(null)
+  const activeJobIdRef = useRef<string | null>(null)
+  const coursesLoadSequenceRef = useRef(0)
+  const jobRefreshSequenceRef = useRef(0)
+  const jobsLoadSequenceRef = useRef(0)
+  const cardIndexLoadSequenceRef = useRef(0)
+  const railCardLoadSequenceRef = useRef(0)
+  const [appRoute, setAppRoute] = useState(() =>
+    parseAppRoute(window.location.href),
+  )
+  const [lastStudioTool, setLastStudioTool] =
+    useState<StudioTool>('cards')
   const [activeCitation, setActiveCitation] =
     useState<ChatCitation | null>(null)
+  const [chatConversationByCourse, setChatConversationByCourse] =
+    useState<Record<string, string>>({})
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [courses, setCourses] = useState<Course[]>([])
@@ -713,7 +727,10 @@ function App() {
   const [renamingCourseId, setRenamingCourseId] = useState<string | null>(null)
   const [courseRenameTitle, setCourseRenameTitle] = useState('')
   const [jobs, setJobs] = useState<VideoJob[]>([])
+  const [jobsCourseId, setJobsCourseId] = useState<string | null>(null)
   const [job, setJob] = useState<VideoJob | null>(null)
+  const [isVideoWorkspaceOpen, setIsVideoWorkspaceOpen] =
+    useState(false)
   const [transcript, setTranscript] = useState<TranscriptionResult | null>(null)
   const [selectedRange, setSelectedRange] = useState<SegmentRange | null>(null)
   const [transcriptContext, setTranscriptContext] =
@@ -730,6 +747,8 @@ function App() {
   const [courseCardIndex, setCourseCardIndex] = useState<
     KnowledgeCardIndexItem[]
   >([])
+  const [cardIndexCourseId, setCardIndexCourseId] =
+    useState<string | null>(null)
   const [cardRailSearch, setCardRailSearch] = useState('')
   const [cardRailReviewFilter, setCardRailReviewFilter] = useState<
     'all' | CardContentStatus
@@ -739,7 +758,6 @@ function App() {
     'all' | 'has_notes' | 'no_notes'
   >('all')
   const [isCardRailOpen, setIsCardRailOpen] = useState(false)
-  const [cardRailTab, setCardRailTab] = useState<CardRailTab>('cards')
   const [selectedRailCard, setSelectedRailCard] =
     useState<KnowledgeCard | null>(null)
   const [isLoadingCourseCards, setIsLoadingCourseCards] = useState(false)
@@ -854,58 +872,6 @@ function App() {
     ) ?? []
   }, [runtimeStatus])
 
-  const filteredCourseCardIndex = useMemo(() => {
-    const query = cardRailSearch.trim().toLowerCase()
-    const tagQuery = cardRailTagFilter.trim().toLowerCase()
-
-    return courseCardIndex.filter((card) => {
-      if (
-        cardRailReviewFilter !== 'all' &&
-        card.content_status !== cardRailReviewFilter
-      ) {
-        return false
-      }
-
-      if (
-        cardRailNoteFilter === 'has_notes' &&
-        card.note_count === 0
-      ) {
-        return false
-      }
-
-      if (
-        cardRailNoteFilter === 'no_notes' &&
-        card.note_count > 0
-      ) {
-        return false
-      }
-
-      if (
-        tagQuery &&
-        !card.tags.some((tag) => tag.includes(tagQuery))
-      ) {
-        return false
-      }
-
-      if (!query) {
-        return true
-      }
-
-      return [
-        card.title,
-        card.summary,
-        card.source_video ?? '',
-        ...card.tags,
-      ].some((value) => value.toLowerCase().includes(query))
-    })
-  }, [
-    cardRailNoteFilter,
-    cardRailReviewFilter,
-    cardRailSearch,
-    cardRailTagFilter,
-    courseCardIndex,
-  ])
-
   const savedCardSignatures = useMemo(() => {
     return new Set(savedCards.map((card) => cardSignature(card)))
   }, [savedCards])
@@ -949,6 +915,8 @@ function App() {
 
       return objectUrl
     })
+    jobRefreshSequenceRef.current += 1
+    activeJobIdRef.current = null
     setJob(null)
     setTranscript(null)
     setSavedCards([])
@@ -961,106 +929,197 @@ function App() {
   }
 
   async function refreshJob(jobId: string): Promise<VideoJob> {
+    const expectedCourseId = activeCourseIdRef.current
+    const sequence = ++jobRefreshSequenceRef.current
     const nextJob = await fetchJson<VideoJob>(`/jobs/${jobId}`)
-    setJob(nextJob)
+    if (
+      sequence === jobRefreshSequenceRef.current &&
+      activeCourseIdRef.current === expectedCourseId &&
+      activeJobIdRef.current === jobId &&
+      nextJob.course_id === expectedCourseId
+    ) {
+      setJob(nextJob)
+    }
 
     return nextJob
   }
 
   async function loadCourses(preferredCourseId?: string): Promise<Course[]> {
+    const sequence = ++coursesLoadSequenceRef.current
     setIsLoadingCourses(true)
 
     try {
       const nextCourses = await fetchJson<Course[]>('/courses')
-      const urlCourseId = new URL(window.location.href).searchParams.get(
-        'course',
-      )
+      if (sequence !== coursesLoadSequenceRef.current) {
+        return []
+      }
+      const currentRoute = parseAppRoute(window.location.href)
+      const urlCourseId = currentRoute.courseId
+      const activeCourseId = activeCourseIdRef.current
       const fallbackCourseId =
         nextCourses.find((course) => course.id === DEFAULT_COURSE_ID)?.id ??
         nextCourses[0]?.id ??
         null
 
       setCourses(nextCourses)
-      setSelectedCourseId((previousCourseId) => {
-        if (
+      const nextCourseId =
+        (
           preferredCourseId &&
+          preferredCourseId === activeCourseId &&
           nextCourses.some((course) => course.id === preferredCourseId)
-        ) {
-          return preferredCourseId
-        }
-
-        if (
+            ? preferredCourseId
+            : null
+        ) ??
+        (
           urlCourseId &&
           nextCourses.some((course) => course.id === urlCourseId)
-        ) {
-          return urlCourseId
-        }
+            ? urlCourseId
+            : null
+        ) ??
+        (
+          activeCourseId &&
+          nextCourses.some((course) => course.id === activeCourseId)
+            ? activeCourseId
+            : null
+        ) ??
+        fallbackCourseId
 
-        if (
-          previousCourseId &&
-          nextCourses.some((course) => course.id === previousCourseId)
-        ) {
-          return previousCourseId
-        }
-
-        return fallbackCourseId
-      })
+      activeCourseIdRef.current = nextCourseId
+      setSelectedCourseId(nextCourseId)
+      if (nextCourseId && currentRoute.courseId !== nextCourseId) {
+        commitAppRoute(
+          {
+            view: currentRoute.view,
+            tool: currentRoute.tool ?? undefined,
+            courseId: nextCourseId,
+          },
+          'replace',
+        )
+      }
 
       return nextCourses
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Course list failed.',
-      )
+      if (sequence === coursesLoadSequenceRef.current) {
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Course list failed.',
+        )
+      }
       return []
     } finally {
-      setIsLoadingCourses(false)
+      if (sequence === coursesLoadSequenceRef.current) {
+        setIsLoadingCourses(false)
+      }
     }
   }
 
   async function loadJobs(courseId: string | null = selectedCourseId) {
+    const sequence = ++jobsLoadSequenceRef.current
     setIsLoadingJobs(true)
+    setJobsCourseId(null)
 
     try {
       const nextJobs = await fetchJson<VideoJob[]>(
         courseId ? `/courses/${courseId}/jobs` : '/jobs',
       )
-      setJobs(nextJobs)
+      if (
+        sequence === jobsLoadSequenceRef.current &&
+        activeCourseIdRef.current === courseId
+      ) {
+        setJobs(nextJobs)
+        setJobsCourseId(courseId)
+      }
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Job list failed.',
-      )
+      if (
+        sequence === jobsLoadSequenceRef.current &&
+        activeCourseIdRef.current === courseId
+      ) {
+        setJobs([])
+        setJobsCourseId(null)
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Job list failed.',
+        )
+      }
     } finally {
-      setIsLoadingJobs(false)
+      if (
+        sequence === jobsLoadSequenceRef.current &&
+        activeCourseIdRef.current === courseId
+      ) {
+        setIsLoadingJobs(false)
+      }
     }
   }
 
   async function loadCourseCardIndex(
     courseId: string | null = selectedCourseId,
   ) {
+    const sequence = ++cardIndexLoadSequenceRef.current
     if (!courseId) {
       setCourseCardIndex([])
+      setCardIndexCourseId(null)
       return
     }
 
     setIsLoadingCourseCards(true)
+    setCardIndexCourseId(null)
 
     try {
       const cards = await fetchJson<KnowledgeCardIndexItem[]>(
         `/courses/${courseId}/card-index`,
       )
-      setCourseCardIndex(cards)
+      if (
+        sequence === cardIndexLoadSequenceRef.current &&
+        activeCourseIdRef.current === courseId
+      ) {
+        setCourseCardIndex(cards)
+        setCardIndexCourseId(courseId)
+      }
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error
-          ? error.message
-          : 'Course cards failed.',
-      )
+      if (
+        sequence === cardIndexLoadSequenceRef.current &&
+        activeCourseIdRef.current === courseId
+      ) {
+        setCourseCardIndex([])
+        setCardIndexCourseId(null)
+        setErrorMessage(
+          error instanceof Error
+            ? error.message
+            : 'Course cards failed.',
+        )
+      }
     } finally {
-      setIsLoadingCourseCards(false)
+      if (
+        sequence === cardIndexLoadSequenceRef.current &&
+        activeCourseIdRef.current === courseId
+      ) {
+        setIsLoadingCourseCards(false)
+      }
     }
   }
 
-  async function openRailCard(cardId: string) {
+  async function openRailCard(
+    cardId: string,
+    historyMode: 'push' | 'replace' | 'none' = 'push',
+  ) {
+    if (
+      selectedCourseId &&
+      cardIndexCourseId === selectedCourseId &&
+      !courseCardIndex.some((item) => item.id === cardId)
+    ) {
+      setErrorMessage('This card does not belong to the selected course.')
+      return
+    }
+    if (historyMode !== 'none') {
+      commitAppRoute(
+        {
+          view: 'studio',
+          tool: 'cards',
+          cardId,
+        },
+        historyMode,
+      )
+    }
+    const sequence = ++railCardLoadSequenceRef.current
+    const expectedCourseId = selectedCourseId
     setIsCardRailOpen(true)
     setIsLoadingRailCard(true)
     setErrorMessage(null)
@@ -1070,6 +1129,12 @@ function App() {
         fetchJson<KnowledgeCard>(`/cards/${cardId}`),
         fetchJson<KnowledgeCardNote[]>(`/cards/${cardId}/notes`),
       ])
+      if (
+        sequence !== railCardLoadSequenceRef.current ||
+        expectedCourseId !== selectedCourseId
+      ) {
+        return
+      }
 
       setSelectedRailCard(card)
       setRailCardEditForm({
@@ -1084,32 +1149,48 @@ function App() {
         ...previousNotes,
         [card.id]: notes,
       }))
-
-      const url = new URL(window.location.href)
-      if (selectedCourseId) {
-        url.searchParams.set('course', selectedCourseId)
-      }
-      url.searchParams.set('card', card.id)
-      window.history.pushState({}, '', url)
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Card loading failed.',
-      )
+      if (sequence === railCardLoadSequenceRef.current) {
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Card loading failed.',
+        )
+        setIsCardRailOpen(false)
+        if (historyMode !== 'none') {
+          commitAppRoute(
+            {
+              view: 'studio',
+              tool: 'cards',
+              cardId: null,
+            },
+            'replace',
+          )
+        }
+      }
     } finally {
-      setIsLoadingRailCard(false)
+      if (sequence === railCardLoadSequenceRef.current) {
+        setIsLoadingRailCard(false)
+      }
     }
   }
 
   function closeRailCard() {
+    railCardLoadSequenceRef.current += 1
     setSelectedRailCard(null)
     setRailCardEditForm(null)
+    setIsLoadingRailCard(false)
+    setIsCardRailOpen(false)
+    window.setTimeout(() => cardRailToggleRef.current?.focus(), 0)
 
-    const url = new URL(window.location.href)
-    url.searchParams.delete('card')
-    window.history.pushState({}, '', url)
+    commitAppRoute({
+      view: 'studio',
+      tool: 'cards',
+      cardId: null,
+    })
   }
 
   function clearActiveJob() {
+    jobRefreshSequenceRef.current += 1
+    activeJobIdRef.current = null
     setJob(null)
     setSelectedFile(null)
     setVideoUrl((previousUrl) => {
@@ -1128,41 +1209,129 @@ function App() {
     setExportMessage(null)
   }
 
-  function selectCourse(courseId: string) {
+  const commitAppRoute = useCallback(
+    (
+      destination: AppRouteDestination,
+      mode: 'push' | 'replace' = 'push',
+    ) => {
+      const url = buildAppRouteUrl(window.location.href, destination)
+      if (url.toString() === window.location.href) {
+        setAppRoute(parseAppRoute(url))
+        return
+      }
+      if (mode === 'replace') {
+        window.history.replaceState({}, '', url)
+      } else {
+        window.history.pushState({}, '', url)
+      }
+      setAppRoute(parseAppRoute(url))
+    },
+    [],
+  )
+
+  function handleStudyDocumentRouteChange(
+    documentId: string | null,
+    cardId: string | null,
+    mode: 'push' | 'replace',
+  ) {
+    commitAppRoute(
+      {
+        view: 'studio',
+        tool: 'study',
+        documentId,
+        cardId,
+      },
+      mode,
+    )
+  }
+
+  function primaryViewHref(view: PrimaryView): string {
+    return buildAppRouteUrl(window.location.href, {
+      view,
+      tool:
+        view === 'studio'
+          ? appRoute.tool ?? lastStudioTool
+          : undefined,
+      conversationId:
+        view === 'chat' && selectedCourseId
+          ? chatConversationByCourse[selectedCourseId] ?? null
+          : undefined,
+    }).toString()
+  }
+
+  function studioToolHref(tool: StudioTool): string {
+    return buildAppRouteUrl(window.location.href, {
+      view: 'studio',
+      tool,
+    }).toString()
+  }
+
+  function applyCourseSelection(courseId: string) {
+    jobsLoadSequenceRef.current += 1
+    cardIndexLoadSequenceRef.current += 1
+    railCardLoadSequenceRef.current += 1
+    activeCourseIdRef.current = courseId
     setSelectedCourseId(courseId)
     setJobs([])
+    setJobsCourseId(null)
     setCourseCardIndex([])
+    setCardIndexCourseId(null)
+    setIsLoadingJobs(false)
+    setIsLoadingCourseCards(false)
+    setIsLoadingRailCard(false)
+    setIsSavingCard(false)
+    setIsStarting(false)
     setSelectedRailCard(null)
     setRailCardEditForm(null)
     clearActiveJob()
     setErrorMessage(null)
-
-    const url = new URL(window.location.href)
-    url.searchParams.set('course', courseId)
-    url.searchParams.delete('card')
-    window.history.pushState({}, '', url)
   }
 
-  function changeAppView(view: AppView) {
-    setAppView(view)
-    const url = new URL(window.location.href)
-    url.searchParams.set('view', view)
-    window.history.pushState({}, '', url)
+  function selectCourse(courseId: string) {
+    if (!courseId || courseId === selectedCourseId) return
+    applyCourseSelection(courseId)
+    const currentRoute = parseAppRoute(window.location.href)
+    commitAppRoute({
+      view: currentRoute.view,
+      tool: currentRoute.tool ?? undefined,
+      courseId,
+    })
+  }
+
+  function changeAppView(view: PrimaryView) {
+    commitAppRoute({
+      view,
+      tool:
+        view === 'studio'
+          ? appRoute.tool ?? lastStudioTool
+          : undefined,
+      conversationId:
+        view === 'chat' && selectedCourseId
+          ? chatConversationByCourse[selectedCourseId] ?? null
+          : undefined,
+    })
+  }
+
+  function changeStudioTool(tool: StudioTool) {
+    commitAppRoute({ view: 'studio', tool })
   }
 
   function openWorkspaceCard(cardId: string) {
-    changeAppView('workspace')
-    void openRailCard(cardId)
+    commitAppRoute({
+      view: 'studio',
+      tool: 'cards',
+      cardId,
+    })
+    void openRailCard(cardId, 'none')
   }
 
   function openStudyCard(cardId: string) {
-    setAppView('study')
-    const url = new URL(window.location.href)
-    url.searchParams.set('view', 'study')
-    url.searchParams.set('card', cardId)
-    url.searchParams.delete('document')
-    if (selectedCourseId) url.searchParams.set('course', selectedCourseId)
-    window.history.pushState({}, '', url)
+    commitAppRoute({
+      view: 'studio',
+      tool: 'study',
+      cardId,
+      documentId: null,
+    })
   }
 
   async function createCourse() {
@@ -1187,6 +1356,7 @@ function App() {
       })
 
       setNewCourseTitle('')
+      activeCourseIdRef.current = createdCourse.id
       setSelectedCourseId(createdCourse.id)
       await loadCourses(createdCourse.id)
     } catch (error) {
@@ -1276,6 +1446,7 @@ function App() {
 
       if (selectedCourseId === course.id) {
         clearActiveJob()
+        activeCourseIdRef.current = DEFAULT_COURSE_ID
         setSelectedCourseId(DEFAULT_COURSE_ID)
       }
 
@@ -1293,6 +1464,7 @@ function App() {
     const nextTranscript = await fetchJson<TranscriptionResult>(
       `/jobs/${jobId}/transcript`,
     )
+    if (activeJobIdRef.current !== jobId) return
     setTranscript(nextTranscript)
     setCardDraft(null)
   }
@@ -1303,8 +1475,9 @@ function App() {
     )
     const sortedCards = sortCardsBySource(cards)
 
+    if (activeJobIdRef.current !== jobId) return
     setSavedCards(sortedCards)
-    await loadNotesForCards(sortedCards)
+    await loadNotesForCards(sortedCards, jobId)
   }
 
   async function loadLatestAutoGenerationRun(jobId: string) {
@@ -1312,6 +1485,7 @@ function App() {
       `/jobs/${jobId}/card-generation-runs`,
     )
 
+    if (activeJobIdRef.current !== jobId) return
     setAutoGenerationRun(runs[0] ?? null)
   }
 
@@ -1322,14 +1496,21 @@ function App() {
       `/card-generation-runs/${runId}`,
     )
 
-    setAutoGenerationRun(nextRun)
+    if (activeJobIdRef.current === nextRun.job_id) {
+      setAutoGenerationRun(nextRun)
+    }
 
     return nextRun
   }
 
-  async function loadNotesForCards(cards: KnowledgeCard[]) {
+  async function loadNotesForCards(
+    cards: KnowledgeCard[],
+    jobId: string,
+  ) {
     if (cards.length === 0) {
-      setCardNotes({})
+      if (activeJobIdRef.current === jobId) {
+        setCardNotes({})
+      }
       return
     }
 
@@ -1343,10 +1524,14 @@ function App() {
       }),
     )
 
-    setCardNotes(Object.fromEntries(entries))
+    if (activeJobIdRef.current === jobId) {
+      setCardNotes(Object.fromEntries(entries))
+    }
   }
 
   async function openJob(nextJob: VideoJob) {
+    jobRefreshSequenceRef.current += 1
+    activeJobIdRef.current = nextJob.id
     setJob(nextJob)
     setSelectedFile(null)
     setVideoUrl((previousUrl) => {
@@ -1377,6 +1562,64 @@ function App() {
     }
   }
 
+  async function openSourceVideo(jobId: string) {
+    try {
+      const nextJob =
+        jobs.find((item) => item.id === jobId) ??
+        (await fetchJson<VideoJob>(`/jobs/${jobId}`))
+      if (
+        selectedCourseId &&
+        nextJob.course_id !== selectedCourseId
+      ) {
+        throw new Error('This video belongs to another course.')
+      }
+      setIsVideoWorkspaceOpen(true)
+      commitAppRoute({
+        view: 'sources',
+        sourceId: `job:${nextJob.id}`,
+        jobId: nextJob.id,
+      })
+      await openJob(nextJob)
+      window.requestAnimationFrame(() => {
+        document
+          .getElementById('video-workspace')
+          ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      })
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : 'Video loading failed.',
+      )
+    }
+  }
+
+  function openVideoImportWorkspace() {
+    clearActiveJob()
+    setIsVideoWorkspaceOpen(true)
+    commitAppRoute({
+      view: 'sources',
+      sourceId: null,
+      jobId: null,
+    })
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById('video-workspace')
+        ?.scrollIntoView({ block: 'start' })
+    })
+  }
+
+  function closeVideoWorkspace() {
+    clearActiveJob()
+    setIsVideoWorkspaceOpen(false)
+    commitAppRoute({
+      view: 'sources',
+      sourceId:
+        appRoute.sourceId?.startsWith('job:')
+          ? null
+          : appRoute.sourceId,
+      jobId: null,
+    })
+  }
+
   async function deleteVideoJob(jobToDelete: VideoJob) {
     setIsDeletingJob(true)
     setErrorMessage(null)
@@ -1400,20 +1643,15 @@ function App() {
       }
 
       if (job?.id === jobToDelete.id) {
-        setJob(null)
-        setSelectedFile(null)
-        setVideoUrl((previousUrl) => {
-          if (previousUrl) {
-            URL.revokeObjectURL(previousUrl)
-          }
-
-          return null
-        })
-        setTranscript(null)
-        setSavedCards([])
-        setCardNotes({})
-        setNoteForms({})
-        clearTranscriptSelection()
+        clearActiveJob()
+        commitAppRoute(
+          {
+            view: 'sources',
+            sourceId: null,
+            jobId: null,
+          },
+          'replace',
+        )
       }
     } catch (error) {
       setErrorMessage(
@@ -1501,11 +1739,24 @@ function App() {
         body: formData,
       })
 
-      const uploadedJob = await refreshJob(upload.id)
+      const uploadedJob = await fetchJson<VideoJob>(
+        `/jobs/${upload.id}`,
+      )
+      activeCourseIdRef.current = uploadedJob.course_id
       setSelectedCourseId(uploadedJob.course_id)
+      setIsVideoWorkspaceOpen(true)
+      commitAppRoute({
+        view: 'sources',
+        courseId: uploadedJob.course_id,
+        sourceId: `job:${uploadedJob.id}`,
+        jobId: uploadedJob.id,
+      })
       await loadCourses(uploadedJob.course_id)
       await loadJobs(uploadedJob.course_id)
-      await loadSavedCards(upload.id)
+      if (activeCourseIdRef.current !== uploadedJob.course_id) {
+        return
+      }
+      await openJob(uploadedJob)
     } catch (error) {
       setErrorMessage(
         error instanceof Error ? error.message : 'Upload failed.',
@@ -1516,7 +1767,8 @@ function App() {
   }
 
   async function startProcessing(path: 'run' | 'retry') {
-    if (!job) {
+    const activeJob = job
+    if (!activeJob) {
       return
     }
 
@@ -1527,17 +1779,34 @@ function App() {
 
     try {
       const nextJob = await fetchJson<VideoJob>(
-        `/jobs/${job.id}/${path}`,
+        `/jobs/${activeJob.id}/${path}`,
         { method: 'POST' },
       )
+      if (
+        activeJobIdRef.current !== activeJob.id ||
+        activeCourseIdRef.current !== activeJob.course_id ||
+        nextJob.id !== activeJob.id
+      ) {
+        return
+      }
       setJob(nextJob)
       await loadJobs(nextJob.course_id)
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Processing failed.',
-      )
+      if (
+        activeJobIdRef.current === activeJob.id &&
+        activeCourseIdRef.current === activeJob.course_id
+      ) {
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Processing failed.',
+        )
+      }
     } finally {
-      setIsStarting(false)
+      if (
+        activeJobIdRef.current === activeJob.id &&
+        activeCourseIdRef.current === activeJob.course_id
+      ) {
+        setIsStarting(false)
+      }
     }
   }
 
@@ -1756,6 +2025,12 @@ function App() {
 
     try {
       const savedCard = await createSavedCardFromDraft(card)
+      if (
+        activeCourseIdRef.current !== activeJob.course_id ||
+        activeJobIdRef.current !== activeJob.id
+      ) {
+        return
+      }
 
       setSavedCards((previousCards) =>
         sortCardsBySource([...previousCards, savedCard]),
@@ -1767,11 +2042,21 @@ function App() {
       await loadCourses(activeJob.course_id)
       await loadCourseCardIndex(activeJob.course_id)
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Card save failed.',
-      )
+      if (
+        activeCourseIdRef.current === activeJob.course_id &&
+        activeJobIdRef.current === activeJob.id
+      ) {
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Card save failed.',
+        )
+      }
     } finally {
-      setIsSavingCard(false)
+      if (
+        activeCourseIdRef.current === activeJob.course_id &&
+        activeJobIdRef.current === activeJob.id
+      ) {
+        setIsSavingCard(false)
+      }
     }
   }
 
@@ -1793,7 +2078,19 @@ function App() {
 
     try {
       for (const card of unsavedDraftCards) {
+        if (
+          activeCourseIdRef.current !== activeJob.course_id ||
+          activeJobIdRef.current !== activeJob.id
+        ) {
+          return
+        }
         savedCardsBatch.push(await createSavedCardFromDraft(card))
+      }
+      if (
+        activeCourseIdRef.current !== activeJob.course_id ||
+        activeJobIdRef.current !== activeJob.id
+      ) {
+        return
       }
 
       setSavedCards((previousCards) =>
@@ -1811,11 +2108,16 @@ function App() {
       await loadCourses(activeJob.course_id)
       await loadCourseCardIndex(activeJob.course_id)
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Save all failed.',
-      )
+      const isCurrentJob =
+        activeCourseIdRef.current === activeJob.course_id &&
+        activeJobIdRef.current === activeJob.id
+      if (isCurrentJob) {
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Save all failed.',
+        )
+      }
 
-      if (savedCardsBatch.length > 0) {
+      if (isCurrentJob && savedCardsBatch.length > 0) {
         setSavedCards((previousCards) =>
           sortCardsBySource([...previousCards, ...savedCardsBatch]),
         )
@@ -1830,7 +2132,12 @@ function App() {
         })
       }
     } finally {
-      setIsSavingCard(false)
+      if (
+        activeCourseIdRef.current === activeJob.course_id &&
+        activeJobIdRef.current === activeJob.id
+      ) {
+        setIsSavingCard(false)
+      }
     }
   }
 
@@ -1847,7 +2154,8 @@ function App() {
   }
 
   async function saveEditedCard(cardId: string) {
-    if (!cardEditForm) {
+    const activeJob = job
+    if (!cardEditForm || !activeJob) {
       return
     }
 
@@ -1876,6 +2184,13 @@ function App() {
         },
       )
 
+      if (
+        activeCourseIdRef.current !== activeJob.course_id ||
+        activeJobIdRef.current !== activeJob.id ||
+        updatedCard.job_id !== activeJob.id
+      ) {
+        return
+      }
       setSavedCards((previousCards) =>
         sortCardsBySource(
           previousCards.map((card) =>
@@ -1888,15 +2203,23 @@ function App() {
       if (selectedRailCard?.id === updatedCard.id) {
         setSelectedRailCard(updatedCard)
       }
-      if (job) {
-        await loadCourseCardIndex(job.course_id)
-      }
+      await loadCourseCardIndex(activeJob.course_id)
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Card update failed.',
-      )
+      if (
+        activeCourseIdRef.current === activeJob.course_id &&
+        activeJobIdRef.current === activeJob.id
+      ) {
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Card update failed.',
+        )
+      }
     } finally {
-      setIsSavingCard(false)
+      if (
+        activeCourseIdRef.current === activeJob.course_id &&
+        activeJobIdRef.current === activeJob.id
+      ) {
+        setIsSavingCard(false)
+      }
     }
   }
 
@@ -1905,12 +2228,15 @@ function App() {
       return
     }
 
+    const expectedCourseId = selectedCourseId
+    const expectedCardId = selectedRailCard.id
+    const requestSequence = railCardLoadSequenceRef.current
     setIsSavingCard(true)
     setErrorMessage(null)
 
     try {
       const updatedCard = await fetchJson<KnowledgeCard>(
-        `/cards/${selectedRailCard.id}`,
+        `/cards/${expectedCardId}`,
         {
           method: 'PATCH',
           headers: {
@@ -1930,6 +2256,13 @@ function App() {
         },
       )
 
+      if (
+        railCardLoadSequenceRef.current !== requestSequence ||
+        activeCourseIdRef.current !== expectedCourseId ||
+        updatedCard.id !== expectedCardId
+      ) {
+        return
+      }
       setSelectedRailCard(updatedCard)
       setRailCardEditForm({
         title: updatedCard.title,
@@ -1946,13 +2279,23 @@ function App() {
           ),
         ),
       )
-      await loadCourseCardIndex(selectedCourseId)
+      await loadCourseCardIndex(expectedCourseId)
     } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : 'Card update failed.',
-      )
+      if (
+        railCardLoadSequenceRef.current === requestSequence &&
+        activeCourseIdRef.current === expectedCourseId
+      ) {
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Card update failed.',
+        )
+      }
     } finally {
-      setIsSavingCard(false)
+      if (
+        railCardLoadSequenceRef.current === requestSequence &&
+        activeCourseIdRef.current === expectedCourseId
+      ) {
+        setIsSavingCard(false)
+      }
     }
   }
 
@@ -2615,143 +2958,53 @@ function App() {
         ]
           .filter(Boolean)
           .join(' ')}
+        aria-label="Card details"
       >
         <button
+          ref={cardRailToggleRef}
           type="button"
           className="card-rail-tab"
-          onClick={() => setIsCardRailOpen((isOpen) => !isOpen)}
+          aria-controls="course-card-rail-content"
+          aria-expanded={isCardRailOpen}
+          disabled={!selectedRailCard && !isLoadingRailCard}
+          onClick={() => {
+            if (isCardRailOpen) {
+              setIsCardRailOpen(false)
+              window.setTimeout(
+                () => cardRailToggleRef.current?.focus(),
+                0,
+              )
+              return
+            }
+            setIsCardRailOpen(true)
+          }}
         >
-          Cards {courseCardIndex.length}
+          Card details
         </button>
-        <div className="card-rail-content">
-          {cardRailTab === 'cards' && (
-            <div className="card-rail-header">
-              <div>
-                <div className="panel-title">Course cards</div>
-                <h2>{selectedCourse?.title ?? 'No course'}</h2>
-                <p>
-                  {filteredCourseCardIndex.length} shown /{' '}
-                  {courseCardIndex.length} total
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => void loadCourseCardIndex(selectedCourseId)}
-              >
-                {isLoadingCourseCards ? 'Loading' : 'Refresh'}
-              </button>
-            </div>
-          )}
-          <div className="card-rail-tabs">
-            <button
-              type="button"
-              className={cardRailTab === 'cards' ? 'selected' : ''}
-              onClick={() => setCardRailTab('cards')}
-            >
-              Cards
-            </button>
-            <button
-              type="button"
-              className={cardRailTab === 'ask' ? 'selected' : ''}
-              onClick={() => setCardRailTab('ask')}
-            >
-              Ask
-            </button>
-          </div>
-          {cardRailTab === 'cards' ? (
-            <>
-              <input
-                className="card-rail-search"
-                value={cardRailSearch}
-                onChange={(event) => setCardRailSearch(event.target.value)}
-                placeholder="Search cards"
-              />
-          <div className="card-rail-filters">
-            <select
-              value={cardRailReviewFilter}
-              onChange={(event) =>
-                setCardRailReviewFilter(
-                  event.target.value as 'all' | CardContentStatus,
-                )
-              }
-            >
-              <option value="all">all states</option>
-              <option value="draft">draft</option>
-              <option value="reviewed">reviewed</option>
-              <option value="needs_fix">needs fix</option>
-            </select>
-            <select
-              value={cardRailNoteFilter}
-              onChange={(event) =>
-                setCardRailNoteFilter(
-                  event.target.value as
-                    'all' | 'has_notes' | 'no_notes',
-                )
-              }
-            >
-              <option value="all">all notes</option>
-              <option value="has_notes">has notes</option>
-              <option value="no_notes">no notes</option>
-            </select>
-            <input
-              value={cardRailTagFilter}
-              onChange={(event) =>
-                setCardRailTagFilter(event.target.value)
-              }
-              placeholder="Tag filter"
-            />
-          </div>
-          <div className="card-rail-list">
-            {filteredCourseCardIndex.length ? (
-              filteredCourseCardIndex.map((card) => (
-                <button
-                  type="button"
-                  key={card.id}
-                  className={[
-                    'card-rail-list-item',
-                    selectedRailCard?.id === card.id ? 'selected' : '',
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
-                  onClick={() => void openRailCard(card.id)}
-                >
-                  <strong className="card-rail-title">
-                    {card.title}
-                  </strong>
-                  <span className="card-rail-summary">
-                    {card.summary}
-                  </span>
-                  <small className="card-rail-meta-line">
-                    {card.content_status} · {card.card_kind} ·{' '}
-                    {card.source_video ?? 'video'} ·{' '}
-                    {formatTime(card.source_start_seconds)} ·{' '}
-                    {card.note_count} notes
-                  </small>
-                  {card.tags.length > 0 && (
-                    <div className="tag-row">
-                      {card.tags.map((tag) => (
-                        <span key={tag}>{tag}</span>
-                      ))}
-                    </div>
-                  )}
-                </button>
-              ))
-            ) : (
-              <div className="empty-list">No course cards</div>
-            )}
-          </div>
-
-          <section className="rail-card-detail">
+        <div
+          id="course-card-rail-content"
+          className="card-rail-content"
+          aria-hidden={!isCardRailOpen}
+          inert={isCardRailOpen ? undefined : true}
+        >
+          <section
+            className="rail-card-detail"
+            aria-labelledby="rail-card-detail-title"
+          >
             <div className="card-rail-header">
               <div>
                 <div className="panel-title">Opened card</div>
-                <h2>{selectedRailCard?.title ?? 'No card selected'}</h2>
+                <h2 id="rail-card-detail-title">
+                  {selectedRailCard?.title ?? 'No card selected'}
+                </h2>
               </div>
-              {selectedRailCard && (
-                <button type="button" onClick={closeRailCard}>
-                  Close
-                </button>
-              )}
+              <button
+                ref={cardRailCloseRef}
+                type="button"
+                onClick={closeRailCard}
+              >
+                Close
+              </button>
             </div>
             {isLoadingRailCard && (
               <div className="empty-list">Loading card</div>
@@ -2775,6 +3028,7 @@ function App() {
                 )}
                 <div className="edit-card-form">
                   <input
+                    aria-label="Card title"
                     value={railCardEditForm.title}
                     onChange={(event) =>
                       setRailCardEditForm({
@@ -2784,6 +3038,7 @@ function App() {
                     }
                   />
                   <textarea
+                    aria-label="Card summary"
                     value={railCardEditForm.summary}
                     onChange={(event) =>
                       setRailCardEditForm({
@@ -2793,6 +3048,7 @@ function App() {
                     }
                   />
                   <textarea
+                    aria-label="Card key points"
                     value={railCardEditForm.key_points}
                     onChange={(event) =>
                       setRailCardEditForm({
@@ -2802,6 +3058,7 @@ function App() {
                     }
                   />
                   <select
+                    aria-label="Card kind"
                     value={railCardEditForm.card_kind}
                     onChange={(event) =>
                       setRailCardEditForm({
@@ -2818,6 +3075,7 @@ function App() {
                     <option value="formula">formula</option>
                   </select>
                   <input
+                    aria-label="Card tags"
                     value={railCardEditForm.tags}
                     onChange={(event) =>
                       setRailCardEditForm({
@@ -2828,6 +3086,7 @@ function App() {
                     placeholder="Tags, comma separated"
                   />
                   <select
+                    aria-label="Card review state"
                     value={railCardEditForm.content_status}
                     onChange={(event) =>
                       setRailCardEditForm({
@@ -2852,7 +3111,9 @@ function App() {
                     {relatedJob && (
                       <button
                         type="button"
-                        onClick={() => void openJob(relatedJob)}
+                        onClick={() =>
+                          void openSourceVideo(relatedJob.id)
+                        }
                       >
                         Open video
                       </button>
@@ -2875,23 +3136,40 @@ function App() {
               </div>
             )}
           </section>
-            </>
-          ) : (
-            <div className="rail-chat-panel">
-              <ChatPanel
-                apiBaseUrl={API_BASE_URL}
-                courseId={selectedCourseId}
-                courseTitle={selectedCourse?.title}
-                model={selectedModel}
-                compact
-                onOpenCitation={openCitationInspector}
-              />
-            </div>
-          )}
         </div>
       </aside>
     )
   }
+
+  useEffect(() => {
+    activeCourseIdRef.current = selectedCourseId
+  }, [selectedCourseId])
+
+  useEffect(() => {
+    if (!isCardRailOpen) return
+    const frame = window.requestAnimationFrame(() => {
+      cardRailCloseRef.current?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [isCardRailOpen])
+
+  useEffect(() => {
+    if (!isCardRailOpen) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setIsCardRailOpen(false)
+      window.setTimeout(() => cardRailToggleRef.current?.focus(), 0)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isCardRailOpen])
+
+  useEffect(() => {
+    if (appRoute.view !== 'studio' || appRoute.tool !== 'cards') {
+      setIsCardRailOpen(false)
+    }
+  }, [appRoute.tool, appRoute.view])
 
   useEffect(() => {
     let cancelled = false
@@ -2920,13 +3198,117 @@ function App() {
   }, [])
 
   useEffect(() => {
+    const canonical = canonicalizeAppRoute(window.location.href)
+    if (canonical.shouldReplace) {
+      window.history.replaceState({}, '', canonical.url)
+    }
+    setAppRoute(canonical.route)
+  }, [])
+
+  useEffect(() => {
+    const viewLabel =
+      appRoute.view === 'sources'
+        ? 'Sources'
+        : appRoute.view === 'chat'
+          ? 'Chat'
+          : `Studio · ${appRoute.tool ?? 'cards'}`
+    document.title = selectedCourse
+      ? `${viewLabel} · ${selectedCourse.title}`
+      : `${viewLabel} · Video Course Cards`
+  }, [appRoute.tool, appRoute.view, selectedCourse])
+
+  useEffect(() => {
+    if (appRoute.view === 'studio' && appRoute.tool) {
+      setLastStudioTool(appRoute.tool)
+    }
+  }, [appRoute.tool, appRoute.view])
+
+  useEffect(() => {
+    if (appRoute.view !== 'sources') {
+      setIsVideoWorkspaceOpen(false)
+      return
+    }
+    if (appRoute.jobId) {
+      setIsVideoWorkspaceOpen(true)
+    }
+  }, [appRoute.jobId, appRoute.view])
+
+  useEffect(() => {
+    if (
+      appRoute.view !== 'chat' ||
+      !appRoute.conversationId ||
+      !selectedCourseId
+    ) {
+      return
+    }
+    setChatConversationByCourse((current) =>
+      current[selectedCourseId] === appRoute.conversationId
+        ? current
+        : {
+            ...current,
+            [selectedCourseId]: appRoute.conversationId!,
+          },
+    )
+  }, [
+    appRoute.conversationId,
+    appRoute.view,
+    selectedCourseId,
+  ])
+
+  useEffect(() => {
+    if (backendBoot.phase !== 'ready') return
+    const frame = window.requestAnimationFrame(() => {
+      const heading = document.querySelector<HTMLElement>(
+        '#main-content h1',
+      )
+      if (!heading) return
+      heading.tabIndex = -1
+      heading.focus({ preventScroll: true })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [appRoute.tool, appRoute.view, backendBoot.phase])
+
+  useEffect(() => {
     const handlePopState = () => {
-      setAppView(getViewFromUrl())
+      const canonical = canonicalizeAppRoute(window.location.href)
+      let nextRoute = canonical.route
+      let nextUrl = canonical.url
+      const fallbackCourseId =
+        courses.find((course) => course.id === DEFAULT_COURSE_ID)?.id ??
+        courses[0]?.id ??
+        null
+      const routeCourseIsValid =
+        Boolean(nextRoute.courseId) &&
+        courses.some((course) => course.id === nextRoute.courseId)
+
+      if (courses.length > 0 && !routeCourseIsValid) {
+        nextUrl = buildAppRouteUrl(nextUrl, {
+          view: nextRoute.view,
+          tool: nextRoute.tool ?? undefined,
+          courseId: fallbackCourseId,
+        })
+        nextRoute = parseAppRoute(nextUrl)
+        window.history.replaceState({}, '', nextUrl)
+      } else if (canonical.shouldReplace) {
+        window.history.replaceState({}, '', nextUrl)
+      }
+      setAppRoute(nextRoute)
+
+      const routeCourseId = nextRoute.courseId
+      if (
+        routeCourseId &&
+        routeCourseId !== selectedCourseId &&
+        courses.some((course) => course.id === routeCourseId)
+      ) {
+        applyCourseSelection(routeCourseId)
+      }
     }
 
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
-  }, [])
+    // Rebind only when the validated course catalog or scope changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [courses, selectedCourseId])
 
   useEffect(() => {
     if (backendBoot.phase !== 'ready') {
@@ -2936,6 +3318,8 @@ function App() {
     void checkLlmStatus()
     void checkRuntimeStatus()
     void loadCourses()
+    // Backend readiness is the sole boot trigger; loader identities are not.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backendBoot.phase])
 
   useEffect(() => {
@@ -2950,16 +3334,107 @@ function App() {
   }, [selectedCourseId])
 
   useEffect(() => {
-    const cardId = new URL(window.location.href).searchParams.get('card')
+    if (appRoute.view === 'sources' && !appRoute.jobId) {
+      if (job) {
+        clearActiveJob()
+      }
+      return
+    }
+    if (
+      appRoute.view !== 'sources' ||
+      !selectedCourseId ||
+      jobsCourseId !== selectedCourseId
+    ) {
+      return
+    }
+    const linkedJob = jobs.find((item) => item.id === appRoute.jobId)
+    if (!linkedJob) {
+      setErrorMessage('The linked video is not part of this course.')
+      commitAppRoute(
+        {
+          view: 'sources',
+          sourceId:
+            appRoute.sourceId === `job:${appRoute.jobId}`
+              ? null
+              : appRoute.sourceId,
+          jobId: null,
+        },
+        'replace',
+      )
+      return
+    }
+    if (job?.id !== linkedJob.id) {
+      void openJob(linkedJob)
+    }
+    // Route-owned job restoration runs only after this course's list loads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    appRoute.jobId,
+    appRoute.sourceId,
+    appRoute.view,
+    job?.id,
+    jobs,
+    jobsCourseId,
+    selectedCourseId,
+  ])
 
-    if (!selectedCourseId || !cardId || selectedRailCard?.id === cardId) {
+  useEffect(() => {
+    const isCardsRoute =
+      appRoute.view === 'studio' && appRoute.tool === 'cards'
+    const cardId = isCardsRoute ? appRoute.cardId : null
+
+    if (!isCardsRoute || !cardId) {
+      if (selectedRailCard || isLoadingRailCard) {
+        railCardLoadSequenceRef.current += 1
+        setSelectedRailCard(null)
+        setRailCardEditForm(null)
+        setIsLoadingRailCard(false)
+      }
+      if (isCardRailOpen) {
+        setIsCardRailOpen(false)
+        window.setTimeout(
+          () => cardRailToggleRef.current?.focus(),
+          0,
+        )
+      }
       return
     }
 
-    void openRailCard(cardId)
-    // URL card synchronization intentionally follows course changes only.
+    if (
+      !selectedCourseId ||
+      selectedRailCard?.id === cardId ||
+      cardIndexCourseId !== selectedCourseId
+    ) {
+      return
+    }
+
+    if (!courseCardIndex.some((card) => card.id === cardId)) {
+      setErrorMessage('The linked card is not part of this course.')
+      commitAppRoute(
+        {
+          view: 'studio',
+          tool: 'cards',
+          cardId: null,
+        },
+        'replace',
+      )
+      return
+    }
+
+    void openRailCard(cardId, 'none')
+    // URL card synchronization follows the centralized route contract.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCourseId])
+  }, [
+    appRoute.cardId,
+    appRoute.tool,
+    appRoute.view,
+    cardIndexCourseId,
+    courseCardIndex,
+    isCardRailOpen,
+    isLoadingRailCard,
+    selectedRailCard,
+    selectedCourseId,
+  ])
 
   useEffect(() => {
     if (!job || !transcript || !selectedRange) {
@@ -3018,21 +3493,35 @@ function App() {
     }
 
     const activeRun = autoGenerationRun
+    const expectedJobId = job.id
+    const expectedCourseId = job.course_id
     const intervalId = window.setInterval(() => {
       void refreshAutoGenerationRun(activeRun.id)
         .then((nextRun) => {
+          if (
+            activeJobIdRef.current !== expectedJobId ||
+            activeCourseIdRef.current !== expectedCourseId ||
+            nextRun.job_id !== expectedJobId
+          ) {
+            return
+          }
           if (!isAutoGenerationActive(nextRun)) {
-            void loadSavedCards(job.id)
-            void loadCourses(job.course_id)
-            void loadCourseCardIndex(job.course_id)
+            void loadSavedCards(expectedJobId)
+            void loadCourses(expectedCourseId)
+            void loadCourseCardIndex(expectedCourseId)
           }
         })
         .catch((error) => {
-          setErrorMessage(
-            error instanceof Error
-              ? error.message
-              : 'Auto generation polling failed.',
-          )
+          if (
+            activeJobIdRef.current === expectedJobId &&
+            activeCourseIdRef.current === expectedCourseId
+          ) {
+            setErrorMessage(
+              error instanceof Error
+                ? error.message
+                : 'Auto generation polling failed.',
+            )
+          }
         })
     }, 1500)
 
@@ -3046,9 +3535,18 @@ function App() {
       return
     }
 
+    const expectedJobId = job.id
+    const expectedCourseId = job.course_id
     const intervalId = window.setInterval(() => {
-      void refreshJob(job.id)
+      void refreshJob(expectedJobId)
         .then((nextJob) => {
+          if (
+            activeJobIdRef.current !== expectedJobId ||
+            activeCourseIdRef.current !== expectedCourseId ||
+            nextJob.course_id !== expectedCourseId
+          ) {
+            return
+          }
           if (nextJob.status === 'completed') {
             void loadJobs(nextJob.course_id)
             void loadCourses(nextJob.course_id)
@@ -3060,9 +3558,14 @@ function App() {
           return undefined
         })
         .catch((error) => {
-          setErrorMessage(
-            error instanceof Error ? error.message : 'Polling failed.',
-          )
+          if (
+            activeJobIdRef.current === expectedJobId &&
+            activeCourseIdRef.current === expectedCourseId
+          ) {
+            setErrorMessage(
+              error instanceof Error ? error.message : 'Polling failed.',
+            )
+          }
         })
     }, 1500)
 
@@ -3131,13 +3634,57 @@ function App() {
 
   return (
     <div className="app-frame">
-      <AppSidebar activeView={appView} onChange={changeAppView} />
-      {appView === 'workspace' ? (
-    <main className="app-shell">
+      <a className="skip-link" href="#main-content">
+        Skip to main content
+      </a>
+      <AppSidebar
+        activeView={appRoute.view}
+        getViewHref={primaryViewHref}
+        onChange={changeAppView}
+      />
+      {appRoute.view === 'sources' ? (
+    <main id="main-content" className="app-shell">
+      <SourcesLibrary
+        apiBaseUrl={API_BASE_URL}
+        courses={courses}
+        selectedCourseId={selectedCourseId}
+        initialSourceId={appRoute.sourceId}
+        refreshKey={jobs
+          .map((item) => `${item.id}:${item.status}:${item.updated_at}`)
+          .join('|')}
+        onSelectCourse={selectCourse}
+        onSelectSource={(sourceId, mode) => {
+          if (!sourceId?.startsWith('job:')) {
+            setIsVideoWorkspaceOpen(false)
+          }
+          commitAppRoute(
+            {
+              view: 'sources',
+              sourceId,
+              jobId:
+                sourceId?.startsWith('job:')
+                  ? sourceId.slice('job:'.length)
+                  : null,
+            },
+            mode,
+          )
+        }}
+        onAddVideo={openVideoImportWorkspace}
+        onOpenVideo={(jobId) => void openSourceVideo(jobId)}
+        onOpenChat={() => changeAppView('chat')}
+      />
+      {isVideoWorkspaceOpen && (
+      <section
+        id="video-workspace"
+        className="source-video-workspace-shell"
+        aria-labelledby="video-workspace-title"
+      >
       <header className="top-bar">
         <div>
-          <h1>Video Course Cards</h1>
-          <p className="subtle">Local video transcription workspace</p>
+          <h2 id="video-workspace-title">Video workspace</h2>
+          <p className="subtle">
+            Import, transcribe, and inspect lecture evidence
+          </p>
         </div>
         <div className="top-statuses">
           <button
@@ -3157,6 +3704,7 @@ function App() {
           </button>
           <select
             className="model-select"
+            aria-label="Local language model"
             value={selectedModel}
             onChange={(event) => setSelectedModel(event.target.value)}
           >
@@ -3195,6 +3743,13 @@ function App() {
           <div className={`status-pill status-${job?.status ?? 'idle'}`}>
             {job?.status ?? 'idle'}
           </div>
+          <button
+            type="button"
+            className="video-workspace-close"
+            onClick={closeVideoWorkspace}
+          >
+            Close
+          </button>
         </div>
       </header>
 
@@ -3304,10 +3859,14 @@ function App() {
           </div>
 
           {errorMessage && (
-            <div className="error-banner">{errorMessage}</div>
+            <div className="error-banner" role="alert">
+              {errorMessage}
+            </div>
           )}
           {exportMessage && (
-            <div className="success-banner">{exportMessage}</div>
+            <div className="success-banner" role="status">
+              {exportMessage}
+            </div>
           )}
 
           {job?.status === 'completed' && transcript && (
@@ -3924,7 +4483,7 @@ function App() {
                     <button
                       type="button"
                       className="job-list-item"
-                      onClick={() => void openJob(item)}
+                      onClick={() => void openSourceVideo(item.id)}
                     >
                       <span>{item.original_filename ?? item.stored_name ?? item.id}</span>
                       <small>{item.status}</small>
@@ -4012,62 +4571,175 @@ function App() {
           </section>
         </aside>
       </section>
-      {renderCourseCardRail()}
+      </section>
+      )}
     </main>
-      ) : appView === 'course-map' ? (
-        <main className="course-map-shell">
-          <CourseMapView
+      ) : appRoute.view === 'chat' ? (
+        <main id="main-content" className="chat-route-shell">
+          <ChatWorkspace
             apiBaseUrl={API_BASE_URL}
             courses={courses}
             selectedCourseId={selectedCourseId}
             selectedModel={selectedModel}
-            initialCardId={
-              selectedRailCard?.id ??
-              new URL(window.location.href).searchParams.get('card')
-            }
+            initialConversationId={appRoute.conversationId}
             onSelectCourse={selectCourse}
-            onOpenWorkspaceCard={openWorkspaceCard}
-            onOpenStudyCard={openStudyCard}
-          />
-        </main>
-      ) : appView === 'study' ? (
-        <main className="study-shell">
-          <Suspense fallback={<div className="study-empty">Loading study workspace</div>}>
-            <StudyView
-              apiBaseUrl={API_BASE_URL}
-              courses={courses}
-              selectedCourseId={selectedCourseId}
-              selectedModel={selectedModel}
-              initialCardId={new URL(window.location.href).searchParams.get('card')}
-              initialDocumentId={new URL(window.location.href).searchParams.get('document')}
-              onSelectCourse={selectCourse}
-            />
-          </Suspense>
-        </main>
-      ) : appView === 'review' ? (
-        <main className="review-shell">
-          <ReviewView
-            apiBaseUrl={API_BASE_URL}
-            courses={courses}
-            selectedCourseId={selectedCourseId}
-            onSelectCourse={selectCourse}
-            onOpenWorkspaceCard={openWorkspaceCard}
+            onConversationChange={(conversationId, mode) => {
+              if (selectedCourseId) {
+                setChatConversationByCourse((current) => {
+                  if (!conversationId) {
+                    const next = { ...current }
+                    delete next[selectedCourseId]
+                    return next
+                  }
+                  return {
+                    ...current,
+                    [selectedCourseId]: conversationId,
+                  }
+                })
+              }
+              commitAppRoute(
+                {
+                  view: 'chat',
+                  conversationId,
+                },
+                mode,
+              )
+            }}
+            onOpenCitation={openCitationInspector}
           />
         </main>
       ) : (
-        <main className="graph-shell">
-          <GraphView
-            apiBaseUrl={API_BASE_URL}
+        <main id="main-content" className="studio-route-shell">
+          <StudioWorkspace
+            activeTool={appRoute.tool ?? 'cards'}
             courses={courses}
             selectedCourseId={selectedCourseId}
-            selectedModel={selectedModel}
-            initialCardId={
-              selectedRailCard?.id ??
-              new URL(window.location.href).searchParams.get('card')
-            }
+            getToolHref={studioToolHref}
             onSelectCourse={selectCourse}
-            onOpenWorkspaceCard={openWorkspaceCard}
-          />
+            onSelectTool={changeStudioTool}
+          >
+            {appRoute.tool === 'study' ? (
+              <div className="study-shell">
+                <Suspense
+                  fallback={
+                    <div className="study-empty">
+                      Loading study workspace
+                    </div>
+                  }
+                >
+                  <StudyView
+                    apiBaseUrl={API_BASE_URL}
+                    courses={courses}
+                    selectedCourseId={selectedCourseId}
+                    selectedModel={selectedModel}
+                    showCourseSelector={false}
+                    initialCardId={appRoute.cardId}
+                    initialDocumentId={appRoute.documentId}
+                    onSelectCourse={selectCourse}
+                    onManageSources={() => changeAppView('sources')}
+                    onDocumentRouteChange={
+                      handleStudyDocumentRouteChange
+                    }
+                  />
+                </Suspense>
+              </div>
+            ) : appRoute.tool === 'review' ? (
+              <div className="review-shell">
+                <ReviewView
+                  apiBaseUrl={API_BASE_URL}
+                  courses={courses}
+                  selectedCourseId={selectedCourseId}
+                  showCourseSelector={false}
+                  onSelectCourse={selectCourse}
+                  onOpenWorkspaceCard={openWorkspaceCard}
+                />
+              </div>
+            ) : appRoute.tool === 'map' ? (
+              <div className="course-map-shell">
+                <CourseMapView
+                  apiBaseUrl={API_BASE_URL}
+                  courses={courses}
+                  selectedCourseId={selectedCourseId}
+                  selectedModel={selectedModel}
+                  showCourseSelector={false}
+                  initialCardId={appRoute.cardId}
+                  onSelectCourse={selectCourse}
+                  onCardRouteChange={(cardId, mode) =>
+                    commitAppRoute(
+                      {
+                        view: 'studio',
+                        tool: 'map',
+                        cardId,
+                      },
+                      mode,
+                    )
+                  }
+                  onOpenWorkspaceCard={openWorkspaceCard}
+                  onOpenStudyCard={openStudyCard}
+                />
+              </div>
+            ) : appRoute.tool === 'explore' ? (
+              <div className="graph-shell">
+                <GraphView
+                  apiBaseUrl={API_BASE_URL}
+                  courses={courses}
+                  selectedCourseId={selectedCourseId}
+                  selectedModel={selectedModel}
+                  showCourseSelector={false}
+                  initialCardId={appRoute.cardId}
+                  onSelectCourse={selectCourse}
+                  onCardRouteChange={(cardId, mode) =>
+                    commitAppRoute(
+                      {
+                        view: 'studio',
+                        tool: 'explore',
+                        cardId,
+                      },
+                      mode,
+                    )
+                  }
+                  onOpenWorkspaceCard={openWorkspaceCard}
+                />
+              </div>
+            ) : (
+              <CardsWorkspace
+                courseTitle={selectedCourse?.title}
+                cards={courseCardIndex}
+                loading={isLoadingCourseCards}
+                searchValue={cardRailSearch}
+                statusFilter={cardRailReviewFilter}
+                notesFilter={
+                  cardRailNoteFilter === 'has_notes'
+                    ? 'with_notes'
+                    : cardRailNoteFilter === 'no_notes'
+                      ? 'without_notes'
+                      : 'all'
+                }
+                tagFilter={cardRailTagFilter}
+                onSearchChange={setCardRailSearch}
+                onStatusFilterChange={setCardRailReviewFilter}
+                onNotesFilterChange={(value) =>
+                  setCardRailNoteFilter(
+                    value === 'with_notes'
+                      ? 'has_notes'
+                      : value === 'without_notes'
+                        ? 'no_notes'
+                        : 'all',
+                  )
+                }
+                onTagFilterChange={setCardRailTagFilter}
+                onRefresh={() => {
+                  void loadCourseCardIndex(selectedCourseId)
+                }}
+                onOpenCard={(cardId) => {
+                  void openRailCard(cardId)
+                }}
+                onGoToSources={() => changeAppView('sources')}
+              />
+            )}
+          </StudioWorkspace>
+          {(appRoute.tool ?? 'cards') === 'cards' &&
+            renderCourseCardRail()}
         </main>
       )}
       {activeCitation && (

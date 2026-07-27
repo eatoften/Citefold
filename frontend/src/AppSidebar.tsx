@@ -1,51 +1,74 @@
-import { BookOpenCheck, BookOpenText, ListTree, Network, PanelsTopLeft } from 'lucide-react'
-
-
-export type AppView = 'workspace' | 'course-map' | 'study' | 'review' | 'graph'
-
+import {
+  Database,
+  MessageSquareText,
+  Shapes,
+} from 'lucide-react'
+import type { MouseEvent } from 'react'
+import type { PrimaryView } from './features/navigation/appRoute'
 
 type AppSidebarProps = {
-  activeView: AppView
-  onChange: (view: AppView) => void
+  activeView: PrimaryView
+  getViewHref: (view: PrimaryView) => string
+  onChange: (view: PrimaryView) => void
 }
 
-
 const NAV_ITEMS: Array<{
-  id: AppView
+  id: PrimaryView
   label: string
-  icon: typeof PanelsTopLeft
+  icon: typeof Database
 }> = [
-  { id: 'workspace', label: 'Workspace', icon: PanelsTopLeft },
-  { id: 'course-map', label: 'Course map', icon: ListTree },
-  { id: 'study', label: 'Study', icon: BookOpenText },
-  { id: 'review', label: 'Review', icon: BookOpenCheck },
-  { id: 'graph', label: 'Explore', icon: Network },
+  { id: 'sources', label: 'Sources', icon: Database },
+  { id: 'chat', label: 'Chat', icon: MessageSquareText },
+  { id: 'studio', label: 'Studio', icon: Shapes },
 ]
 
-
-export function AppSidebar({ activeView, onChange }: AppSidebarProps) {
+function shouldHandleNavigation(
+  event: MouseEvent<HTMLAnchorElement>,
+): boolean {
   return (
-    <nav className="app-sidebar" aria-label="Application views">
-      <div className="app-sidebar-brand" aria-label="Video Course Cards">
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  )
+}
+
+export function AppSidebar({
+  activeView,
+  getViewHref,
+  onChange,
+}: AppSidebarProps) {
+  return (
+    <nav className="app-sidebar" aria-label="Primary navigation">
+      <div
+        className="app-sidebar-brand"
+        aria-label="Video Course Cards"
+        title="Video Course Cards"
+      >
         VC
       </div>
       <div className="app-sidebar-nav">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon
+          const isActive = activeView === item.id
 
           return (
-            <button
+            <a
               key={item.id}
-              type="button"
-              className={activeView === item.id ? 'active' : ''}
-              aria-label={item.label}
-              aria-current={activeView === item.id ? 'page' : undefined}
+              href={getViewHref(item.id)}
+              className={isActive ? 'active' : undefined}
+              aria-current={isActive ? 'page' : undefined}
               title={item.label}
-              onClick={() => onChange(item.id)}
+              onClick={(event) => {
+                if (!shouldHandleNavigation(event)) return
+                event.preventDefault()
+                onChange(item.id)
+              }}
             >
               <Icon aria-hidden="true" size={20} strokeWidth={1.8} />
               <span>{item.label}</span>
-            </button>
+            </a>
           )
         })}
       </div>

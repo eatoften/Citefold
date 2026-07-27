@@ -180,7 +180,7 @@
   border-bottom: 1px solid #edf0ee;
 }
 
-.chat-header h1 {
+.chat-header h2 {
   margin: 3px 0 4px;
   font-size: clamp(20px, 2.2vw, 28px);
   letter-spacing: -0.03em;

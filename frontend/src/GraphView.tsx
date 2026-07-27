@@ -36,9 +36,14 @@ type GraphViewProps = {
   courses: GraphCourse[]
   selectedCourseId: string | null
   selectedModel: string
+  showCourseSelector?: boolean
   initialCardId: string | null
   onSelectCourse: (courseId: string) => void
   onOpenWorkspaceCard: (cardId: string) => void
+  onCardRouteChange?: (
+    cardId: string | null,
+    mode: 'push' | 'replace',
+  ) => void
 }
 
 type RelationStatusFilter = 'visible' | 'all' | CardRelationStatus
@@ -58,6 +63,11 @@ type RelationWithCard = {
   relation: CardGraphEdge
   card: CardGraphNode
   direction: 'outgoing' | 'incoming'
+}
+
+type MutationScope = {
+  courseId: string
+  epoch: number
 }
 
 
@@ -160,11 +170,16 @@ export function GraphView({
   courses,
   selectedCourseId,
   selectedModel,
+  showCourseSelector = true,
   initialCardId,
   onSelectCourse,
   onOpenWorkspaceCard,
+  onCardRouteChange,
 }: GraphViewProps) {
-  const [graph, setGraph] = useState<CourseCardRelationsGraph | null>(null)
+  const [graphResult, setGraphResult] = useState<{
+    courseId: string
+    graph: CourseCardRelationsGraph
+  } | null>(null)
   const [selectedCardId, setSelectedCardId] = useState<string | null>(
     initialCardId,
   )
@@ -190,23 +205,61 @@ export function GraphView({
     relationType: 'related',
     explanation: '',
   })
+  const selectedCourseIdRef = useRef(selectedCourseId)
+  const previousInitialCardIdRef = useRef(initialCardId)
+  const onCardRouteChangeRef = useRef(onCardRouteChange)
+  const loadEpochRef = useRef(0)
+  const mutationEpochRef = useRef(0)
+  const activeLoadControllerRef = useRef<AbortController | null>(null)
   const { containerRef, width } = useContainerWidth()
 
+  const graph = graphResult?.courseId === selectedCourseId
+    ? graphResult.graph
+    : null
+
+  useEffect(() => {
+    selectedCourseIdRef.current = selectedCourseId
+  }, [selectedCourseId])
+
+  useEffect(() => {
+    onCardRouteChangeRef.current = onCardRouteChange
+  }, [onCardRouteChange])
+
   const loadGraph = useCallback(async () => {
-    if (!selectedCourseId) {
-      setGraph(null)
+    const courseId = selectedCourseId
+    if (courseId !== selectedCourseIdRef.current) return
+
+    const loadEpoch = loadEpochRef.current + 1
+    loadEpochRef.current = loadEpoch
+    activeLoadControllerRef.current?.abort()
+
+    if (!courseId) {
+      activeLoadControllerRef.current = null
+      setGraphResult(null)
+      setIsLoading(false)
       return
     }
 
+    const controller = new AbortController()
+    activeLoadControllerRef.current = controller
     setIsLoading(true)
     setError(null)
 
     try {
       const nextGraph = await fetchJson<CourseCardRelationsGraph>(
         apiBaseUrl,
-        `/courses/${selectedCourseId}/card-relations`,
+        `/courses/${courseId}/card-relations`,
+        { signal: controller.signal },
       )
-      setGraph(nextGraph)
+      if (
+        controller.signal.aborted
+        || loadEpoch !== loadEpochRef.current
+        || courseId !== selectedCourseIdRef.current
+      ) {
+        return
+      }
+
+      setGraphResult({ courseId, graph: nextGraph })
       setSelectedCardId((currentCardId) => {
         if (
           currentCardId &&
@@ -215,31 +268,131 @@ export function GraphView({
           return currentCardId
         }
 
-        return nextGraph.nodes[0]?.id ?? null
+        return null
       })
     } catch (loadError) {
+      if (
+        controller.signal.aborted
+        || loadEpoch !== loadEpochRef.current
+        || courseId !== selectedCourseIdRef.current
+      ) {
+        return
+      }
       setError(
         loadError instanceof Error
           ? loadError.message
           : 'Knowledge graph failed to load.',
       )
     } finally {
-      setIsLoading(false)
+      if (
+        loadEpoch === loadEpochRef.current
+        && courseId === selectedCourseIdRef.current
+      ) {
+        activeLoadControllerRef.current = null
+        setIsLoading(false)
+      }
     }
   }, [apiBaseUrl, selectedCourseId])
 
   useEffect(() => {
+    mutationEpochRef.current += 1
+    setGraphResult(null)
+    setSelectedCardId(null)
+    setIsRecomputing(false)
+    setBusyRelationId(null)
+    setIsCreatingRelation(false)
+    setEditingRelationId(null)
+    setRelationEditForm(null)
+    setManualForm({
+      targetCardId: '',
+      relationType: 'related',
+      explanation: '',
+    })
+    setError(null)
+    setMessage(null)
     void loadGraph()
+
+    return () => {
+      mutationEpochRef.current += 1
+      loadEpochRef.current += 1
+      activeLoadControllerRef.current?.abort()
+      activeLoadControllerRef.current = null
+    }
   }, [loadGraph])
 
   useEffect(() => {
-    if (
-      initialCardId &&
-      graph?.nodes.some((node) => node.id === initialCardId)
-    ) {
-      setSelectedCardId(initialCardId)
+    const routeCardChanged =
+      previousInitialCardIdRef.current !== initialCardId
+    previousInitialCardIdRef.current = initialCardId
+
+    if (!graph) {
+      return
     }
+
+    if (initialCardId) {
+      if (graph.nodes.some((node) => node.id === initialCardId)) {
+        setSelectedCardId(initialCardId)
+        return
+      }
+
+      setSelectedCardId(null)
+      onCardRouteChangeRef.current?.(null, 'replace')
+      return
+    }
+
+    if (routeCardChanged) {
+      setSelectedCardId(null)
+      return
+    }
+
+    setSelectedCardId((currentCardId) => {
+      if (
+        currentCardId &&
+        graph.nodes.some((node) => node.id === currentCardId)
+      ) {
+        return currentCardId
+      }
+
+      return null
+    })
   }, [graph, initialCardId])
+
+  const selectCard = useCallback(
+    (cardId: string) => {
+      if (
+        selectedCardId === cardId ||
+        !graph?.nodes.some((node) => node.id === cardId)
+      ) {
+        return
+      }
+
+      setSelectedCardId(cardId)
+      onCardRouteChangeRef.current?.(cardId, 'push')
+    },
+    [graph, selectedCardId],
+  )
+
+  function captureMutationScope(): MutationScope | null {
+    const courseId = selectedCourseId
+    if (
+      !courseId ||
+      courseId !== selectedCourseIdRef.current
+    ) {
+      return null
+    }
+
+    return {
+      courseId,
+      epoch: mutationEpochRef.current,
+    }
+  }
+
+  function isMutationScopeCurrent(scope: MutationScope): boolean {
+    return (
+      scope.epoch === mutationEpochRef.current &&
+      scope.courseId === selectedCourseIdRef.current
+    )
+  }
 
   const nodesById = useMemo(() => {
     return new Map(graph?.nodes.map((node) => [node.id, node]) ?? [])
@@ -353,7 +506,8 @@ export function GraphView({
   }, [filteredEdges, nodesById, selectedCardId])
 
   async function recomputeRelations() {
-    if (!selectedCourseId) {
+    const scope = captureMutationScope()
+    if (!scope) {
       return
     }
 
@@ -364,25 +518,31 @@ export function GraphView({
     try {
       const result = await fetchJson<CardRelationRecomputeResult>(
         apiBaseUrl,
-        `/courses/${selectedCourseId}/card-relations/recompute`,
+        `/courses/${scope.courseId}/card-relations/recompute`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ threshold, top_k: topK }),
         },
       )
+      if (!isMutationScopeCurrent(scope)) return
+
       setMessage(
         `${result.relations_written} relations from ${result.embedded_cards} embedded cards.`,
       )
       await loadGraph()
     } catch (recomputeError) {
+      if (!isMutationScopeCurrent(scope)) return
+
       setError(
         recomputeError instanceof Error
           ? recomputeError.message
           : 'Relation recomputation failed.',
       )
     } finally {
-      setIsRecomputing(false)
+      if (isMutationScopeCurrent(scope)) {
+        setIsRecomputing(false)
+      }
     }
   }
 
@@ -390,6 +550,9 @@ export function GraphView({
     relationId: string,
     status: CardRelationStatus,
   ) {
+    const scope = captureMutationScope()
+    if (!scope) return
+
     setBusyRelationId(relationId)
     setError(null)
     setMessage(null)
@@ -404,16 +567,22 @@ export function GraphView({
           body: JSON.stringify({ status }),
         },
       )
+      if (!isMutationScopeCurrent(scope)) return
+
       setMessage(`Relation marked ${status}.`)
       await loadGraph()
     } catch (updateError) {
+      if (!isMutationScopeCurrent(scope)) return
+
       setError(
         updateError instanceof Error
           ? updateError.message
           : 'Relation update failed.',
       )
     } finally {
-      setBusyRelationId(null)
+      if (isMutationScopeCurrent(scope)) {
+        setBusyRelationId(null)
+      }
     }
   }
 
@@ -429,6 +598,8 @@ export function GraphView({
     if (!relationEditForm) {
       return
     }
+    const scope = captureMutationScope()
+    if (!scope) return
 
     setBusyRelationId(relationId)
     setError(null)
@@ -447,22 +618,31 @@ export function GraphView({
           }),
         },
       )
+      if (!isMutationScopeCurrent(scope)) return
+
       setEditingRelationId(null)
       setRelationEditForm(null)
       setMessage('Relation details updated.')
       await loadGraph()
     } catch (updateError) {
+      if (!isMutationScopeCurrent(scope)) return
+
       setError(
         updateError instanceof Error
           ? updateError.message
           : 'Relation edit failed.',
       )
     } finally {
-      setBusyRelationId(null)
+      if (isMutationScopeCurrent(scope)) {
+        setBusyRelationId(null)
+      }
     }
   }
 
   async function classifyRelation(relationId: string) {
+    const scope = captureMutationScope()
+    if (!scope) return
+
     setBusyRelationId(relationId)
     setError(null)
     setMessage(null)
@@ -477,6 +657,8 @@ export function GraphView({
           body: JSON.stringify({ model: selectedModel || null }),
         },
       )
+      if (!isMutationScopeCurrent(scope)) return
+
       setMessage(
         result.classification === 'unclear'
           ? `Qwen marked this relation unclear: ${result.explanation}`
@@ -484,18 +666,25 @@ export function GraphView({
       )
       await loadGraph()
     } catch (classificationError) {
+      if (!isMutationScopeCurrent(scope)) return
+
       setError(
         classificationError instanceof Error
           ? classificationError.message
           : 'Relation classification failed.',
       )
     } finally {
-      setBusyRelationId(null)
+      if (isMutationScopeCurrent(scope)) {
+        setBusyRelationId(null)
+      }
     }
   }
 
   async function createManualRelation() {
-    if (!selectedCourseId || !selectedCardId || !manualForm.targetCardId) {
+    const scope = captureMutationScope()
+    const sourceCardId = selectedCardId
+    const targetCardId = manualForm.targetCardId
+    if (!scope || !sourceCardId || !targetCardId) {
       return
     }
 
@@ -506,18 +695,20 @@ export function GraphView({
     try {
       await fetchJson<CardGraphEdge>(
         apiBaseUrl,
-        `/courses/${selectedCourseId}/card-relations`,
+        `/courses/${scope.courseId}/card-relations`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            source_card_id: selectedCardId,
-            target_card_id: manualForm.targetCardId,
+            source_card_id: sourceCardId,
+            target_card_id: targetCardId,
             relation_type: manualForm.relationType,
             explanation: manualForm.explanation || null,
           }),
         },
       )
+      if (!isMutationScopeCurrent(scope)) return
+
       setMessage('Manual relation added and accepted.')
       setManualForm({
         targetCardId: '',
@@ -526,13 +717,17 @@ export function GraphView({
       })
       await loadGraph()
     } catch (createError) {
+      if (!isMutationScopeCurrent(scope)) return
+
       setError(
         createError instanceof Error
           ? createError.message
           : 'Manual relation creation failed.',
       )
     } finally {
-      setIsCreatingRelation(false)
+      if (isMutationScopeCurrent(scope)) {
+        setIsCreatingRelation(false)
+      }
     }
   }
 
@@ -543,29 +738,35 @@ export function GraphView({
 
   return (
     <div className="graph-view">
-      <header className="graph-toolbar">
+      <header
+        className={`graph-toolbar${
+          showCourseSelector ? '' : ' graph-toolbar-embedded'
+        }`}
+      >
         <div className="graph-title-block">
           <div className="panel-title">Knowledge structure</div>
-          <h1>Course graph</h1>
+          <h2>Course graph</h2>
           <p>
             {graph?.nodes.length ?? 0} cards · {graph?.edges.length ?? 0}{' '}
             persisted relations
           </p>
         </div>
-        <div className="graph-course-control">
-          <label htmlFor="graph-course">Course</label>
-          <select
-            id="graph-course"
-            value={selectedCourseId ?? ''}
-            onChange={(event) => onSelectCourse(event.target.value)}
-          >
-            {courses.map((course) => (
-              <option key={course.id} value={course.id}>
-                {course.title} ({course.card_count})
-              </option>
-            ))}
-          </select>
-        </div>
+        {showCourseSelector && (
+          <div className="graph-course-control">
+            <label htmlFor="graph-course">Course</label>
+            <select
+              id="graph-course"
+              value={selectedCourseId ?? ''}
+              onChange={(event) => onSelectCourse(event.target.value)}
+            >
+              {courses.map((course) => (
+                <option key={course.id} value={course.id}>
+                  {course.title} ({course.card_count})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="graph-recompute-controls">
           <label>
             <span>Threshold {threshold.toFixed(2)}</span>
@@ -600,7 +801,10 @@ export function GraphView({
       </header>
 
       {(error || message) && (
-        <div className={error ? 'graph-notice error' : 'graph-notice success'}>
+        <div
+          className={error ? 'graph-notice error' : 'graph-notice success'}
+          role={error ? 'alert' : 'status'}
+        >
           <span>{error ?? message}</span>
           <button
             type="button"
@@ -669,7 +873,7 @@ export function GraphView({
                   type="button"
                   key={card.id}
                   className={selectedCardId === card.id ? 'selected' : ''}
-                  onClick={() => setSelectedCardId(card.id)}
+                  onClick={() => selectCard(card.id)}
                 >
                   <strong>{card.title}</strong>
                   <span>{card.summary}</span>
@@ -731,7 +935,7 @@ export function GraphView({
                 linkDirectionalArrowRelPos={0.92}
                 cooldownTicks={120}
                 onNodeClick={(node) =>
-                  setSelectedCardId((node as CardGraphNode).id)
+                  selectCard((node as CardGraphNode).id)
                 }
               />
             ) : (
@@ -785,7 +989,7 @@ export function GraphView({
                         <button
                           type="button"
                           className="graph-related-card"
-                          onClick={() => setSelectedCardId(card.id)}
+                          onClick={() => selectCard(card.id)}
                         >
                           <strong>{card.title}</strong>
                           <span>{card.summary}</span>

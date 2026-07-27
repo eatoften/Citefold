@@ -98,3 +98,49 @@ export type CourseSource = {
   updated_at: string
   indexed_at: string | null
 }
+
+export type CourseSourceChunk = {
+  id: string
+  source_id: string
+  origin_type: 'transcript_chunk' | 'source_unit'
+  origin_id: string
+  chunk_type:
+    | 'transcript'
+    | 'slide'
+    | 'page'
+    | 'paragraph'
+    | 'text'
+    | 'video_frame'
+  ordinal: number
+  text: string
+  text_hash: string
+  locator: SourceLocator
+  chunker_version: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type SourceIndexResult = {
+  source_ids: string[]
+  total_sources: number
+  unavailable_source_ids: string[]
+  total_chunks: number
+  embedded_chunks: number
+  skipped_chunks: number
+  model: string
+  dimension: number | null
+}
+
+export type SourceAssetImportResult = {
+  asset: {
+    id: string
+    course_id: string
+    original_filename: string
+    extraction_status: 'pending' | 'ready' | 'failed'
+    unit_count: number
+  }
+  units: Array<{
+    id: string
+  }>
+}

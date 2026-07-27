@@ -40,12 +40,55 @@ commit, and remote push are all complete.
 | P0.1 Unified Sources | Videos and local documents expose one Source/Chunk/Locator contract and index | Complete |
 | P0.2 Grounded Chat | Persistent multi-turn answers with abstention and source-scoped retrieval | Complete |
 | P0.3 Verifiable citations | Sentence-level citations open the exact video time or document location | Complete |
-| P0.4 Source-first workspace | A course opens as Sources / Chat / Studio, with advanced tools secondary | In progress |
+| P0.4 Source-first workspace | A course opens as Sources / Chat / Studio, with advanced tools secondary | Complete |
 | P0.5 Reliability | Autosave, recoverable tasks, backup/restore, safe desktop lifecycle | Planned |
 | P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Planned |
 | P1.2 Studio | Study, Review, and Course Map become a coherent output library | Planned |
 | P1.3 Product polish | Onboarding, previews, search, empty/error states, accessibility, localization | Planned |
 | P1.4 Engineering hardening | Frontend feature slices, shared API client, automated UI tests, performance | Planned |
+
+### P0.4 completion summary
+
+The P0.4 checkpoint makes the Source-first shell the product's canonical
+information architecture:
+
+```text
+Primary navigation
+-> Sources
+-> Chat
+-> Studio
+   -> Cards
+   -> Study
+   -> Review
+   -> Course map
+   -> Explore
+```
+
+Delivered scope:
+
+- typed query-route parsing, serialization, canonicalization, destination-
+  owned entity parameters, and legacy URL migration;
+- host-owned push/replace/popstate behavior with course/entity validation;
+- one mixed video/audio/document Sources catalog with import, enable/index,
+  delete, canonical chunk preview, and video handoff;
+- full course Chat with persistent conversation deep links and
+  per-conversation Source scope;
+- one Studio shell around the five existing learning workflows;
+- immediate course-state invalidation plus abort/epoch/sequence protection
+  against late cross-course responses;
+- responsive labeled bottom navigation, route-heading focus, one main
+  landmark, and improved closed-rail semantics;
+- no backend schema migration or new routing dependency.
+
+P0.4 passed 104 frontend tests across 16 files, frontend lint, the production
+build, a zero-vulnerability high-severity dependency audit, 526 passing
+backend tests with one skip, repository hygiene checks, and real-browser
+acceptance at 1280x720 and 360x640. The independent stage commit is the
+checkpoint boundary; its immutable identity and remote equality are reported
+in the delivery summary. Exact commands, bundle sizes, browser fixtures,
+tradeoffs, and remaining risks are recorded in the
+[productization log](productization-log.md); the architectural contract is recorded in
+[ADR-0005](decisions/ADR-0005-source-first-workspace-and-route-contract.md).
 
 ### Stage gates
 

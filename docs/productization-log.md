@@ -1245,3 +1245,378 @@ workflows rather than five co-equal starting points. The acceptance gate will
 cover responsive navigation, preserved deep links, current feature parity,
 clear empty/loading/error states, and a measured reduction of `App.tsx`
 responsibility rather than a cosmetic label change.
+
+## P0.4 - Source-First Workspace and Canonical Navigation
+
+- **Status:** Complete
+- **Started:** 2026-07-27
+- **Accepted:** 2026-07-27
+- **Acceptance evidence:** implementation, independent review, automated
+  suites, real-browser acceptance, and documentation complete; Git identity
+  and post-push remote equality are reported by Git and the delivery summary
+- **Decision record:**
+  [`ADR-0005`](decisions/ADR-0005-source-first-workspace-and-route-contract.md)
+
+### User outcome
+
+The course notebook now has three primary destinations:
+
+```text
+Sources -> Chat -> Studio
+```
+
+Sources is the evidence catalog. It lists video/audio and document Sources
+together, reports extraction and indexing state, imports supported documents,
+enables or disables retrieval globally, indexes ready Sources, previews exact
+canonical chunks and typed locators, deletes document assets, and opens the
+corresponding video workflow. The established video/transcript/card-generation
+workflow is hidden by default and opens as an on-demand compatibility detail
+after **Add video** or selection of an existing video/job.
+
+Chat is a full course workspace instead of an Ask tab inside the card rail. It
+retains conversation history, per-conversation Source selection, multi-turn
+context, explicit insufficient-evidence behavior, retry state, and
+sentence-level citations. The active conversation has a canonical URL and is
+restored when the user returns to a course's Chat.
+
+Studio keeps the existing learning capabilities as five secondary tools:
+
+```text
+Cards | Study | Review | Course map | Explore
+```
+
+Cards provides the default Studio landing and reuses the existing card editor
+and note/review details. Study, Review, Course Map, and Explore retain their
+implemented workflows without competing with Sources and Chat as primary
+product concepts.
+
+The three destinations use real links and canonical URLs. Refresh,
+copy/paste, modified-click behavior, legacy links, and browser back/forward
+are part of the navigation contract rather than accidental component state.
+
+### Why this stage now
+
+P0.1-P0.3 completed the backend contracts for unified Sources, persistent
+grounded Chat, and exact citation navigation. The previous interface still
+presented Workspace, Study, Review, Course Map, and Explore as five unrelated
+starting points and hid Chat inside a card-oriented side rail. A user could
+not infer the product's core loop from its navigation.
+
+P0.4 makes the completed evidence pipeline legible before adding reliability,
+Notes, or new Studio outputs:
+
+```text
+collect evidence
+-> ask and verify
+-> turn understanding into durable learning artifacts
+```
+
+This order also avoids building P0.5 and P1 workflows into a shell that is
+already known to have the wrong ownership boundaries.
+
+### Scope and non-goals
+
+Included:
+
+- exactly three primary navigation links: Sources, Chat, and Studio;
+- a typed canonical query-route contract with legacy URL migration;
+- one host-owned browser-history write policy;
+- course-scoped route and asynchronous-response isolation;
+- a unified mixed-media/document Sources catalog and canonical chunk preview;
+- full-width Chat with restorable conversation links;
+- Studio shells for Cards, Study, Review, Course Map, and Explore;
+- responsive desktop/bottom navigation, a skip link, route-heading focus, one
+  main landmark per rendered destination, and explicit status/error semantics;
+- extracted feature modules and tests for route, Sources, Chat, Studio, and
+  cross-course race behavior;
+- reuse of the P0.1-P0.3 backend with no schema or response-model migration.
+
+Explicitly excluded:
+
+- P0.5 autosave, unsaved-change guards, recoverable/cancellable tasks,
+  trash/undo, and backup/restore UI;
+- P1.1 free Notes, save-answer-to-note, and note-to-Source;
+- P1.2 a persistent Studio output library, Overview, FAQ, Study Guide, Quiz,
+  or Flashcard generators;
+- P1.3 onboarding, sample courses, global search, localization, and complete
+  product-wide accessibility remediation;
+- P1.4 completion of the `App.tsx` decomposition, a shared API client,
+  route-level code splitting, and durable app-level end-to-end automation;
+- a database migration or change to retrieval/citation semantics.
+
+### Navigation and URL contract
+
+Canonical primary routes:
+
+```text
+?view=sources&course={course_id}
+?view=chat&course={course_id}&conversation={conversation_id}
+?view=studio&tool={cards|study|review|map|explore}&course={course_id}
+```
+
+Destination-owned optional parameters:
+
+```text
+Sources: source, job
+Chat:    conversation
+Studio:  card
+Study:   card, document
+```
+
+Irrelevant entity parameters are removed when the destination changes.
+Changing course clears entity selections unless the navigation explicitly
+supplies a replacement in the new course.
+
+Legacy compatibility:
+
+```text
+workspace + no card -> sources
+workspace + card    -> studio/cards
+study               -> studio/study
+review              -> studio/review
+course-map          -> studio/map
+graph               -> studio/explore
+missing + card      -> studio/cards
+missing without card, or unknown -> sources
+```
+
+The route module is pure: it parses, normalizes, serializes, canonicalizes, and
+builds URLs without mutating browser history. The App host owns normal
+`pushState`, repair `replaceState`, startup canonicalization, and `popstate`.
+Writing the current canonical URL is a no-op rather than a duplicate entry.
+
+The route retains query parameters it does not own. It removes invalid empty
+IDs and validates entity ownership only after the current course collection
+has loaded. An invalid course or cross-course entity is repaired with
+`replaceState`, so a bad link cannot display stale data and the Back button
+does not revisit the rejected state.
+
+### Source scope semantics
+
+Two similar-looking controls intentionally have different lifetimes:
+
+```text
+Source.enabled
+  = course-wide permission for a Source to participate in future retrieval
+
+conversation.selected_source_ids
+  = durable evidence subset used by one Chat conversation
+```
+
+Sources owns import, extraction state, global enable/disable, indexing,
+deletion, and canonical chunk inspection. Chat may select only enabled, ready
+Sources and persists that narrower list on the conversation. One conversation
+cannot disable a Source for another. Disabling a Source globally affects
+future retrieval but does not rewrite historical messages or citation
+snapshots.
+
+### Implementation architecture and technology
+
+The stage stays inside the existing React 19, TypeScript 6, Vite 8,
+Testing Library, Vitest, and CSS stack. It does not add a routing or state
+management dependency.
+
+New or extracted responsibilities:
+
+| Slice | Responsibility |
+| --- | --- |
+| `features/navigation/appRoute.ts` | Typed route grammar, pure parsing/serialization, canonicalization, legacy mapping, destination ownership |
+| `AppSidebar.tsx` | Exactly three accessible primary links |
+| `features/sources/sourceApi.ts` | Source catalog, chunk, enable, index, import, and delete HTTP boundary |
+| `features/sources/SourcesLibrary.tsx` | Mixed Source list, state summaries, document import, global lifecycle controls, chunk preview, deep-link repair |
+| `features/chat/ChatWorkspace.tsx` | Route-level Chat heading, course scope, and full Chat surface |
+| `features/chat/useChat.ts` | Conversation URL restoration and course/request epochs in addition to existing durable Chat behavior |
+| `features/studio/StudioWorkspace.tsx` | Studio heading, course scope, secondary link navigation, and tool outlet |
+| `features/studio/CardsWorkspace.tsx` | Card landing, stats, filters, grid, loading, and empty states |
+| `App.tsx` | Host orchestration, the only integrated history writer, validated course transitions, legacy workflow composition |
+
+Study no longer presents a second document-import/delete owner. It reads and
+selects existing Sources for document generation and sends the user to Sources
+for lifecycle management.
+
+Course-scoped loaders use the mechanism appropriate to their ownership:
+
+- `AbortController` cancels fetches when a feature unmounts or course changes;
+- request epochs reject results from a previous feature/course lifetime;
+- monotonic sequence references protect legacy App-owned jobs, card index, and
+  card detail loads;
+- state is cleared immediately on course change before the next request
+  begins;
+- route restoration waits for the current course collection before accepting
+  a deep-linked entity.
+
+The responsive shell turns the desktop sidebar into a labeled bottom
+navigation at the narrow breakpoint. The card rail becomes inert and
+`aria-hidden` when closed, exposes expanded state on its toggle, closes with
+Escape, and returns focus. Nested feature `<main>` elements and duplicate route
+`<h1>` elements were replaced by one host main and one route heading.
+
+### Decisions and evidence
+
+1. **Group by learner intent, not code history.** Sources, Chat, and Studio
+   match evidence, reasoning, and artifact workflows. Cards, Study, Review,
+   Map, and Explore remain useful but do not each define a product.
+2. **Use real links backed by a pure route contract.** Links preserve browser
+   behavior and are inspectable and testable. Pure functions separate URL
+   grammar from React state and history side effects.
+3. **Canonicalize legacy links instead of breaking them.** Browser history,
+   exported Markdown, documentation, and bookmarks are part of a local-first
+   user's durable workspace.
+4. **Avoid a router migration in an information-architecture stage.** The
+   query-based contract already represents the required deep links. Adding a
+   framework would broaden regression risk without improving the current user
+   outcome.
+5. **Make course selection an isolation boundary.** UI clearing plus
+   cancellation/epochs prevents a slow course-A response from corrupting the
+   visible course-B workspace.
+6. **Keep global Source availability separate from conversation scope.**
+   Notebook policy and question scope have different consequences and
+   persistence lifetimes.
+7. **Do not invent an empty Studio Overview.** Cards is the useful default.
+   The output-library data model and product language belong to P1.2.
+8. **Do not couple navigation to a schema change.** P0.1-P0.3 already expose
+   the required backend contracts. An additive frontend stage is easier to
+   verify and roll back.
+
+Alternatives rejected in
+[`ADR-0005`](decisions/ADR-0005-source-first-workspace-and-route-contract.md)
+include cosmetic relabeling, retaining five primary tools, feature-owned
+history writes, conflating enabled and selected Sources, immediately adding an
+empty Overview, removing legacy URLs, and introducing a routing framework
+during this stage.
+
+### Problems encountered and resolutions
+
+1. **URL state and component state could become two sources of truth.** The
+   first integration points still had feature-specific navigation behavior.
+   Route parsing and serialization moved into one pure module, while App owns
+   the commit policy and passes callbacks into features.
+2. **Legacy URLs encoded product history rather than the new hierarchy.**
+   Explicit migration rules preserve every old view, including the important
+   distinction between Workspace with and without a card.
+3. **Changing course could display a late response from the old course.**
+   Existing views were audited independently. Abort controllers, request
+   epochs, monotonic sequences, immediate state invalidation, and regression
+   tests now protect the extracted and legacy loaders.
+4. **A deep link could name an entity before ownership data was available.**
+   Job and card restoration now waits for the current course list. Unknown or
+   wrong-course IDs show a scoped error and repair the URL rather than opening
+   whatever object happens to remain in memory.
+5. **Chat needed to reconcile URL restoration with its default
+   conversation.** A requested conversation is opened when it belongs to the
+   course. Otherwise the first valid conversation is selected and the URL is
+   replaced, not pushed. Creating or intentionally selecting a conversation
+   pushes a navigable history entry.
+6. **Source lifecycle controls were duplicated in Study.** Study keeps the
+   evidence-selection workflow required for generation but delegates import
+   and deletion to Sources through an explicit “Manage sources” action.
+7. **Embedding existing features produced nested main landmarks and duplicate
+   headings.** The route shell now owns `<main>` and `<h1>`; embedded feature
+   views render sections and subordinate headings.
+8. **The closed card rail remained in the keyboard/accessibility tree.** The
+   rail is inert and hidden from assistive technology when closed, exposes
+   control state, supports Escape, and restores focus.
+9. **The narrow rail became icon-only.** The responsive design now uses a
+   labeled bottom navigation and adjusts content and card-rail geometry around
+   it.
+10. **The host remains structurally large.** Before P0.4 the audit recorded
+    approximately 4,087 lines and 62 `useState` calls in `App.tsx`. The current
+    checkpoint measures 4,759 lines and 66 `useState` declarations
+    calls because P0.4 added host integration while extracting new route and
+    workspace slices. This stage reduces responsibility concentration but not
+    host size. A claimed `App.tsx` refactor would be false; decomposition and
+    shared API/state boundaries remain a P1.4 acceptance gate.
+11. **The production bundle crossed Vite's default warning threshold during
+    implementation.** The accepted build retains a 537.76 kB main JavaScript
+    chunk (160.42 kB gzip) and Vite's greater-than-500-kB warning. Route-level
+    code splitting and host decomposition are P1.4 work; P0.4 records the
+    warning rather than hiding it.
+12. **Windows blocks the `npm.ps1` shim under the current execution policy.**
+    Validation uses the equivalent `npm.cmd` entrypoint and does not change
+    machine policy.
+13. **Explore overflowed at a 1280-pixel desktop viewport during final
+    acceptance.** The graph toolbar retained a three-column grid after the
+    Studio host removed its local course selector, constraining the recompute
+    controls to the wrong column. The embedded variant now uses a two-column
+    grid, a component regression test fixes the ownership contract, and both
+    1280x720 and 360x640 browser checks report no horizontal overflow.
+
+### Verification matrix
+
+Every row below was rerun or inspected from the accepted P0.4 tree.
+
+| Area | Automated or manual coverage | Current record |
+| --- | --- | --- |
+| Route grammar | Canonical parse/serialize, owned-parameter cleanup, course-change cleanup, all legacy mappings, unknown values, non-owned query retention, and no history side effects | `appRoute.test.ts` passed inside the final 16-file / 104-test suite |
+| Primary navigation | Three real links, labels, active state, canonical hrefs, and modified-click preservation | `AppSidebar.test.tsx` and route-level App tests passed inside the final suite |
+| Sources API | List/chunks, enable, index, import, delete, response/error/204 handling | `sourceApi.test.ts` passed inside the final suite |
+| Sources workspace | Mixed list, exact preview/locator, import, empty/loading/error/status behavior, invalid deep-link repair, refresh preservation, and late course-A response isolation | `SourcesLibrary.test.tsx` passed inside the final suite |
+| Chat route shell | Course selector, full Chat composition, conversation restoration/change events, source scope, and accessible message-log semantics | `ChatWorkspace.test.tsx`, `ChatPanel.test.tsx`, and `useChat.route.test.tsx` passed inside the final suite |
+| Studio | Five link destinations, active tool, Cards filters/grid/loading/empty, embedded Explore toolbar, and preserved tool hrefs | `StudioWorkspace.test.tsx`, `CardsWorkspace.test.tsx`, and `GraphView.test.tsx` passed inside the final suite |
+| Course isolation | Abort/epoch behavior and “late A never overwrites B” for host-owned state, Study, Review, Course Map, and Explore | `App.route.test.tsx` plus the four feature-view test files passed inside the final suite |
+| Full frontend | All Vitest suites | `npm.cmd test -- --run`: **16 files, 104 tests passed** in 11.37 s |
+| Static frontend | ESLint | `npm.cmd run lint`: passed with no findings |
+| Production frontend | TypeScript project build and Vite production bundle | `npm.cmd run build`: passed; HTML 0.46 kB (0.29 gzip), CSS 81.64 kB (14.54 gzip), Citation Inspector JS 7.75 kB (2.58 gzip), Study JS 129.28 kB (38.75 gzip), main JS 537.76 kB (160.42 gzip); the main chunk retains the documented >500 kB warning |
+| Dependencies | High-severity npm audit | `npm.cmd audit --audit-level=high`: **0 vulnerabilities** |
+| Backend regression | Full pytest suite even though P0.4 has no backend/schema change | `python -m pytest`: **526 passed, 1 skipped, 1 upstream deprecation warning** |
+| Repository hygiene | Whitespace/error check and scoped diff review | `git diff --check`: passed; final status and diff statistics reviewed before staging |
+| Desktop browser | Sources -> Chat -> Studio, every Studio tool, mixed Source preview, explicit video opening, Chat history shell, routing, and citation continuity | 1280x720 against an isolated SQLite directory and a course containing imported `README.md`: Source preview/locator, hidden-by-default video workflow, Chat source/history surface, five Studio tools, and route headings passed with no application console warnings/errors or horizontal overflow. Durable conversation/citation behavior remains covered by the accepted P0.2/P0.3 browser fixtures and the unchanged passing integration suites |
+| Narrow browser | Labeled bottom navigation, no horizontal overflow, usable Source/Chat/Studio layouts, card rail geometry, and keyboard focus | True 360x640 browser override: Sources, Chat composer, horizontally scrollable Studio tool bar, and Explore passed; the composer scrolled above the fixed bottom bar; App integration tests passed the rail inert/Escape/focus-return contract |
+| History compatibility | Paste every legacy URL, canonical replacement, deliberate pushes, Back/Forward restoration, and invalid entity repair | Real browser passed Workspace, Study, Review, Course Map, Graph, unknown view, and missing-view-card mappings; deliberate Sources -> Chat -> Cards -> Study pushes restored through Back/Forward; an invalid card was removed after canonical Studio/Cards migration |
+| Accessibility smoke | Skip link, one main, one route heading, heading focus after navigation, native link behavior, rail Escape/focus return, and announced states | Desktop and narrow browser checks found one `main`, one route `h1`, `#main-content` skip target, destination heading focus, labeled native links, and zero application console warnings/errors; App/component tests cover alerts/statuses and closed-rail keyboard behavior |
+
+### Known limitations
+
+- P0.4 establishes one visible Sources catalog, but the older video ingestion,
+  transcript selection, and card-generation implementation remains a large
+  host-owned compatibility workflow. It is on demand rather than visible by
+  default; extraction into its own feature slice remains P1.4.
+- Studio is an information architecture around existing tools, not yet a
+  persistent library of generated outputs.
+- `App.tsx` remains 4,759 lines with 66 `useState` declarations and still
+  coordinates substantial API and state logic. Extracted slices are a
+  boundary, not completion of P1.4.
+- There is no durable app-level end-to-end test suite yet. Component coverage
+  now includes route-level App integration tests, but real-browser acceptance
+  remains a manual checkpoint.
+- The production build retains a 537.76 kB main JavaScript chunk and Vite's
+  >500 kB warning; code splitting and host decomposition remain P1.4.
+- Product-wide dirty-state protection, auto-save, task recovery,
+  backup/restore, Notes, onboarding, global search, and full accessibility
+  remediation are intentionally not claimed here.
+- The current desktop release remains `v0.1.1`; the accepted P0.4 branch is
+  not yet a newly packaged desktop release.
+
+### Git checkpoint
+
+Intended commit subject:
+
+```text
+feat(workspace): organize notebooks around sources chat and studio
+```
+
+Final checkpoint policy:
+
+```text
+commit identity: the independent commit containing this P0.4 entry
+remote verification: origin/codex/notebooklm-product-core must equal local HEAD
+```
+
+The immutable SHA is reported by Git and in the delivery summary; a commit
+cannot truthfully contain its own hash. The remote equality check is performed
+after the commit is pushed.
+
+### Next gate
+
+With P0.4 accepted and pushed, P0.5 hardens the local notebook lifecycle:
+
+```text
+automatic draft preservation
+-> unsaved-change protection and recoverable deletion
+-> cancellable/retryable/resumable processing tasks
+-> validated backup and restore
+-> safe desktop shutdown and restart recovery
+```
+
+P0.5 must preserve the Source/Chat/Studio route and course-isolation contracts
+rather than creating another task-specific navigation surface.

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowRight,
   BookOpenText,
@@ -23,17 +23,27 @@ type CourseMapViewProps = {
   apiBaseUrl: string
   courses: CourseMapCourse[]
   selectedCourseId: string | null
+  showCourseSelector?: boolean
   initialCardId: string | null
   selectedModel: string
   onSelectCourse: (courseId: string) => void
   onOpenWorkspaceCard: (cardId: string) => void
   onOpenStudyCard: (cardId: string) => void
+  onCardRouteChange?: (
+    cardId: string | null,
+    mode: 'push' | 'replace',
+  ) => void
 }
 
 type TopicEditForm = {
   title: string
   summary: string
   parentTopicId: string
+}
+
+type CourseMutationScope = {
+  courseId: string
+  epoch: number
 }
 
 
@@ -137,13 +147,18 @@ export function CourseMapView({
   apiBaseUrl,
   courses,
   selectedCourseId,
+  showCourseSelector = true,
   initialCardId,
   selectedModel,
   onSelectCourse,
   onOpenWorkspaceCard,
   onOpenStudyCard,
+  onCardRouteChange,
 }: CourseMapViewProps) {
-  const [courseMap, setCourseMap] = useState<CourseMapPayload | null>(null)
+  const [courseMapResult, setCourseMapResult] = useState<{
+    courseId: string
+    payload: CourseMapPayload
+  } | null>(null)
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null)
   const [expandedTopicIds, setExpandedTopicIds] = useState<Set<string>>(new Set())
   const [newTopicTitle, setNewTopicTitle] = useState('')
@@ -168,20 +183,107 @@ export function CourseMapView({
   const [mergeSourceTopicId, setMergeSourceTopicId] = useState('')
   const [splitTopicTitle, setSplitTopicTitle] = useState('')
   const [splitCardIds, setSplitCardIds] = useState<Set<string>>(new Set())
+  const [selectedCardId, setSelectedCardId] = useState<string | null>(
+    initialCardId,
+  )
+  const selectedCourseIdRef = useRef(selectedCourseId)
+  const courseScopeEpochRef = useRef(0)
+  const loadEpochRef = useRef(0)
+  const activeLoadControllerRef = useRef<AbortController | null>(null)
+  const onCardRouteChangeRef = useRef(onCardRouteChange)
+
+  const courseMap = courseMapResult?.courseId === selectedCourseId
+    ? courseMapResult.payload
+    : null
+
+  useEffect(() => {
+    selectedCourseIdRef.current = selectedCourseId
+    courseScopeEpochRef.current += 1
+
+    return () => {
+      courseScopeEpochRef.current += 1
+    }
+  }, [selectedCourseId])
+
+  useEffect(() => {
+    onCardRouteChangeRef.current = onCardRouteChange
+  }, [onCardRouteChange])
+
+  function getActiveCourseScope(
+    courseId: string | null,
+  ): CourseMutationScope | null {
+    if (
+      !courseId ||
+      selectedCourseIdRef.current !== courseId
+    ) {
+      return null
+    }
+    return {
+      courseId,
+      epoch: courseScopeEpochRef.current,
+    }
+  }
+
+  function isCourseScopeActive(
+    scope: CourseMutationScope,
+  ): boolean {
+    return (
+      selectedCourseIdRef.current === scope.courseId &&
+      courseScopeEpochRef.current === scope.epoch
+    )
+  }
 
   const loadCourseMap = useCallback(async () => {
-    if (!selectedCourseId) return
+    const courseId = selectedCourseId
+    if (courseId !== selectedCourseIdRef.current) return
+
+    const loadEpoch = loadEpochRef.current + 1
+    loadEpochRef.current = loadEpoch
+    activeLoadControllerRef.current?.abort()
+
+    if (!courseId) {
+      activeLoadControllerRef.current = null
+      setCourseMapResult(null)
+      setIsLoading(false)
+      return
+    }
+
+    const controller = new AbortController()
+    activeLoadControllerRef.current = controller
     setIsLoading(true)
     setError(null)
     try {
       const payload = await fetchJson<CourseMapPayload>(
         apiBaseUrl,
-        `/courses/${selectedCourseId}/map`,
+        `/courses/${courseId}/map`,
+        { signal: controller.signal },
       )
-      setCourseMap(payload)
-      const initialMembership = initialCardId
+      if (
+        controller.signal.aborted
+        || loadEpoch !== loadEpochRef.current
+        || courseId !== selectedCourseIdRef.current
+      ) {
+        return
+      }
+
+      setCourseMapResult({ courseId, payload })
+      const initialCard = initialCardId
+        ? payload.cards.find((card) => card.id === initialCardId)
+        : null
+      const initialMembership = initialCard
         ? payload.memberships.find((item) => item.card_id === initialCardId)
         : null
+      if (initialCardId && !initialCard) {
+        onCardRouteChangeRef.current?.(null, 'replace')
+      }
+      setSelectedCardId((current) => {
+        if (initialCard) return initialCard.id
+        if (initialCardId) return null
+        if (current && payload.cards.some((card) => card.id === current)) {
+          return current
+        }
+        return null
+      })
       setSelectedTopicId((current) => {
         if (initialMembership) return initialMembership.topic_id
         if (current && payload.topics.some((topic) => topic.id === current)) {
@@ -195,14 +297,48 @@ export function CourseMapView({
         new Set(payload.topics.filter((topic) => topic.depth < 2).map((topic) => topic.id)),
       )
     } catch (loadError) {
+      if (
+        controller.signal.aborted
+        || loadEpoch !== loadEpochRef.current
+        || courseId !== selectedCourseIdRef.current
+      ) {
+        return
+      }
       setError(loadError instanceof Error ? loadError.message : 'Course map failed.')
     } finally {
-      setIsLoading(false)
+      if (
+        loadEpoch === loadEpochRef.current
+        && courseId === selectedCourseIdRef.current
+      ) {
+        activeLoadControllerRef.current = null
+        setIsLoading(false)
+      }
     }
   }, [apiBaseUrl, initialCardId, selectedCourseId])
 
   useEffect(() => {
+    setCourseMapResult(null)
+    setSelectedTopicId(null)
+    setSelectedCardId(null)
+    setExpandedTopicIds(new Set())
+    setNewTopicTitle('')
+    setNewTopicParentId('')
+    setRelationTargetId('')
+    setRelationExplanation('')
+    setSuggestionMetrics(null)
+    setMergeSourceTopicId('')
+    setSplitTopicTitle('')
+    setSplitCardIds(new Set())
+    setError(null)
+    setMessage(null)
+    setIsSaving(false)
     void loadCourseMap()
+
+    return () => {
+      loadEpochRef.current += 1
+      activeLoadControllerRef.current?.abort()
+      activeLoadControllerRef.current = null
+    }
   }, [loadCourseMap])
 
   const selectedTopic = courseMap?.topics.find(
@@ -276,13 +412,14 @@ export function CourseMapView({
   )
 
   async function createTopic() {
-    if (!selectedCourseId || !newTopicTitle.trim()) return
+    const scope = getActiveCourseScope(selectedCourseId)
+    if (!scope || !newTopicTitle.trim()) return
     setIsSaving(true)
     setError(null)
     try {
       await fetchJson(
         apiBaseUrl,
-        `/courses/${selectedCourseId}/topics`,
+        `/courses/${scope.courseId}/topics`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -292,18 +429,25 @@ export function CourseMapView({
           }),
         },
       )
+      if (!isCourseScopeActive(scope)) return
       setNewTopicTitle('')
       setMessage('Topic created.')
       await loadCourseMap()
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Topic create failed.')
+      if (isCourseScopeActive(scope)) {
+        setError(saveError instanceof Error ? saveError.message : 'Topic create failed.')
+      }
     } finally {
-      setIsSaving(false)
+      if (isCourseScopeActive(scope)) {
+        setIsSaving(false)
+      }
     }
   }
 
   async function saveTopic() {
     if (!selectedTopic || !editForm || selectedTopic.is_system) return
+    const scope = getActiveCourseScope(selectedTopic.course_id)
+    if (!scope) return
     setIsSaving(true)
     setError(null)
     try {
@@ -316,17 +460,24 @@ export function CourseMapView({
           parent_topic_id: editForm.parentTopicId || null,
         }),
       })
+      if (!isCourseScopeActive(scope)) return
       setMessage('Topic updated.')
       await loadCourseMap()
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : 'Topic update failed.')
+      if (isCourseScopeActive(scope)) {
+        setError(saveError instanceof Error ? saveError.message : 'Topic update failed.')
+      }
     } finally {
-      setIsSaving(false)
+      if (isCourseScopeActive(scope)) {
+        setIsSaving(false)
+      }
     }
   }
 
   async function deleteTopic() {
     if (!selectedTopic || selectedTopic.is_system) return
+    const scope = getActiveCourseScope(selectedTopic.course_id)
+    if (!scope) return
     if (!window.confirm(`Delete topic "${selectedTopic.title}"? Cards will move to Unsorted.`)) {
       return
     }
@@ -335,17 +486,24 @@ export function CourseMapView({
       await fetchJson<void>(apiBaseUrl, `/topics/${selectedTopic.id}`, {
         method: 'DELETE',
       })
+      if (!isCourseScopeActive(scope)) return
       setSelectedTopicId(null)
       setMessage('Topic deleted; its cards moved to Unsorted.')
       await loadCourseMap()
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : 'Topic delete failed.')
+      if (isCourseScopeActive(scope)) {
+        setError(deleteError instanceof Error ? deleteError.message : 'Topic delete failed.')
+      }
     } finally {
-      setIsSaving(false)
+      if (isCourseScopeActive(scope)) {
+        setIsSaving(false)
+      }
     }
   }
 
   async function moveCard(card: CourseMapCard, topicId: string) {
+    const scope = getActiveCourseScope(selectedCourseId)
+    if (!scope || !courseMap?.cards.some((item) => item.id === card.id)) return
     setIsSaving(true)
     setError(null)
     try {
@@ -354,21 +512,28 @@ export function CourseMapView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ topic_id: topicId }),
       })
+      if (!isCourseScopeActive(scope)) return
       setMessage(`Moved ${card.title}.`)
       await loadCourseMap()
     } catch (moveError) {
-      setError(moveError instanceof Error ? moveError.message : 'Card move failed.')
+      if (isCourseScopeActive(scope)) {
+        setError(moveError instanceof Error ? moveError.message : 'Card move failed.')
+      }
     } finally {
-      setIsSaving(false)
+      if (isCourseScopeActive(scope)) {
+        setIsSaving(false)
+      }
     }
   }
 
   async function addTopicRelation() {
-    if (!selectedCourseId || !selectedTopic || !relationTargetId) return
+    if (!selectedTopic || !relationTargetId) return
+    const scope = getActiveCourseScope(selectedTopic.course_id)
+    if (!scope) return
     setIsSaving(true)
     setError(null)
     try {
-      await fetchJson(apiBaseUrl, `/courses/${selectedCourseId}/topic-relations`, {
+      await fetchJson(apiBaseUrl, `/courses/${scope.courseId}/topic-relations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -378,19 +543,25 @@ export function CourseMapView({
           explanation: relationExplanation || null,
         }),
       })
+      if (!isCourseScopeActive(scope)) return
       setRelationTargetId('')
       setRelationExplanation('')
       setMessage('Topic relation added.')
       await loadCourseMap()
     } catch (relationError) {
-      setError(relationError instanceof Error ? relationError.message : 'Relation failed.')
+      if (isCourseScopeActive(scope)) {
+        setError(relationError instanceof Error ? relationError.message : 'Relation failed.')
+      }
     } finally {
-      setIsSaving(false)
+      if (isCourseScopeActive(scope)) {
+        setIsSaving(false)
+      }
     }
   }
 
   async function suggestTopics() {
-    if (!selectedCourseId) return
+    const scope = getActiveCourseScope(selectedCourseId)
+    if (!scope) return
     setIsSaving(true)
     setError(null)
     setMessage(null)
@@ -403,7 +574,7 @@ export function CourseMapView({
         singleton_topic_count: number
         largest_topic_size: number
         cluster_sizes: number[]
-      }>(apiBaseUrl, `/courses/${selectedCourseId}/topics/suggest`, {
+      }>(apiBaseUrl, `/courses/${scope.courseId}/topics/suggest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -412,6 +583,7 @@ export function CourseMapView({
           model: selectedModel || null,
         }),
       })
+      if (!isCourseScopeActive(scope)) return
       setSuggestionMetrics({
         meanCoherence: result.mean_coherence,
         singletonCount: result.singleton_topic_count,
@@ -424,39 +596,55 @@ export function CourseMapView({
           : `${result.suggested_topics.length} topic suggestions for ${result.suggested_memberships} cards.`,
       )
       await loadCourseMap()
-      if (result.suggested_topics[0]) {
+      if (
+        isCourseScopeActive(scope) &&
+        result.suggested_topics[0]
+      ) {
         setSelectedTopicId(result.suggested_topics[0].id)
       }
     } catch (suggestionError) {
-      setError(
-        suggestionError instanceof Error
-          ? suggestionError.message
-          : 'Topic suggestion failed.',
-      )
+      if (isCourseScopeActive(scope)) {
+        setError(
+          suggestionError instanceof Error
+            ? suggestionError.message
+            : 'Topic suggestion failed.',
+        )
+      }
     } finally {
-      setIsSaving(false)
+      if (isCourseScopeActive(scope)) {
+        setIsSaving(false)
+      }
     }
   }
 
   async function acceptSuggestion() {
     if (!selectedTopic || selectedTopic.status !== 'suggested') return
+    const scope = getActiveCourseScope(selectedTopic.course_id)
+    if (!scope) return
     setIsSaving(true)
     setError(null)
     try {
       await fetchJson(apiBaseUrl, `/topics/${selectedTopic.id}/accept`, {
         method: 'POST',
       })
+      if (!isCourseScopeActive(scope)) return
       setMessage(`Accepted ${selectedTopic.title}.`)
       await loadCourseMap()
     } catch (acceptError) {
-      setError(acceptError instanceof Error ? acceptError.message : 'Accept failed.')
+      if (isCourseScopeActive(scope)) {
+        setError(acceptError instanceof Error ? acceptError.message : 'Accept failed.')
+      }
     } finally {
-      setIsSaving(false)
+      if (isCourseScopeActive(scope)) {
+        setIsSaving(false)
+      }
     }
   }
 
   async function mergeTopic() {
     if (!selectedTopic || !mergeSourceTopicId) return
+    const scope = getActiveCourseScope(selectedTopic.course_id)
+    if (!scope) return
     setIsSaving(true)
     setError(null)
     try {
@@ -465,17 +653,24 @@ export function CourseMapView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ source_topic_ids: [mergeSourceTopicId] }),
       })
+      if (!isCourseScopeActive(scope)) return
       setMessage('Topics merged.')
       await loadCourseMap()
     } catch (mergeError) {
-      setError(mergeError instanceof Error ? mergeError.message : 'Topic merge failed.')
+      if (isCourseScopeActive(scope)) {
+        setError(mergeError instanceof Error ? mergeError.message : 'Topic merge failed.')
+      }
     } finally {
-      setIsSaving(false)
+      if (isCourseScopeActive(scope)) {
+        setIsSaving(false)
+      }
     }
   }
 
   async function splitTopic() {
     if (!selectedTopic || !splitTopicTitle.trim() || !splitCardIds.size) return
+    const scope = getActiveCourseScope(selectedTopic.course_id)
+    if (!scope) return
     setIsSaving(true)
     setError(null)
     try {
@@ -491,13 +686,25 @@ export function CourseMapView({
           }),
         },
       )
+      if (
+        !isCourseScopeActive(scope) ||
+        created.course_id !== scope.courseId
+      ) {
+        return
+      }
       setMessage(`Created ${created.title} with ${splitCardIds.size} cards.`)
       await loadCourseMap()
-      setSelectedTopicId(created.id)
+      if (isCourseScopeActive(scope)) {
+        setSelectedTopicId(created.id)
+      }
     } catch (splitError) {
-      setError(splitError instanceof Error ? splitError.message : 'Topic split failed.')
+      if (isCourseScopeActive(scope)) {
+        setError(splitError instanceof Error ? splitError.message : 'Topic split failed.')
+      }
     } finally {
-      setIsSaving(false)
+      if (isCourseScopeActive(scope)) {
+        setIsSaving(false)
+      }
     }
   }
 
@@ -506,29 +713,34 @@ export function CourseMapView({
       <header className="course-map-toolbar">
         <div>
           <div className="panel-title">Learning structure</div>
-          <h1>Course map</h1>
+          <h2>Course map</h2>
           <p>Organize grounded cards into a stable topic hierarchy.</p>
         </div>
-        <label>
-          <span>Course</span>
-          <select
-            value={selectedCourseId ?? ''}
-            onChange={(event) => onSelectCourse(event.target.value)}
-          >
-            {courses.map((course) => (
-              <option key={course.id} value={course.id}>
-                {course.title} ({course.card_count})
-              </option>
-            ))}
-          </select>
-        </label>
+        {showCourseSelector && (
+          <label>
+            <span>Course</span>
+            <select
+              value={selectedCourseId ?? ''}
+              onChange={(event) => onSelectCourse(event.target.value)}
+            >
+              {courses.map((course) => (
+                <option key={course.id} value={course.id}>
+                  {course.title} ({course.card_count})
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <button type="button" disabled={isLoading} onClick={() => void loadCourseMap()}>
           <RefreshCw size={16} /> Refresh
         </button>
       </header>
 
       {(error || message) && (
-        <div className={error ? 'course-map-notice error' : 'course-map-notice success'}>
+        <div
+          className={error ? 'course-map-notice error' : 'course-map-notice success'}
+          role={error ? 'alert' : 'status'}
+        >
           {error ?? message}
         </div>
       )}
@@ -624,7 +836,10 @@ export function CourseMapView({
           </div>
         </aside>
 
-        <main className="course-map-content">
+        <section
+          className="course-map-content"
+          aria-label="Course map workspace"
+        >
           {selectedTopic ? (
             <>
               <div className="course-map-topic-header">
@@ -671,6 +886,27 @@ export function CourseMapView({
                       {' '}· {card.learning_document_count} docs
                     </small>
                     <div className="course-map-card-actions">
+                      <button
+                        type="button"
+                        aria-label={
+                          selectedCardId === card.id
+                            ? `${card.title} selected`
+                            : `Select ${card.title}`
+                        }
+                        aria-pressed={selectedCardId === card.id}
+                        onClick={() => {
+                          if (selectedCardId === card.id) return
+                          setSelectedCardId(card.id)
+                          onCardRouteChangeRef.current?.(
+                            card.id,
+                            'push',
+                          )
+                        }}
+                      >
+                        {selectedCardId === card.id
+                          ? 'Selected card'
+                          : 'Select card'}
+                      </button>
                       <select
                         value={membershipByCardId.get(card.id)?.topic_id ?? ''}
                         disabled={isSaving}
@@ -694,7 +930,7 @@ export function CourseMapView({
           ) : (
             <div className="course-map-empty">Select a topic.</div>
           )}
-        </main>
+        </section>
 
         <aside className="course-map-inspector">
           {selectedTopic && editForm ? (

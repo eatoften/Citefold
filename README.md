@@ -56,10 +56,32 @@ Implemented:
   Map, graph exploration, and local Markdown export;
 - recoverable SQLite schema migrations with validated pre-migration backups.
 
-The next product gates are a Sources / Chat / Studio information architecture;
-durable task and backup/restore workflows; then Notes, Studio unification, and
-product polish. See the [active roadmap](docs/roadmap.md) and
-[append-only engineering log](docs/productization-log.md) for verified scope,
+P0.4 reorganizes the application around this product navigation:
+
+```text
+Sources
+Chat
+Studio
+  -> Cards
+  -> Study
+  -> Review
+  -> Course map
+  -> Explore
+```
+
+The accepted checkpoint includes a typed canonical route contract, legacy-link
+migration, one mixed Source catalog, full course Chat with conversation deep
+links, the five Studio tools, and cross-course request isolation. P0.4 is
+complete on the productization branch but is **not part of the published
+`v0.1.1` desktop release**.
+
+The next product gate after P0.4 is reliability: automatic preservation,
+recoverable and cancellable processing tasks, safe deletion, and validated
+backup/restore. Notes, a persistent Studio output library, product polish, and
+frontend decomposition follow as separate stages. See the
+[active roadmap](docs/roadmap.md),
+[P0.4 decision record](docs/decisions/ADR-0005-source-first-workspace-and-route-contract.md),
+and [append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.
 
 ## Results
@@ -339,8 +361,10 @@ cd backend
 uv run pytest
 ```
 
-Current verification: `504 passed, 1 warning`; frontend ESLint and the
-TypeScript/Vite production build pass.
+Current product verification: `526 passed, 1 skipped, 1 warning` in the full
+backend suite and `104 passed` across 16 frontend test files. Frontend ESLint,
+the TypeScript/Vite production build, and the high-severity dependency audit
+also pass.
 
 | Experiment | Main entry point | Record |
 | --- | --- | --- |
