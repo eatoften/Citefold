@@ -1,12 +1,66 @@
 # Video Course Cards Roadmap
 
-Last updated: 2026-07-12
+Last updated: 2026-07-27
 
 ## Product Direction
 
 Video Course Cards is a local-first learning workspace that turns long course
 videos into grounded, reviewable knowledge. SQLite is the source of truth;
 Markdown is a portable export snapshot.
+
+The active product direction is a source-first course notebook:
+
+```text
+Course notebook
+-> Sources
+-> citation-grounded Chat
+-> Notes and Studio outputs
+-> Review, Course Map, and advanced graph exploration
+```
+
+The project is not attempting to copy every NotebookLM feature. Its intended
+position is a local-first, video-course-native notebook where every factual
+answer can return to a video timestamp, PDF page, slide, paragraph, or text
+section. Existing timestamped cards, FSRS review, Course Map, and graph tools
+remain differentiators rather than the primary navigation model.
+
+Research on reasoning-guided retrieval is paused while this product loop is
+built and hardened. Existing research artifacts remain immutable and may be
+reused only when they satisfy a product requirement and pass product tests.
+
+## Active Productization Program
+
+The program is split into independently verifiable stages. A stage is complete
+only when its implementation, tests, decision record, product log entry, Git
+commit, and remote push are all complete.
+
+| Stage | User outcome | Status |
+| --- | --- | --- |
+| P0.0 Product contract | One product direction, acceptance gates, and engineering journal | Complete |
+| P0.1 Unified Sources | Videos and local documents expose one Source/Chunk/Locator contract and index | In progress |
+| P0.2 Grounded Chat | Persistent multi-turn answers with abstention and source-scoped retrieval | Planned |
+| P0.3 Verifiable citations | Sentence-level citations open the exact video time or document location | Planned |
+| P0.4 Source-first workspace | A course opens as Sources / Chat / Studio, with advanced tools secondary | Planned |
+| P0.5 Reliability | Autosave, recoverable tasks, backup/restore, safe desktop lifecycle | Planned |
+| P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Planned |
+| P1.2 Studio | Study, Review, and Course Map become a coherent output library | Planned |
+| P1.3 Product polish | Onboarding, previews, search, empty/error states, accessibility, localization | Planned |
+| P1.4 Engineering hardening | Frontend feature slices, shared API client, automated UI tests, performance | Planned |
+
+### Stage gates
+
+Every stage records:
+
+1. the user-visible outcome and explicit non-goals;
+2. alternatives considered and the reason for the chosen design;
+3. schema, API, UI, and technology changes;
+4. problems encountered, root causes, and remaining risks;
+5. exact automated checks and manual acceptance scenarios;
+6. a conventional commit subject and confirmed remote push.
+
+The append-only implementation record is
+[`docs/productization-log.md`](productization-log.md). Cross-stage,
+hard-to-reverse decisions live under [`docs/decisions`](decisions).
 
 The product separates complementary structures that serve different learning needs:
 
@@ -355,9 +409,11 @@ POST /topics/{topic_id}/accept
 - Users can merge accepted Topics or split selected cards into a sibling Topic.
 - Every Course Map card can open its Study workspace directly.
 
-## Milestone 32: Card-Based Grounded RAG (Deferred)
+## Milestone 32: Card-Based Grounded RAG (Superseded)
 
-The existing dense-retrieval baseline should become a citation-first assistant:
+This deferred card-only plan has been superseded by productization stages
+P0.1-P0.3. The old dense-retrieval endpoint remains compatible while the new
+assistant is built on unified original sources rather than cards alone:
 
 ```text
 question

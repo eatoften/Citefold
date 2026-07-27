@@ -2,6 +2,16 @@
 
 Last updated: 2026-07-26
 
+> **Status: paused for productization on 2026-07-27.**
+>
+> The research question, frozen protocols, benchmark artifacts, and existing
+> results are preserved, but no new experiment phase is currently active. The
+> project is first completing the source-grounded product loop defined in
+> [`roadmap.md`](roadmap.md). Research resumes only after persistent grounded
+> Chat, verifiable source navigation, product regression cases, and reliable
+> data migration are shipped. Product work must not rewrite sealed research
+> artifacts or present development diagnostics as paper evidence.
+
 ## 中文执行摘要
 
 本项目的论文主线不是“做一个更完整的课程问答产品”，也不是把

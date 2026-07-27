@@ -2,6 +2,13 @@
 
 Last updated: 2026-06-20
 
+> **Historical archive.** This file records the earliest MVP learning plan and
+> is no longer the current project status. The active product roadmap is
+> [`roadmap.md`](roadmap.md), and verified implementation history is recorded in
+> [`productization-log.md`](productization-log.md). Statements below such as
+> planned SQLite/Electron work and early test counts are intentionally preserved
+> as history rather than silently rewritten.
+
 ## Product Goal
 
 Build a local-first multimodal learning assistant that converts videos into
