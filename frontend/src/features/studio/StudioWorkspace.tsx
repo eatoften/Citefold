@@ -20,6 +20,11 @@ type StudioToolDetails = {
 }
 
 const STUDIO_TOOL_DETAILS: Record<StudioTool, StudioToolDetails> = {
+  notes: {
+    label: 'Notes',
+    description:
+      'Capture ideas and grounded answers, then publish exact revisions as sources.',
+  },
   cards: {
     label: 'Cards',
     description:

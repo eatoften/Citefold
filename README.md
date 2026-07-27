@@ -30,15 +30,17 @@ Video Course Cards contains two connected components:
 - a FastAPI, React, SQLite, and Tauri application that transcribes local course
   videos, unifies videos and documents as locatable Sources, persists
   source-scoped conversations, and produces local-model answers with
-  server-owned sentence citation snapshots. It also supports evidence-linked
-  cards, Study documents, FSRS review, Course Map, and Markdown export;
+  server-owned sentence citation snapshots. It also supports course-level
+  Notes with immutable Chat provenance and explicit Source publication,
+  evidence-linked cards, Study documents, FSRS review, Course Map, and
+  Markdown export;
 - isolated research packages for controlled multimodal reading and RAG
   experiments, with versioned protocols, lecture-level splits, dataset hashes,
   sealed evaluation gates, and machine-readable results.
 
 The active direction is a NotebookLM-style, video-course-native product. The
-research controller is paused until the core Sources -> Chat -> Studio loop is
-complete and reliable.
+research controller remains paused while the completed Sources -> Chat ->
+Notes loop is consolidated into a coherent Studio and polished product.
 
 ## Product status
 
@@ -52,6 +54,9 @@ Implemented:
 - one-click verifiable citations that return to a video timestamp, PDF page,
   slide, paragraph, or text section through a server-authoritative Source
   inspector, while preserving the saved quotation when a local file changes;
+- course-level free Notes, idempotent capture of grounded Chat answers,
+  immutable note-owned citation provenance, revision-safe editing, and
+  deliberate publication of an exact note revision as a canonical Source;
 - timestamped knowledge cards, versioned Study documents, FSRS Review, Course
   Map, graph exploration, and local Markdown export;
 - recoverable SQLite schema migrations with validated pre-migration backups;
@@ -69,6 +74,7 @@ Sources
 Chat
 Studio
   -> Cards
+  -> Notes
   -> Study
   -> Review
   -> Course map
@@ -77,18 +83,24 @@ Studio
 
 That checkpoint includes a typed canonical route contract, legacy-link
 migration, one mixed Source catalog, full course Chat with conversation deep
-links, the five Studio tools, and cross-course request isolation. P0.4 is
-complete on the productization branch but is **not part of the published
-`v0.1.1` desktop release**.
+links, the original five Studio tools, and cross-course request isolation.
+P0.4 is complete on the productization branch but is **not part of the
+published `v0.1.1` desktop release**.
 
 P0.5 completes automatic preservation, recoverable and cancellable processing
 tasks, safe deletion, validated backup/restore, and an owned desktop-backend
-lifecycle on the productization branch. The next gate is P1.1 Notebook Notes:
-free notes, save-answer-to-note, and note-to-Source. A persistent Studio output
-library, product polish, and frontend decomposition follow as separate stages.
-See the
+lifecycle. P1.1 closes the notebook capture loop: a grounded Chat answer can
+be saved once as an editable Note without losing its immutable citations, and
+an explicit publish action turns an exact revision into the stable Source
+`note:<note_id>`. Note Sources participate in the same retrieval, citation,
+Trash, reconciliation, and backup/restore contracts as imported material.
+
+These checkpoints are complete on the productization branch but are **not yet
+a public desktop release**. P1.2 is next: make Notes, Study, Review, Course Map,
+and the other learning artifacts feel like one coherent Studio rather than
+adjacent tools. See the
 [active roadmap](docs/roadmap.md),
-[P0.5 decision record](docs/decisions/ADR-0006-local-workspace-lifecycle-and-recovery.md),
+[Notes decision record](docs/decisions/ADR-0007-notebook-notes-and-derived-sources.md),
 and [append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.
 
@@ -369,10 +381,19 @@ cd backend
 uv run pytest
 ```
 
-Current product verification: `526 passed, 1 skipped, 1 warning` in the full
-backend suite and `104 passed` across 16 frontend test files. Frontend ESLint,
-the TypeScript/Vite production build, and the high-severity dependency audit
-also pass.
+Current product verification: `681 passed, 1 skipped, 1 warning` in the full
+backend suite and `214 passed` across 27 frontend test files. Python bytecode
+compilation, the uv lock check, frontend ESLint, the TypeScript/Vite production
+build, Cargo formatting, locked check, and 6 locked tests, and the
+high-severity npm audit also pass. The production build reports one known
+optimization warning:
+the main JavaScript chunk is `588.23 kB` after minification.
+
+The P1.1 acceptance journey was also exercised in a real browser at desktop
+and narrow widths: create Note -> publish Source -> index -> ask grounded Chat
+question -> open the citation -> save the answer as a Note -> delete and Undo
+or restore it from Recovery. Both viewports completed without horizontal
+overflow or console errors.
 
 | Experiment | Main entry point | Record |
 | --- | --- | --- |

@@ -33,6 +33,7 @@ import {
   ReliabilityCenter,
   SaveStatus,
   useAutosavedDraft,
+  useInternalNavigationGuard,
 } from './features/reliability'
 import { CardsWorkspace } from './features/studio/CardsWorkspace'
 import { StudioWorkspace } from './features/studio/StudioWorkspace'
@@ -42,6 +43,11 @@ import './App.css'
 
 const StudyView = lazy(() =>
   import('./StudyView').then((module) => ({ default: module.StudyView })),
+)
+const NotesWorkspace = lazy(() =>
+  import('./features/notes/NotesWorkspace').then((module) => ({
+    default: module.NotesWorkspace,
+  })),
 )
 const CitationInspector = lazy(() =>
   import('./features/citations/CitationInspector').then((module) => ({
@@ -585,6 +591,7 @@ function ClaimsBlock({
 }
 
 function App() {
+  const canLeaveCurrentWorkspace = useInternalNavigationGuard()
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const cardGenerationAbortRef = useRef<AbortController | null>(null)
   const cardGenerationSequenceRef = useRef(0)
@@ -602,6 +609,9 @@ function App() {
   const jobsLoadSequenceRef = useRef(0)
   const cardIndexLoadSequenceRef = useRef(0)
   const railCardLoadSequenceRef = useRef(0)
+  const [currentRouteUrl, setCurrentRouteUrl] = useState(
+    () => window.location.href,
+  )
   const [appRoute, setAppRoute] = useState(() =>
     parseAppRoute(window.location.href),
   )
@@ -1077,6 +1087,7 @@ function App() {
             courseId: nextCourseId,
           },
           'replace',
+          false,
         )
       }
 
@@ -1246,6 +1257,7 @@ function App() {
               cardId: null,
             },
             'replace',
+            false,
           )
         }
       }
@@ -1257,6 +1269,15 @@ function App() {
   }
 
   function closeRailCard() {
+    if (
+      !commitAppRoute({
+        view: 'studio',
+        tool: 'cards',
+        cardId: null,
+      })
+    ) {
+      return
+    }
     railCardLoadSequenceRef.current += 1
     setSelectedRailCard(null)
     setRailCardEditForm(null)
@@ -1264,11 +1285,6 @@ function App() {
     setIsCardRailOpen(false)
     window.setTimeout(() => cardRailToggleRef.current?.focus(), 0)
 
-    commitAppRoute({
-      view: 'studio',
-      tool: 'cards',
-      cardId: null,
-    })
   }
 
   function clearActiveJob() {
@@ -1296,28 +1312,38 @@ function App() {
     (
       destination: AppRouteDestination,
       mode: 'push' | 'replace' = 'push',
-    ) => {
+      guardUnprotectedChanges = true,
+    ): boolean => {
       const url = buildAppRouteUrl(window.location.href, destination)
       if (url.toString() === window.location.href) {
         setAppRoute(parseAppRoute(url))
-        return
+        setCurrentRouteUrl(url.toString())
+        return true
+      }
+      if (
+        guardUnprotectedChanges &&
+        !canLeaveCurrentWorkspace()
+      ) {
+        return false
       }
       if (mode === 'replace') {
         window.history.replaceState({}, '', url)
       } else {
         window.history.pushState({}, '', url)
       }
+      setCurrentRouteUrl(url.toString())
       setAppRoute(parseAppRoute(url))
+      return true
     },
-    [],
+    [canLeaveCurrentWorkspace],
   )
 
   function handleStudyDocumentRouteChange(
     documentId: string | null,
     cardId: string | null,
     mode: 'push' | 'replace',
-  ) {
-    commitAppRoute(
+  ): boolean {
+    return commitAppRoute(
       {
         view: 'studio',
         tool: 'study',
@@ -1325,6 +1351,7 @@ function App() {
         cardId,
       },
       mode,
+      false,
     )
   }
 
@@ -1372,13 +1399,17 @@ function App() {
 
   function selectCourse(courseId: string) {
     if (!courseId || courseId === selectedCourseId) return
-    applyCourseSelection(courseId)
     const currentRoute = parseAppRoute(window.location.href)
-    commitAppRoute({
-      view: currentRoute.view,
-      tool: currentRoute.tool ?? undefined,
-      courseId,
-    })
+    if (
+      !commitAppRoute({
+        view: currentRoute.view,
+        tool: currentRoute.tool ?? undefined,
+        courseId,
+      })
+    ) {
+      return
+    }
+    applyCourseSelection(courseId)
   }
 
   function changeAppView(view: PrimaryView) {
@@ -1400,11 +1431,15 @@ function App() {
   }
 
   function openWorkspaceCard(cardId: string) {
-    commitAppRoute({
-      view: 'studio',
-      tool: 'cards',
-      cardId,
-    })
+    if (
+      !commitAppRoute({
+        view: 'studio',
+        tool: 'cards',
+        cardId,
+      })
+    ) {
+      return
+    }
     void openRailCard(cardId, 'none')
   }
 
@@ -1661,12 +1696,16 @@ function App() {
       ) {
         throw new Error('This video belongs to another course.')
       }
+      if (
+        !commitAppRoute({
+          view: 'sources',
+          sourceId: `job:${nextJob.id}`,
+          jobId: nextJob.id,
+        })
+      ) {
+        return
+      }
       setIsVideoWorkspaceOpen(true)
-      commitAppRoute({
-        view: 'sources',
-        sourceId: `job:${nextJob.id}`,
-        jobId: nextJob.id,
-      })
       await openJob(nextJob)
       window.requestAnimationFrame(() => {
         document
@@ -1681,13 +1720,17 @@ function App() {
   }
 
   function openVideoImportWorkspace() {
+    if (
+      !commitAppRoute({
+        view: 'sources',
+        sourceId: null,
+        jobId: null,
+      })
+    ) {
+      return
+    }
     clearActiveJob()
     setIsVideoWorkspaceOpen(true)
-    commitAppRoute({
-      view: 'sources',
-      sourceId: null,
-      jobId: null,
-    })
     window.requestAnimationFrame(() => {
       document
         .getElementById('video-workspace')
@@ -1696,16 +1739,20 @@ function App() {
   }
 
   function closeVideoWorkspace() {
+    if (
+      !commitAppRoute({
+        view: 'sources',
+        sourceId:
+          appRoute.sourceId?.startsWith('job:')
+            ? null
+            : appRoute.sourceId,
+        jobId: null,
+      })
+    ) {
+      return
+    }
     clearActiveJob()
     setIsVideoWorkspaceOpen(false)
-    commitAppRoute({
-      view: 'sources',
-      sourceId:
-        appRoute.sourceId?.startsWith('job:')
-          ? null
-          : appRoute.sourceId,
-      jobId: null,
-    })
   }
 
   async function deleteVideoJob(jobToDelete: VideoJob) {
@@ -1743,6 +1790,7 @@ function App() {
             jobId: null,
           },
           'replace',
+          false,
         )
       }
     } catch (error) {
@@ -1834,15 +1882,19 @@ function App() {
       const uploadedJob = await fetchJson<VideoJob>(
         `/jobs/${upload.id}`,
       )
+      if (
+        !commitAppRoute({
+          view: 'sources',
+          courseId: uploadedJob.course_id,
+          sourceId: `job:${uploadedJob.id}`,
+          jobId: uploadedJob.id,
+        })
+      ) {
+        return
+      }
       activeCourseIdRef.current = uploadedJob.course_id
       setSelectedCourseId(uploadedJob.course_id)
       setIsVideoWorkspaceOpen(true)
-      commitAppRoute({
-        view: 'sources',
-        courseId: uploadedJob.course_id,
-        sourceId: `job:${uploadedJob.id}`,
-        jobId: uploadedJob.id,
-      })
       await loadCourses(uploadedJob.course_id)
       await loadJobs(uploadedJob.course_id)
       if (activeCourseIdRef.current !== uploadedJob.course_id) {
@@ -3460,6 +3512,7 @@ function App() {
     if (canonical.shouldReplace) {
       window.history.replaceState({}, '', canonical.url)
     }
+    setCurrentRouteUrl(canonical.url.toString())
     setAppRoute(canonical.route)
   }, [])
 
@@ -3528,6 +3581,17 @@ function App() {
 
   useEffect(() => {
     const handlePopState = () => {
+      if (
+        window.location.href !== currentRouteUrl &&
+        !canLeaveCurrentWorkspace()
+      ) {
+        window.history.pushState(
+          {},
+          '',
+          currentRouteUrl,
+        )
+        return
+      }
       const canonical = canonicalizeAppRoute(window.location.href)
       let nextRoute = canonical.route
       let nextUrl = canonical.url
@@ -3550,6 +3614,7 @@ function App() {
       } else if (canonical.shouldReplace) {
         window.history.replaceState({}, '', nextUrl)
       }
+      setCurrentRouteUrl(nextUrl.toString())
       setAppRoute(nextRoute)
 
       const routeCourseId = nextRoute.courseId
@@ -3566,7 +3631,12 @@ function App() {
     return () => window.removeEventListener('popstate', handlePopState)
     // Rebind only when the validated course catalog or scope changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [courses, selectedCourseId])
+  }, [
+    canLeaveCurrentWorkspace,
+    courses,
+    currentRouteUrl,
+    selectedCourseId,
+  ])
 
   useEffect(() => {
     if (backendBoot.phase !== 'ready') {
@@ -3618,6 +3688,7 @@ function App() {
           jobId: null,
         },
         'replace',
+        false,
       )
       return
     }
@@ -3675,6 +3746,7 @@ function App() {
           cardId: null,
         },
         'replace',
+        false,
       )
       return
     }
@@ -3917,10 +3989,7 @@ function App() {
           .join('|')}
         onSelectCourse={selectCourse}
         onSelectSource={(sourceId, mode) => {
-          if (!sourceId?.startsWith('job:')) {
-            setIsVideoWorkspaceOpen(false)
-          }
-          commitAppRoute(
+          const navigated = commitAppRoute(
             {
               view: 'sources',
               sourceId,
@@ -3931,9 +4000,20 @@ function App() {
             },
             mode,
           )
+          if (navigated && !sourceId?.startsWith('job:')) {
+            setIsVideoWorkspaceOpen(false)
+          }
+          return navigated
         }}
         onAddVideo={openVideoImportWorkspace}
         onOpenVideo={(jobId) => void openSourceVideo(jobId)}
+        onOpenNote={(noteId) =>
+          commitAppRoute({
+            view: 'studio',
+            tool: 'notes',
+            noteId,
+          })
+        }
         onOpenChat={() => changeAppView('chat')}
       />
       {isVideoWorkspaceOpen && (
@@ -4878,9 +4958,17 @@ function App() {
                   conversationId,
                 },
                 mode,
+                false,
               )
             }}
             onOpenCitation={openCitationInspector}
+            onOpenNote={(noteId) =>
+              commitAppRoute({
+                view: 'studio',
+                tool: 'notes',
+                noteId,
+              })
+            }
           />
         </main>
       ) : (
@@ -4894,7 +4982,39 @@ function App() {
             onSelectCourse={selectCourse}
             onSelectTool={changeStudioTool}
           >
-            {appRoute.tool === 'study' ? (
+            {appRoute.tool === 'notes' ? (
+              <Suspense
+                fallback={
+                  <div className="study-empty">
+                    Loading notes workspace
+                  </div>
+                }
+              >
+                <NotesWorkspace
+                  apiBaseUrl={API_BASE_URL}
+                  courseId={selectedCourseId}
+                  initialNoteId={appRoute.noteId}
+                  onNoteRouteChange={(noteId, mode) =>
+                    commitAppRoute(
+                      {
+                        view: 'studio',
+                        tool: 'notes',
+                        noteId,
+                      },
+                      mode,
+                      false,
+                    )
+                  }
+                  onOpenCitation={openCitationInspector}
+                  onGoToSources={(sourceId) =>
+                    commitAppRoute({
+                      view: 'sources',
+                      sourceId,
+                    })
+                  }
+                />
+              </Suspense>
+            ) : appRoute.tool === 'study' ? (
               <div className="study-shell">
                 <Suspense
                   fallback={

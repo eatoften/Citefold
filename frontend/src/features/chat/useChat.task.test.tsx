@@ -231,14 +231,20 @@ describe('useChat durable message tasks', () => {
     )
     const view = await renderReadyChat()
 
-    let sent = false
+    let sent = {
+      succeeded: false,
+      conversationId: null as string | null,
+    }
     await act(async () => {
       sent = await view.result.current.sendMessage(
         'What is retrieval?',
       )
     })
 
-    expect(sent).toBe(true)
+    expect(sent).toEqual({
+      succeeded: true,
+      conversationId: conversation.id,
+    })
     expect(taskApi.enqueueChatGeneration).toHaveBeenCalledWith(
       'http://api.test',
       conversation.id,
@@ -279,7 +285,10 @@ describe('useChat durable message tasks', () => {
     await act(async () => {
       expect(
         await view.result.current.sendMessage('What is retrieval?'),
-      ).toBe(false)
+      ).toEqual({
+        succeeded: false,
+        conversationId: conversation.id,
+      })
     })
     expect(view.result.current.error?.retry.kind).toBe('message-task')
 
@@ -373,7 +382,9 @@ describe('useChat durable message tasks', () => {
       )
     })
 
-    let sendPromise!: Promise<boolean>
+    let sendPromise!: ReturnType<
+      typeof view.result.current.sendMessage
+    >
     act(() => {
       sendPromise = view.result.current.sendMessage(
         'What is retrieval?',
@@ -395,7 +406,10 @@ describe('useChat durable message tasks', () => {
         secondConversation.id,
       )
     })
-    await expect(sendPromise).resolves.toBe(false)
+    await expect(sendPromise).resolves.toEqual({
+      succeeded: false,
+      conversationId: conversation.id,
+    })
 
     await act(async () => {
       resolveCancel?.(

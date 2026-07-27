@@ -72,6 +72,12 @@ export function formatSourceLocator(locator: SourceLocator): string {
         ? unsupportedLocatorLabel(locator)
         : `Section ${section}`
     }
+    case 'note_section': {
+      const section = locatorNumber(locator, 'section_number')
+      return section === null
+        ? unsupportedLocatorLabel(locator)
+        : `Note section ${section}`
+    }
     default:
       return unsupportedLocatorLabel(locator)
   }

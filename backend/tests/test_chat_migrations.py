@@ -9,10 +9,12 @@ import pytest
 
 from app.migrations import (
     MIGRATIONS,
+    Migration,
     apply_migrations,
     latest_schema_version,
     prepare_migration_backup,
 )
+from app.db import get_db_path
 
 
 NOW = "2026-07-27T00:00:00+00:00"
@@ -22,6 +24,12 @@ CHAT_TABLES = {
     "chat_messages",
     "chat_citations",
     "chat_citation_spans",
+}
+NOTEBOOK_NOTE_TABLES = {
+    "notebook_notes",
+    "notebook_note_citations",
+    "notebook_note_citation_spans",
+    "notebook_note_source_snapshots",
 }
 
 
@@ -252,8 +260,8 @@ def test_grounded_chat_migration_preserves_v1_data_and_has_no_fk_dependency(
     with _connect(db_path) as conn:
         completed = apply_migrations(conn)
 
-        assert completed == [2, 3, 4, 5, 6, 7]
-        assert latest_schema_version() == 7
+        assert completed == [2, 3, 4, 5, 6, 7, 8]
+        assert latest_schema_version() == 8
         assert CHAT_TABLES.issubset(_table_names(conn))
         assert conn.execute(
             "SELECT title FROM sources WHERE id = 'job:video-1'"
@@ -279,12 +287,13 @@ def test_grounded_chat_migration_preserves_v1_data_and_has_no_fk_dependency(
         ] == [
             (1, "unified_source_index"),
             (2, "grounded_chat"),
-                (3, "align_grounded_chat_turn_contract"),
-                (4, "video_content_fingerprint"),
-                (5, "local_workspace_lifecycle"),
-                (6, "strengthen_trash_operation_states"),
-                (7, "card_generation_chunk_ledger"),
-            ]
+            (3, "align_grounded_chat_turn_contract"),
+            (4, "video_content_fingerprint"),
+            (5, "local_workspace_lifecycle"),
+            (6, "strengthen_trash_operation_states"),
+            (7, "card_generation_chunk_ledger"),
+            (8, "notebook_notes"),
+        ]
         _insert_conversation(
             conn,
             conversation_id="conversation-empty-scope",
@@ -304,6 +313,189 @@ def test_grounded_chat_migration_preserves_v1_data_and_has_no_fk_dependency(
             ).fetchall() == []
 
 
+def test_v7_to_v8_notebook_migration_is_atomic_and_idempotent(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "v7.db"
+    _create_v1_database(db_path)
+
+    with _connect(db_path) as conn:
+        assert apply_migrations(conn, migrations=MIGRATIONS[:7]) == [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+        ]
+        assert NOTEBOOK_NOTE_TABLES.isdisjoint(_table_names(conn))
+        assert apply_migrations(conn) == [8]
+        assert NOTEBOOK_NOTE_TABLES.issubset(_table_names(conn))
+        assert apply_migrations(conn) == []
+
+
+def test_v8_migration_failure_rolls_back_schema_and_version(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "v7-failure.db"
+    _create_v1_database(db_path)
+
+    def fail_after_creating_table(conn: sqlite3.Connection) -> None:
+        conn.execute("CREATE TABLE migration_should_rollback (id TEXT)")
+        raise RuntimeError("injected migration failure")
+
+    failing_migrations = (
+        *MIGRATIONS,
+        Migration(
+            version=9,
+            name="injected_failure",
+            apply=fail_after_creating_table,
+        ),
+    )
+    with _connect(db_path) as conn:
+        assert apply_migrations(conn, migrations=MIGRATIONS[:7]) == [
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+        ]
+        with pytest.raises(RuntimeError, match="injected migration failure"):
+            apply_migrations(conn, migrations=failing_migrations)
+        assert NOTEBOOK_NOTE_TABLES.isdisjoint(_table_names(conn))
+        assert "migration_should_rollback" not in _table_names(conn)
+        assert conn.execute(
+            "SELECT MAX(version) FROM schema_migrations"
+        ).fetchone()[0] == 7
+        assert apply_migrations(conn) == [8]
+
+
+def test_clean_install_enforces_v8_notebook_sqlite_contract() -> None:
+    with _connect(get_db_path()) as conn:
+        assert NOTEBOOK_NOTE_TABLES.issubset(_table_names(conn))
+        for table in NOTEBOOK_NOTE_TABLES:
+            assert conn.execute(
+                f"PRAGMA foreign_key_list({table})"
+            ).fetchall() == []
+
+        conn.execute(
+            """
+            INSERT INTO notebook_notes (
+                id, course_id, title, body_markdown, revision, origin_type,
+                origin_message_id, origin_conversation_id,
+                origin_snapshot_json, created_at, updated_at, deleted_at
+            ) VALUES (
+                'free-note', 'course-a', 'Free', 'Body', 1, 'free',
+                NULL, NULL, '{"origin_type":"free"}', ?, ?, NULL
+            )
+            """,
+            (NOW, NOW),
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO notebook_notes (
+                    id, course_id, title, body_markdown, revision, origin_type,
+                    origin_message_id, origin_conversation_id,
+                    origin_snapshot_json, created_at, updated_at
+                ) VALUES (
+                    'revision-zero', 'course-a', 'Invalid', 'Body', 0, 'free',
+                    NULL, NULL, '{"origin_type":"free"}', ?, ?
+                )
+                """,
+                (NOW, NOW),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO notebook_notes (
+                    id, course_id, title, body_markdown, revision, origin_type,
+                    origin_message_id, origin_conversation_id,
+                    origin_snapshot_json, created_at, updated_at
+                ) VALUES (
+                    'bad-origin', 'course-a', 'Invalid', 'Body', 1,
+                    'chat_answer', NULL, NULL,
+                    '{"origin_type":"chat_answer"}', ?, ?
+                )
+                """,
+                (NOW, NOW),
+            )
+
+        for note_id in ("chat-note-one", "chat-note-two"):
+            statement = """
+                INSERT INTO notebook_notes (
+                    id, course_id, title, body_markdown, revision, origin_type,
+                    origin_message_id, origin_conversation_id,
+                    origin_snapshot_json, created_at, updated_at
+                ) VALUES (
+                    ?, 'course-a', 'Chat', 'Answer', 1, 'chat_answer',
+                    'assistant-message', 'conversation',
+                    '{"origin_type":"chat_answer"}', ?, ?
+                )
+            """
+            if note_id == "chat-note-one":
+                conn.execute(statement, (note_id, NOW, NOW))
+            else:
+                with pytest.raises(sqlite3.IntegrityError):
+                    conn.execute(statement, (note_id, NOW, NOW))
+
+        citation_values = (
+            "citation-one",
+            "chat-note-one",
+            1,
+            "origin-citation-one",
+            1,
+            "source",
+            "chunk",
+            "hash",
+            "Source",
+            "text",
+            "quote",
+            0.9,
+            "{}",
+            NOW,
+        )
+        conn.execute(
+            """
+            INSERT INTO notebook_note_citations (
+                id, note_id, note_revision, origin_citation_id, ordinal,
+                source_id, chunk_id, chunk_text_hash, source_title,
+                source_type, quote, score, locator_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            citation_values,
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO notebook_note_citations (
+                    id, note_id, note_revision, origin_citation_id, ordinal,
+                    source_id, chunk_id, chunk_text_hash, source_title,
+                    source_type, quote, score, locator_json, created_at
+                ) VALUES (
+                    'ordinal-zero', 'chat-note-one', 1, 'origin-zero', 0,
+                    'source', 'chunk', 'hash', 'Source', 'text',
+                    'quote', 0.9, '{}', ?
+                )
+                """,
+                (NOW,),
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO notebook_note_citation_spans (
+                    id, note_id, citation_id, sentence_index,
+                    start_offset, end_offset, created_at
+                ) VALUES (
+                    'invalid-span', 'chat-note-one', 'citation-one',
+                    0, 3, 3, ?
+                )
+                """,
+                (NOW,),
+            )
+
+
 def test_grounded_chat_migration_is_idempotent_and_backed_up(
     tmp_path: Path,
 ) -> None:
@@ -313,14 +505,14 @@ def test_grounded_chat_migration_is_idempotent_and_backed_up(
     backup_path = prepare_migration_backup(db_path)
 
     assert backup_path is not None
-    assert ".pre-migration-v7-" in backup_path.name
+    assert ".pre-migration-v8-" in backup_path.name
     with _connect(backup_path) as backup:
         assert backup.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert CHAT_TABLES.isdisjoint(_table_names(backup))
         assert backup.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 1
 
     with _connect(db_path) as conn:
-        assert apply_migrations(conn) == [2, 3, 4, 5, 6, 7]
+        assert apply_migrations(conn) == [2, 3, 4, 5, 6, 7, 8]
         _insert_conversation(conn)
         assert apply_migrations(conn) == []
         assert conn.execute(
@@ -373,7 +565,7 @@ def test_v3_aligns_an_already_applied_v2_without_losing_turns(
             status="abstained",
         )
 
-        assert apply_migrations(conn) == [3, 4, 5, 6, 7]
+        assert apply_migrations(conn) == [3, 4, 5, 6, 7, 8]
 
         turn = conn.execute(
             """

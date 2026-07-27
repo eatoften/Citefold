@@ -84,6 +84,48 @@ def get_citation_snapshot_for_course(
             (citation_id, course_id),
         ).fetchone()
         if row is None:
+            row = conn.execute(
+                """
+                SELECT
+                    citations.id AS citation_id,
+                    COALESCE(
+                        notes.origin_message_id,
+                        notes.id
+                    ) AS message_id,
+                    citations.source_id,
+                    citations.chunk_id,
+                    citations.chunk_text_hash,
+                    citations.source_title,
+                    citations.source_type,
+                    citations.quote,
+                    citations.locator_json,
+                    sources.course_id AS source_course_id,
+                    sources.origin_type AS source_origin_type,
+                    sources.origin_id AS source_origin_id,
+                    sources.source_type AS current_source_type,
+                    chunks.text AS current_chunk_text,
+                    chunks.text_hash AS current_chunk_text_hash,
+                    chunks.locator_json AS current_chunk_locator_json,
+                    chunks.ordinal AS current_chunk_ordinal,
+                    chunks.is_active AS current_chunk_active
+                FROM notebook_note_citations AS citations
+                INNER JOIN notebook_notes AS notes
+                    ON notes.id = citations.note_id
+                INNER JOIN courses
+                    ON courses.id = notes.course_id
+                LEFT JOIN sources
+                    ON sources.id = citations.source_id
+                LEFT JOIN source_chunks AS chunks
+                    ON chunks.id = citations.chunk_id
+                    AND chunks.source_id = citations.source_id
+                WHERE citations.id = ?
+                  AND notes.course_id = ?
+                  AND notes.deleted_at IS NULL
+                  AND courses.deleted_at IS NULL
+                """,
+                (citation_id, course_id),
+            ).fetchone()
+        if row is None:
             return None
         snapshot = _row_to_snapshot(row)
         if snapshot.current_chunk_ordinal is None:

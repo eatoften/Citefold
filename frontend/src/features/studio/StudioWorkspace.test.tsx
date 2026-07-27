@@ -31,6 +31,7 @@ describe('StudioWorkspace', () => {
       name: 'Studio tools',
     })
     const expectedLinks = [
+      ['Notes', 'notes'],
       ['Cards', 'cards'],
       ['Study', 'study'],
       ['Review', 'review'],

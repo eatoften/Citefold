@@ -1,6 +1,6 @@
 # Video Course Cards Roadmap
 
-Last updated: 2026-07-27
+Last updated: 2026-07-28
 
 ## Product Direction
 
@@ -42,7 +42,7 @@ commit, and remote push are all complete.
 | P0.3 Verifiable citations | Sentence-level citations open the exact video time or document location | Complete |
 | P0.4 Source-first workspace | A course opens as Sources / Chat / Studio, with advanced tools secondary | Complete |
 | P0.5 Reliability | Autosave, recoverable tasks, backup/restore, safe desktop lifecycle | Complete |
-| P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Planned |
+| P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Complete |
 | P1.2 Studio | Study, Review, and Course Map become a coherent output library | Planned |
 | P1.3 Product polish | Onboarding, previews, search, empty/error states, accessibility, localization | Planned |
 | P1.4 Engineering hardening | Frontend feature slices, shared API client, automated UI tests, performance | Planned |
@@ -145,7 +145,59 @@ The implementation and verification record is in the
 [productization log](productization-log.md). The durable task, draft, Trash,
 backup/restore, and desktop ownership contracts are recorded in
 [ADR-0006](decisions/ADR-0006-local-workspace-lifecycle-and-recovery.md).
-P1.1 is the next gate: free Notes, save-answer-to-note, and note-to-Source.
+
+### P1.1 completion summary
+
+P1.1 closes the course notebook's capture-to-retrieval loop without making
+private working notes implicit evidence:
+
+```text
+write or capture a Note in Studio
+-> revise with compare-and-swap protection
+-> explicitly publish one durable revision
+-> retrieve the stable note:<note_id> Source in Chat
+-> open a sentence citation at its immutable note snapshot
+```
+
+Schema v8 adds a course-scoped Notebook Note aggregate, note-owned citations
+and sentence spans, and immutable Source snapshots. Notes support free writing
+and idempotent capture of a completed, grounded Chat answer. The editable title
+and Markdown body advance through revision compare-and-swap, while the original
+answer, model metadata, citation quotes, hashes, locators, and sentence spans
+remain immutable and independently readable even after the originating Chat is
+purged.
+
+Publishing is an explicit action. It projects one exact note revision onto the
+stable canonical Source `note:<note_id>` and deterministic, bounded Markdown
+chunks; republishing a later revision appends a snapshot rather than rewriting
+historical evidence. Publication, reconciliation, restore, and permanent purge
+share the same Source lifecycle lock. Soft deletion hides the Note and its
+projection, Undo/Recovery restores their identities, permanent purge removes
+the complete subtree, and full-workspace backup/restore preserves the Note,
+provenance, snapshots, chunks, and citation targets.
+
+Studio now includes a dedicated Notes workspace with list, editor, provenance
+panel, publish/update-Source actions, deep links, and recoverable deletion.
+Grounded Chat answers expose **Save to notes**, and a note-derived Source can be
+opened from Sources. Draft hydration is safe under React Strict Mode; recovery
+is base-aware, server writes use revision compare-and-swap, and internal
+navigation guards protect unsaved changes across Notes, Chat, Sources, Study,
+and application routes.
+
+Verification completed with `681 passed, 1 skipped, 1 warning` in the full
+backend suite and `214 passed` across 27 frontend test files, plus Python
+bytecode compilation, uv lock validation, frontend lint and production build,
+Cargo formatting, locked check, and 6 locked tests, and a zero-vulnerability
+high-severity npm audit. The build retains one documented optimization warning
+for a `588.23 kB` main JavaScript chunk. A real-browser journey covered Note
+creation, publication, indexing, grounded Chat, citation navigation,
+answer-to-Note capture, deletion, Undo, and Recovery restore at desktop and
+narrow widths with no horizontal overflow or console errors.
+
+The complete decision and invariants are recorded in
+[ADR-0007](decisions/ADR-0007-notebook-notes-and-derived-sources.md). P1.2 is
+the next gate: turn Notes, Study, Review, Course Map, and the existing Studio
+tools into one coherent output library.
 
 ### Stage gates
 
@@ -166,6 +218,7 @@ The product separates complementary structures that serve different learning nee
 
 ```text
 KnowledgeCard   = one grounded unit of understanding
+NotebookNote    = an editable synthesis with optional immutable Chat provenance
 Topic           = the course's hierarchical curriculum structure
 CardRelation    = a lateral semantic or logical connection between cards
 ReviewItem      = one independently scheduled recall task
@@ -198,6 +251,7 @@ local video
 -> local PPTX / PDF / DOCX / text source units
 -> canonical course Sources + typed locatable chunks
 -> persistent incremental source-chunk embeddings
+-> Studio Notes + explicit immutable note-Source snapshots
 -> versioned concept study documents
 -> card embeddings and persistent relations
 -> Course Map / Study / Review / Explore / RAG baseline

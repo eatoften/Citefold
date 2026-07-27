@@ -68,6 +68,17 @@ describe('citation locator formatting', () => {
         },
         'Section 3',
       ],
+      [
+        {
+          schema_version: 1,
+          kind: 'note_section',
+          note_id: 'note-1',
+          snapshot_id: 'snapshot-1',
+          section_number: 2,
+          metadata,
+        },
+        'Note section 2',
+      ],
     ]
 
     for (const [locator, expected] of cases) {

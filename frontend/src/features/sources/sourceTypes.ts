@@ -57,12 +57,20 @@ export type TextSectionLocator = LocatorBase & {
   section_number: number
 }
 
+export type NoteSectionLocator = LocatorBase & {
+  kind: 'note_section'
+  note_id: string
+  snapshot_id: string
+  section_number: number
+}
+
 export type KnownSourceLocator =
   | VideoTimeLocator
   | PdfPageLocator
   | PptSlideLocator
   | DocxParagraphLocator
   | TextSectionLocator
+  | NoteSectionLocator
 
 export type UnknownSourceLocator = {
   kind: string
@@ -78,7 +86,7 @@ export type SourceLocator =
 export type CourseSource = {
   id: string
   course_id: string
-  origin_type: 'video_job' | 'source_asset'
+  origin_type: 'video_job' | 'source_asset' | 'notebook_note'
   origin_id: string
   source_type: SourceType
   title: string
@@ -102,7 +110,10 @@ export type CourseSource = {
 export type CourseSourceChunk = {
   id: string
   source_id: string
-  origin_type: 'transcript_chunk' | 'source_unit'
+  origin_type:
+    | 'transcript_chunk'
+    | 'source_unit'
+    | 'notebook_note_snapshot'
   origin_id: string
   chunk_type:
     | 'transcript'

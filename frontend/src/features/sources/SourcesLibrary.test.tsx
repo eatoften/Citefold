@@ -63,6 +63,20 @@ const mixedSources = [
     index_status: 'not_indexed',
     indexed_chunk_count: 0,
   }),
+  source({
+    id: 'note:note-a',
+    title: 'Research synthesis',
+    origin_type: 'notebook_note',
+    origin_id: 'note-a',
+    source_type: 'text',
+    mime_type: 'text/markdown',
+    size_bytes: null,
+    metadata: {
+      note_id: 'note-a',
+      note_revision: 2,
+      snapshot_id: 'snapshot-a',
+    },
+  }),
 ]
 
 function task<TResult extends object>(
@@ -138,6 +152,7 @@ describe('SourcesLibrary', () => {
       )
     vi.stubGlobal('fetch', fetchMock)
     const onSelectSource = vi.fn()
+    const onOpenNote = vi.fn()
 
     render(
       <SourcesLibrary
@@ -146,6 +161,7 @@ describe('SourcesLibrary', () => {
         selectedCourseId="course-a"
         onSelectCourse={vi.fn()}
         onSelectSource={onSelectSource}
+        onOpenNote={onOpenNote}
       />,
     )
 
@@ -154,6 +170,20 @@ describe('SourcesLibrary', () => {
     expect(screen.getByText('Documents').nextSibling).toHaveTextContent(
       '1',
     )
+    expect(screen.getByText('Video or audio').nextSibling).toHaveTextContent(
+      '1',
+    )
+    expect(screen.getByText('Notes').nextSibling).toHaveTextContent('1')
+    expect(
+      screen.queryByRole('button', {
+        name: 'Remove Research synthesis',
+      }),
+    ).not.toBeInTheDocument()
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Open note' }),
+    )
+    expect(onOpenNote).toHaveBeenCalledWith('note-a')
 
     await userEvent.click(
       screen.getByText('Reading notes.pdf').closest('button')!,
@@ -552,6 +582,89 @@ describe('SourcesLibrary', () => {
         String(request).endsWith('/courses/course-a/sources'),
       ),
     ).toHaveLength(1)
+  })
+
+  it('keeps the current preview when source navigation is rejected', async () => {
+    const sourceA = source({
+      id: 'source-a',
+      title: 'Source A',
+    })
+    const sourceB = source({
+      id: 'source-b',
+      title: 'Source B',
+    })
+    const fetchMock = vi.fn<typeof fetch>((input) => {
+      const url = String(input)
+      if (url.endsWith('/courses/course-a/sources')) {
+        return Promise.resolve(jsonResponse([sourceA, sourceB]))
+      }
+      if (url.includes('/sources/source-a/chunks?')) {
+        return Promise.resolve(
+          jsonResponse([
+            {
+              id: 'source-a:chunk-1',
+              source_id: 'source-a',
+              origin_type: 'source_unit',
+              origin_id: 'source-a:unit-1',
+              chunk_type: 'page',
+              ordinal: 0,
+              text: 'Current A chunk',
+              text_hash: 'a'.repeat(64),
+              locator: {
+                schema_version: 1,
+                kind: 'pdf_page',
+                asset_id: 'source-a',
+                page_number: 1,
+                metadata: {},
+              },
+              chunker_version: 'source-unit-v1',
+              is_active: true,
+              created_at: TIMESTAMP,
+              updated_at: TIMESTAMP,
+            },
+          ]),
+        )
+      }
+      if (url.includes('/sources/source-b/chunks?')) {
+        return Promise.resolve(jsonResponse([]))
+      }
+      throw new Error(`Unexpected request: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const onSelectSource = vi.fn(() => false)
+
+    render(
+      <SourcesLibrary
+        apiBaseUrl="http://127.0.0.1:8001"
+        courses={[{ id: 'course-a', title: 'Course A' }]}
+        selectedCourseId="course-a"
+        initialSourceId="source-a"
+        onSelectCourse={vi.fn()}
+        onSelectSource={onSelectSource}
+      />,
+    )
+
+    expect(await screen.findByText('Current A chunk')).toBeVisible()
+    const sourceAButton =
+      screen.getByText('Source A', { selector: 'strong' }).closest(
+        'button',
+      )!
+    const sourceBButton =
+      screen.getByText('Source B', { selector: 'strong' }).closest(
+        'button',
+      )!
+
+    await userEvent.click(sourceBButton)
+
+    expect(onSelectSource).toHaveBeenCalledWith('source-b', 'push')
+    expect(sourceAButton).toHaveAttribute('aria-current', 'true')
+    expect(sourceBButton).not.toHaveAttribute('aria-current')
+    expect(screen.getByText('Current A chunk')).toBeVisible()
+    expect(
+      fetchMock.mock.calls.filter(([request]) =>
+        String(request).includes('/sources/source-b/chunks?'),
+      ),
+    ).toHaveLength(0)
   })
 
   it('ignores a late chunk preview after selecting another source', async () => {

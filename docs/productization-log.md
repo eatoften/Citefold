@@ -2125,3 +2125,441 @@ free notebook note
 
 Notes must reuse P0.5 drafts, Trash, backup, and task/lifecycle boundaries
 rather than creating another persistence path.
+
+## P1.1 Notebook-level Notes — implementation plan and completion report
+
+### Stage status
+
+- **Status:** Complete
+- **Completed:** 2026-07-28
+- **Priority:** P1
+- **User outcome:** capture an idea or grounded answer, refine it safely, and
+  deliberately make one durable revision available as later evidence
+- **Decision record:**
+  [ADR-0007](decisions/ADR-0007-notebook-notes-and-derived-sources.md)
+
+### Product evidence and interpretation
+
+Official NotebookLM places Notes in Studio, supports free-form notes and
+Chat-response capture, retains citations when saving an answer, and requires
+an explicit conversion before note content becomes a Source. Its FAQ also
+states that ordinary notes are not automatically used as evidence. Those
+behaviors define the product boundary for this stage.
+
+This project deliberately improves two parts of that contract:
+
+1. a saved answer keeps an immutable origin/citation snapshot **and** an
+   editable user working copy;
+2. deleted notes use the existing local Trash/backup system instead of becoming
+   immediately unrecoverable.
+
+### Scope
+
+P1.1 implements:
+
+```text
+Studio / Notes
+  -> create a course-level free note
+  -> recover unsaved editor text from device/server drafts
+  -> save with optimistic revision checking
+  -> soft-delete and restore through Trash
+
+Chat
+  -> save one completed grounded answer idempotently
+  -> preserve its exact citation and model provenance
+  -> open the resulting note in Studio
+
+Notes -> Sources
+  -> explicitly snapshot the current durable revision
+  -> create or update one stable note-derived Source
+  -> split Markdown into bounded, locatable sections
+  -> select/search/cite it through the existing Chat pipeline
+```
+
+The accepted course-scoped HTTP boundary is:
+
+```text
+GET    /courses/{course_id}/notes
+POST   /courses/{course_id}/notes
+GET    /courses/{course_id}/notes/{note_id}
+PATCH  /courses/{course_id}/notes/{note_id}
+DELETE /courses/{course_id}/notes/{note_id}
+POST   /courses/{course_id}/notes/from-chat/{message_id}
+POST   /courses/{course_id}/notes/{note_id}/source
+```
+
+The explicit course segment is intentional: every list, detail, capture, edit,
+delete, and promotion request validates the same notebook scope without
+revealing whether an ID exists in another course.
+
+P1.1 does not add collaborative notes, folders/tags, rich-text editing,
+AI-generated note transformations, bulk note-to-source conversion, exports, or
+automatic inclusion of drafts in retrieval. Those are later product slices.
+
+### Implementation sequence
+
+#### Gate A — durable domain contract
+
+1. Add schema v8 tables for notebook notes and immutable Source snapshots.
+2. Add typed note, origin snapshot, promotion snapshot, and note locator
+   contracts.
+3. Implement course-scoped stores with compare-and-swap revision updates,
+   idempotent message capture, note-owned normalized citation snapshots, and
+   transactional soft-delete/Trash behavior.
+4. Implement atomic same-revision Source promotion and explicit later-revision
+   refresh.
+5. Extend Source reconciliation, active-root checks, restore/purge, course
+   purge, backup schema validation, and test cleanup.
+
+Gate A proof:
+
+- migration, store, service, Source, Trash, and API tests pass;
+- a note cannot leak across course scope or survive permanent purge as a
+  selectable Source;
+- concurrent stale edits and stale promotions return conflicts.
+
+#### Gate B — bounded feature slice
+
+1. Add `features/notes` types, API client, editor/list component, styles, and
+   focused tests.
+2. Add `notes` to Studio and `note` to the canonical route contract.
+3. Wire only the route boundary in `App.tsx`; keep note state and requests out
+   of the monolith.
+4. Reuse the P0.5 draft hook for new and existing note editors.
+5. Add Chat's **Save to notes** action, per-message pending/success/failure
+   state, and direct navigation to the created note.
+6. Render immutable Chat provenance and citation navigation in the note
+   inspector.
+
+Gate B proof:
+
+- canonical URL/back-forward tests pass;
+- course/note switches fence late requests;
+- the newest editor text is protected locally or on the server;
+- a repeated Chat save cannot duplicate a note;
+- desktop and narrow layouts remain usable without horizontal overflow.
+
+#### Gate C — end-to-end knowledge loop
+
+1. Create and revise a free note.
+2. Save a grounded Chat answer and verify its origin citations.
+3. Publish a durable note revision as a Source.
+4. Ask a later question with that Source selected and open the resulting note
+   citation.
+5. Delete/undo the note and verify Source visibility follows the root.
+6. Run the full backend/frontend/desktop verification and record exact results,
+   problems, and resolutions below this plan.
+
+### Technology choices
+
+| Concern | Choice | Reason |
+| --- | --- | --- |
+| Durable state | existing SQLite/WAL store | local-first, transactional with Trash and Source projection |
+| API | existing FastAPI + Pydantic contracts | preserves validation/error conventions |
+| Concurrency | monotonic note revision + compare-and-swap | rejects silent last-writer-wins data loss |
+| Provenance | immutable JSON citation snapshot plus normalized promotion snapshot | preserves historical answer evidence while allowing editing |
+| Retrieval | existing canonical Source/chunk/embedding pipeline | one evidence model and one citation path |
+| Note Source identity | stable `note:<note_id>` with immutable revision snapshots | avoids Source-list duplication and makes refresh explicit |
+| Editor recovery | P0.5 `useAutosavedDraft` | no parallel persistence mechanism |
+| UI placement | Studio `notes` tool | retains Sources / Chat / Studio product structure |
+| Frontend architecture | isolated `features/notes` slice | limits new `App.tsx` debt before P1.4 |
+
+No rich-text framework, client state library, new vector database, cloud
+service, or file-backed synthetic Source is added.
+
+### Primary risks and planned controls
+
+1. **Source reconciliation could delete note projections.** Reconciliation
+   must rebuild all three root families: video jobs, imported assets, and
+   published note snapshots.
+2. **Editing could rewrite evidence already cited by Chat.** Promotion uses an
+   immutable revision snapshot; note editing alone never mutates Source chunks.
+3. **A lost POST response could duplicate a saved answer or snapshot.** The
+   assistant message ID and `(note_id, note_revision)` are durable idempotency
+   keys.
+4. **Delete could leave a searchable Source.** Source resolution checks the
+   active note root; permanent purge deletes projection, chunks, embeddings,
+   snapshots, drafts, and the tombstone.
+5. **Late frontend responses could overwrite another note.** Every load/save/
+   publish family is fenced by course, note, revision, and operation epoch.
+6. **A draft could overwrite a restored workspace or newer note.** Existing
+   workspace generation isolation remains in force, and note domain updates
+   require the loaded revision.
+7. **The feature could worsen monolith debt.** Only route composition is added
+   to `App.tsx`; implementation and tests live under `features/notes`.
+
+### Planned verification matrix
+
+| Area | Required proof |
+| --- | --- |
+| Schema | clean v8 install, v7 -> v8 migration, rollback on failed migration |
+| Note domain | free create, validation, listing, revision update/conflict, course isolation |
+| Chat capture | grounded-only validation, exact citation snapshot, repeated-save replay |
+| Promotion | exact durable revision, same-revision replay, later-revision refresh, chunk locator |
+| Sources | reconciliation preservation, active-root filtering, on-demand indexing/search |
+| Lifecycle | delete, restore, purge, parent-course purge, draft cleanup |
+| Routes | `tool=notes`, `note=<id>`, legacy/invalid canonicalization, back/forward |
+| Frontend | empty/list/editor/provenance/error states, draft recovery, stale-response fences |
+| Chat UI | pending/success/retry save action and direct note navigation |
+| Full checkpoint | pytest, Vitest, lint, build, Rust check/tests, dependency and repository hygiene |
+| Browser | desktop + 360 px free-note/capture/publish/cite/delete/restore journey |
+
+### Git checkpoint
+
+Intended independent commit subject:
+
+```text
+feat(notes): close the chat-to-source knowledge loop
+```
+
+The stage is committed and pushed only after Gate C passes. The sections below
+are the evidence used to accept that gate.
+
+### Delivered user workflow
+
+The completed loop is:
+
+```text
+write a course Note
+-> save it with revision protection
+-> explicitly publish that exact revision as note:<note_id>
+-> index the Note Source through the normal Source pipeline
+-> select it as the only Chat evidence
+-> receive a sentence-level cited answer
+-> open the citation at its immutable Note section
+-> save the grounded answer as a second Note
+-> retain the original answer, model, and citations beside an editable copy
+-> delete, undo, or restore the Note through the shared recovery system
+```
+
+This is deliberately a knowledge-capture loop, not merely a text editor.
+Ordinary Notes remain private working material until the user chooses
+**Publish as source**. A later edit marks the Source as outdated but does not
+silently change evidence that Chat may already have cited.
+
+### Final durable design
+
+Schema v8 adds four normalized tables:
+
+| Table | Responsibility |
+| --- | --- |
+| `notebook_notes` | Course-owned editable aggregate, origin, monotonic revision, and soft-delete state |
+| `notebook_note_citations` | Note-owned immutable copies of the Sources cited by a saved Chat answer |
+| `notebook_note_citation_spans` | Sentence offsets and citation ordering independent of Chat retention |
+| `notebook_note_source_snapshots` | Immutable title/body/content hash for each explicitly published revision |
+
+The separation is intentional:
+
+- the editable `title` and `body_markdown` can advance from revision 1 to N;
+- the captured Chat answer and its citations do not change when the working
+  copy is edited;
+- a published revision remains reconstructable even after a later revision is
+  published;
+- deletion visibility follows the active Note root, while permanent purge can
+  remove the complete Note-owned lineage.
+
+All seven HTTP operations are course scoped. List, create, capture, detail,
+update, delete, and publish validate the course boundary before returning
+domain information. Updates, deletes, and promotions use the loaded Note
+revision as a compare-and-swap token; a stale client receives the current
+record instead of silently overwriting it.
+
+Chat capture accepts only a completed, grounded assistant message with at
+least one canonical citation. The assistant message ID is the idempotency key:
+a lost response can be retried without creating a duplicate Note. Citation
+rows and sentence spans are copied into the Note transaction, so deleting a
+conversation later cannot erase the research provenance of a saved answer.
+
+### Source projection and retrieval
+
+One Note has one stable Source identity:
+
+```text
+note:<note_id>
+```
+
+Publishing creates or reuses the immutable `(note_id, note_revision)` snapshot,
+then transactionally replaces that Source's canonical chunks. Markdown is
+split deterministically on paragraph boundaries with a hard 4,000-character
+section limit. Each chunk receives a `note_section` locator containing the
+Note ID, snapshot ID, section number, revision, and content hash.
+
+The Source is intentionally not represented by a synthetic file. Citation
+resolution reconstructs context from the immutable database snapshot and
+returns no media URL. This keeps Note evidence inside the same Source,
+embedding, search, Chat scope, sentence-citation, and citation-inspector
+contracts used by videos and imported documents.
+
+Publishing, reconciliation, restore, and permanent purge share the Source
+projection lifecycle lock. Reconciliation re-reads canonical published Notes
+inside that boundary and rebuilds projections alongside video and document
+roots. This prevents a concurrent reconcile from deleting a newly published
+Note Source or recreating one while it is being purged.
+
+Soft-deleted Notes are excluded by the active-root query before Source listing,
+search, Chat selection, and citation availability. Restore makes the existing
+snapshot projection visible again; purge removes the projection, chunks,
+embeddings, snapshots, Note-owned citation lineage, drafts, and tombstone.
+
+### Frontend product boundary
+
+The implementation stays inside the accepted three-part information
+architecture:
+
+```text
+Sources  -> published Note Sources, preview, indexing, and Open note
+Chat     -> grounded answers and Save to notes
+Studio   -> Notes list, editor, origin inspector, and Source publishing
+```
+
+`features/notes` owns the API client, types, state machine, editor, provenance
+view, styles, and tests. `App.tsx` owns only route composition and cross-feature
+navigation. Canonical routes now preserve `tool=notes` and `note=<id>` through
+reload, back/forward, and course changes.
+
+The editor supports free Note creation, explicit save, optimistic conflicts,
+Source publication/update, Source deep links, and Trash. Chat keeps
+save-to-Note state per assistant message, validates the returned Note against
+the active course/message, ignores stale responses after a course switch, and
+opens the created Note directly. Sources classifies Note projections
+separately from documents and videos and never exposes file deletion for a
+Note-owned Source.
+
+### Draft and navigation reliability completed with P1.1
+
+P1.1 exercised P0.5 draft recovery more aggressively than card editing did.
+The shared hook was therefore hardened as part of this stage:
+
+- hydration is safe under React Strict Mode;
+- text entered before server hydration completes is immediately protected in
+  device storage and is never overwritten by a late response;
+- distinct device and server versions remain a preferred/alternate recovery
+  pair across remounts;
+- base timestamps prevent an old Note draft from being silently applied to a
+  newer durable Note revision;
+- restoring one version quarantines the other instead of destroying it;
+- **Keep current draft** retains the known server revision and synchronizes by
+  CAS;
+- an observed-absent server draft uses revision `0` as create-only CAS;
+- a third editor that advances the draft remains visible as a conflict rather
+  than being overwritten;
+- pending synchronization is canceled when a successful domain save clears
+  the draft.
+
+Chat composer drafts are keyed by course and conversation. A send keeps the
+submitted draft until the durable generation result is known. Success clears
+only the submitted/resolved scope; failure restores only those scopes, even if
+the user has already changed course or conversation.
+
+The app-level navigation registry protects unpersisted work for primary route,
+Studio tool, course, browser history, Chat conversation, Note, Study document,
+and Study anchor changes. Child-owned transitions guard before changing local
+state; their route synchronization then bypasses the app guard to avoid a
+second prompt. Automatic canonicalization remains non-interactive.
+
+### Problems encountered and resolutions
+
+| Problem found during implementation or review | Resolution and retained proof |
+| --- | --- |
+| Reconciliation could race publication or purge and remove/recreate a Note Source | Publication, reconciliation, restore, and purge now use one re-entrant projection lifecycle lock; race regressions retain the invariant |
+| A saved answer that referenced Chat-owned citation rows would lose provenance when Chat was purged | Notes copy canonical citations and spans into Note-owned tables in the capture transaction |
+| A deleted Note projection could remain listable or citable | Source active-root checks include the live Note/course root; Trash and citation-target tests cover the boundary |
+| One mutable Note body could not be both editable and historical evidence | The design keeps an editable aggregate plus immutable Chat-origin and published-revision snapshots |
+| An old device draft could overwrite a newly saved Note revision | Recovery is base-aware and presents mismatched content as an explicit conflict |
+| Aborting a request alone did not stop a late response from committing into another scope | Note loads/saves/publishes and Chat captures validate course, entity, revision, epoch, and returned response identity |
+| Same-revision promotion replay could return a stale in-memory Source after reconciliation | Promotion reloads the canonical Source after the transaction |
+| A Note citation has no file, page, or video media URL | `note_section` targets reconstruct immutable text context directly from the snapshot |
+| Strict Mode and slow hydration exposed a window where the newest keystroke existed only in React state | Pending edits are synchronously written to device storage and an older value is quarantined before replacement |
+| Chat cleared its composer before generation and could restore a failed question into the course/conversation opened later | Send returns `{ succeeded, conversationId }`; cleanup/recovery uses the captured submission scope |
+| App navigation covered primary routes but child tools could mutate state before a rejected route | Shared internal navigation guards now run before Chat, Notes, and Study state transitions |
+| Discarding a recovery candidate reset the revision to `null`, allowing a third editor to be overwritten | Keep-current is a dedicated CAS state machine with revision preservation, create-only revision `0`, re-read after failed conditional delete, and three-editor tests |
+| Draft cleanup after a domain save or a manual return to the saved value could forget that this editor had observed no server draft, then overwrite a newly created third-party draft | Both cleanup paths retain create-only revision `0`, delete only a known positive revision, and surface a concurrent create as a conflict on the next edit |
+| Successful-absence, failed-hydration, and empty-conflict paths could still leave the draft revision as unconditional `null` | The hook now treats every unknown or absent revision as create-only `0`; pending-hydration and offline races prove that a third-party create becomes a visible conflict instead of a silent overwrite |
+| Sources changed its preview before the app route guard returned | `onSelectSource` returns a decision and the preview changes only after navigation succeeds |
+| Study changed document/anchor state or sent a create request before checking unsaved work | Study guards document, anchor, and new-document actions before state or network effects |
+| A restore test checked files but not semantic Note evidence | The backup suite now restores a Chat Note, its citation lineage, published snapshot, canonical chunks, and citation target after the newer revision was purged |
+
+### Verification evidence
+
+All release-blocking checks passed on Windows in the isolated project
+environment:
+
+| Gate | Command or journey | Result |
+| --- | --- | --- |
+| Note API/integration | Notes API file, including real async Chat-over-Note and backup/restore semantic round trip | 13 passed |
+| Focused backend | Notes, migrations, and citation targets | 43 passed, 1 skipped |
+| Full backend | `uv run pytest -q` | **681 passed, 1 skipped**, 1 upstream Starlette deprecation warning, 432.67 s |
+| Python/lock | `compileall` plus `uv lock --check` | Passed; 120 packages resolved from the lock |
+| Full frontend | `npm.cmd test` | **27 files, 214 tests passed**, 14.20 s |
+| Frontend static | ESLint and TypeScript production build | Passed |
+| Production bundle | Vite 8.0.16 build | Passed; Notes and citation inspector remain split chunks; main chunk 588.23 kB / 173.99 kB gzip |
+| Dependency audit | `npm.cmd audit --audit-level=high` | 0 vulnerabilities |
+| Desktop host | Cargo format, locked metadata, locked check, and locked tests | Passed; 6 Rust tests passed |
+| Repository | `git diff --check`, generated-file and secret review | Passed before staging |
+
+The environment-dependent skip is the existing Windows symlink-permission
+test. The warning is the existing Starlette/TestClient `httpx` deprecation.
+Neither was introduced by P1.1.
+
+The real-browser acceptance used an isolated database, a cached local embedding
+model, and an OpenAI-compatible deterministic fake LLM. It verified:
+
+1. create a free Note in Studio;
+2. publish revision 1 and see `note:<id>` in Sources;
+3. index the Note and select it as the only Chat Source;
+4. generate a grounded answer with a sentence-level `[1]` citation;
+5. open the citation and see the exact immutable Note section highlighted;
+6. save the answer as a Note and inspect the read-only provider, model, answer,
+   and citation provenance;
+7. move the published Note to Trash, restore once through **Undo**, delete
+   again, and restore through **Recovery**;
+8. verify the Note Source returns with its ready index;
+9. inspect 1280×720 and 360×640 layouts with one `main`, one route `h1`, no
+   horizontal overflow, a reachable mobile composer, and usable bottom
+   navigation;
+10. finish with zero application console warnings or errors.
+
+### Known limitations and deferred work
+
+- Notes are Markdown text, not collaborative rich text. Tags, folders,
+  transformations, export, and bulk actions remain out of scope.
+- Publishing is explicit and indexing remains a separate **Index ready**
+  operation, consistent with all other Sources.
+- Chat save success is intentionally request-local in the current UI. Reloading
+  can show **Save to notes** again, but the backend message-id idempotency key
+  returns the original Note rather than duplicating it.
+- Browser acceptance is evidence recorded here, not yet a durable Playwright
+  end-to-end suite. P1.4 owns the automated desktop/browser harness.
+- A failed first Chat submission can temporarily retain the same question under
+  both the pre-conversation and server-created conversation recovery scopes.
+  Retrying from the resolved conversation is safe, but navigating back to the
+  empty scope can reveal the stale local copy. Scope alias cleanup is retained
+  as a P1.4 reliability follow-up.
+- Automatic cleanup of an invalid or removed Source can clear the preview
+  before an unsaved-change guard refuses the matching URL replacement. This is
+  a transient route/preview mismatch with no Source mutation; guarded cleanup
+  ordering is retained for P1.3 product polish.
+- The 588.23 kB main chunk remains above Vite's 500 kB advisory threshold.
+  Additional feature splitting belongs to P1.4.
+- No new signed installer or public release is created by this checkpoint; the
+  productization branch remains ahead of public `v0.1.1`.
+
+### Git checkpoint
+
+Independent commit subject:
+
+```text
+feat(notes): close the chat-to-source knowledge loop
+```
+
+The commit contains the schema/API, Source projection, Notes slice, reliability
+hardening, tests, ADR, roadmap, and this completion record. Its immutable SHA
+is reported after the commit is created and pushed; embedding that SHA in the
+same commit would change the SHA. Acceptance requires local `HEAD` to equal
+`origin/codex/notebooklm-product-core`.
+
+### Next gate
+
+P1.2 is now the next product slice: turn Study, Review, and Course Map into one
+persistent Studio output library, then add Overview, FAQ, Study Guide, Quiz,
+and Flashcards without creating parallel evidence or task systems.

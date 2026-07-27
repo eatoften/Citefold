@@ -20,6 +20,7 @@ export type ChatWorkspaceProps = {
   onSelectCourse: (courseId: string) => void
   onConversationChange?: ChatPanelProps['onConversationChange']
   onOpenCitation?: ChatPanelProps['onOpenCitation']
+  onOpenNote?: ChatPanelProps['onOpenNote']
 }
 
 export function ChatWorkspace({
@@ -32,6 +33,7 @@ export function ChatWorkspace({
   onSelectCourse,
   onConversationChange,
   onOpenCitation,
+  onOpenNote,
 }: ChatWorkspaceProps) {
   const courseSelectId = useId()
   const selectedCourse =
@@ -87,6 +89,7 @@ export function ChatWorkspace({
           recommendedQuestions={recommendedQuestions}
           onConversationChange={onConversationChange}
           onOpenCitation={onOpenCitation}
+          onOpenNote={onOpenNote}
         />
       </div>
     </div>

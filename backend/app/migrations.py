@@ -605,6 +605,139 @@ def _add_card_generation_chunk_ledger(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_notebook_notes(conn: sqlite3.Connection) -> None:
+    """Add course-level notes, immutable Chat evidence, and Source snapshots."""
+
+    conn.execute(
+        """
+        CREATE TABLE notebook_notes (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body_markdown TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            origin_type TEXT NOT NULL,
+            origin_message_id TEXT,
+            origin_conversation_id TEXT,
+            origin_snapshot_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            deleted_at TEXT,
+            CHECK (revision >= 1),
+            CHECK (origin_type IN ('free', 'chat_answer')),
+            CHECK (
+                (origin_type = 'free'
+                    AND origin_message_id IS NULL
+                    AND origin_conversation_id IS NULL)
+                OR
+                (origin_type = 'chat_answer'
+                    AND origin_message_id IS NOT NULL
+                    AND origin_conversation_id IS NOT NULL)
+            )
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_notebook_notes_course_updated
+        ON notebook_notes (course_id, deleted_at, updated_at DESC, id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX idx_notebook_notes_origin_message
+        ON notebook_notes (origin_message_id)
+        WHERE origin_type = 'chat_answer'
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE notebook_note_citations (
+            id TEXT PRIMARY KEY,
+            note_id TEXT NOT NULL,
+            note_revision INTEGER NOT NULL,
+            origin_citation_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            source_id TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            chunk_text_hash TEXT NOT NULL,
+            source_title TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            quote TEXT NOT NULL,
+            score REAL NOT NULL,
+            locator_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (note_id, origin_citation_id),
+            UNIQUE (note_id, ordinal),
+            CHECK (note_revision >= 1),
+            CHECK (ordinal >= 1),
+            CHECK (score >= -1.0 AND score <= 1.0)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_notebook_note_citations_note
+        ON notebook_note_citations (note_id, ordinal)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE notebook_note_citation_spans (
+            id TEXT PRIMARY KEY,
+            note_id TEXT NOT NULL,
+            citation_id TEXT NOT NULL,
+            sentence_index INTEGER NOT NULL,
+            start_offset INTEGER NOT NULL,
+            end_offset INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (
+                note_id,
+                citation_id,
+                sentence_index,
+                start_offset,
+                end_offset
+            ),
+            CHECK (sentence_index >= 0),
+            CHECK (start_offset >= 0),
+            CHECK (end_offset > start_offset)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_notebook_note_citation_spans_note
+        ON notebook_note_citation_spans (note_id, citation_id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE notebook_note_source_snapshots (
+            id TEXT PRIMARY KEY,
+            note_id TEXT NOT NULL,
+            course_id TEXT NOT NULL,
+            note_revision INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            body_markdown TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (note_id, note_revision),
+            CHECK (note_revision >= 1)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_notebook_note_source_snapshots_course
+        ON notebook_note_source_snapshots (
+            course_id,
+            note_id,
+            note_revision DESC
+        )
+        """
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version=1,
@@ -640,6 +773,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=7,
         name="card_generation_chunk_ledger",
         apply=_add_card_generation_chunk_ledger,
+    ),
+    Migration(
+        version=8,
+        name="notebook_notes",
+        apply=_add_notebook_notes,
     ),
 )
 

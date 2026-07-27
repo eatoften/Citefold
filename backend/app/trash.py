@@ -12,6 +12,7 @@ TrashEntityType = Literal[
     "video_job",
     "source_asset",
     "knowledge_card",
+    "notebook_note",
     "learning_document",
     "chat_conversation",
 ]

@@ -20,6 +20,7 @@ from .citation_target_store import (
 )
 from .course_source import (
     DocxParagraphLocator,
+    NotebookNoteSectionLocator,
     PdfPageLocator,
     PptSlideLocator,
     SourceLocator,
@@ -34,6 +35,8 @@ from .job_store import (
     list_jobs_missing_video_sha256,
     set_job_video_sha256_if_missing,
 )
+from .notebook_note_source import build_note_source_projection
+from .notebook_note_store import get_note_source_snapshot, get_notebook_note
 from .settings import get_app_path_settings
 from .source_asset import SourceAssetDetail
 from .source_asset_store import get_source_asset
@@ -252,6 +255,13 @@ def _resolve(
             message="This historical citation uses an unsupported locator.",
         )
 
+    if isinstance(locator, NotebookNoteSectionLocator):
+        return _resolve_notebook_note_snapshot(
+            record,
+            course_id=course_id,
+            locator=locator,
+        )
+
     source_problem = _canonical_source_problem(
         record,
         course_id=course_id,
@@ -314,6 +324,135 @@ def _resolve(
     return CitationResolution(target=target, managed_file=managed_file)
 
 
+def _resolve_notebook_note_snapshot(
+    record: CitationSnapshotRecord,
+    *,
+    course_id: str,
+    locator: NotebookNoteSectionLocator,
+) -> CitationResolution:
+    """Resolve historical note evidence from its immutable source snapshot."""
+
+    if record.source_course_id is None:
+        return _snapshot_only(
+            record,
+            reason="source_removed",
+            message=(
+                "The cited note Source was removed. "
+                "The saved quotation remains available."
+            ),
+            media_kind="text",
+        )
+    if record.source_course_id != course_id:
+        return _snapshot_only(
+            record,
+            reason="source_moved",
+            message="The cited note Source is no longer part of this course.",
+            media_kind="text",
+        )
+    if (
+        record.source_origin_type != "notebook_note"
+        or record.source_origin_id != locator.note_id
+        or record.current_source_type != record.source_type
+    ):
+        return _snapshot_only(
+            record,
+            reason="source_changed",
+            message="The cited note Source changed after this answer.",
+            media_kind="text",
+        )
+
+    note = get_notebook_note(course_id, locator.note_id)
+    snapshot = get_note_source_snapshot(
+        course_id,
+        locator.note_id,
+        locator.snapshot_id,
+        require_active_note=True,
+    )
+    if (
+        note is None
+        or snapshot is None
+        or hashlib.sha256(
+            snapshot.body_markdown.encode("utf-8")
+        ).hexdigest()
+        != snapshot.content_hash
+    ):
+        return _snapshot_only(
+            record,
+            reason="source_changed",
+            message="The cited note or source snapshot is no longer active.",
+            media_kind="text",
+        )
+    try:
+        historical_source, historical_chunks = build_note_source_projection(
+            note,
+            snapshot,
+        )
+    except ValueError:
+        return _snapshot_only(
+            record,
+            reason="source_changed",
+            message="The cited note snapshot can no longer be reconstructed.",
+            media_kind="text",
+        )
+
+    target_chunk = next(
+        (
+            chunk
+            for chunk in historical_chunks
+            if chunk.locator.section_number == locator.section_number
+        ),
+        None,
+    )
+    target_locator = (
+        target_chunk.locator.model_dump(mode="json")
+        if target_chunk is not None
+        else None
+    )
+    if (
+        historical_source.id != record.source_id
+        or historical_source.source_type != record.source_type
+        or historical_source.title != record.source_title
+        or target_chunk is None
+        or target_chunk.id != record.chunk_id
+        or target_chunk.text_hash != record.chunk_text_hash
+        or target_locator != record.locator
+        or record.quote not in target_chunk.text
+    ):
+        return _snapshot_only(
+            record,
+            reason="source_changed",
+            message="The cited note snapshot no longer matches its evidence.",
+            media_kind="text",
+        )
+
+    context = [
+        CitationTargetContext(
+            chunk_id=chunk.id,
+            ordinal=chunk.ordinal,
+            text=chunk.text,
+            locator=chunk.locator.model_dump(mode="json"),
+            is_target=chunk.id == target_chunk.id,
+        )
+        for chunk in historical_chunks
+        if abs(chunk.ordinal - target_chunk.ordinal) <= 1
+    ]
+    return CitationResolution(
+        target=CitationTargetResponse(
+            citation_id=record.citation_id,
+            availability="available",
+            source_id=record.source_id,
+            source_title=record.source_title,
+            source_type=record.source_type,
+            quote=record.quote,
+            locator=record.locator,
+            media_kind="text",
+            target_chunk_id=record.chunk_id,
+            context=context,
+        ),
+        managed_file=None,
+    )
+
+
 def _canonical_source_problem(
     record: CitationSnapshotRecord,
     *,
@@ -362,6 +501,19 @@ def _locator_matches_source(
             isinstance(locator, VideoTimeLocator)
             and locator.job_id == record.source_origin_id
             and locator.asset_id is None
+        )
+    if record.source_origin_type == "notebook_note":
+        return (
+            isinstance(locator, NotebookNoteSectionLocator)
+            and locator.note_id == record.source_origin_id
+            and record.source_course_id is not None
+            and get_note_source_snapshot(
+                record.source_course_id,
+                locator.note_id,
+                locator.snapshot_id,
+                require_active_note=True,
+            )
+            is not None
         )
     if record.source_origin_type != "source_asset":
         return False
@@ -686,6 +838,8 @@ def _media_kind(
     if isinstance(locator, (PptSlideLocator, DocxParagraphLocator)):
         return "document"
     if isinstance(locator, TextSectionLocator):
+        return "text"
+    if isinstance(locator, NotebookNoteSectionLocator):
         return "text"
     return None
 

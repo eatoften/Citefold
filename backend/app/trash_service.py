@@ -209,6 +209,11 @@ def _restore(item: TrashItem) -> None:
 
         restore_saved_card(item.entity_id)
         return
+    if item.entity_type == "notebook_note":
+        from .notebook_note_service import restore_deleted_notebook_note
+
+        restore_deleted_notebook_note(item.entity_id)
+        return
     if item.entity_type == "learning_document":
         from .learning_document_service import (
             restore_saved_learning_document,
@@ -240,6 +245,11 @@ def _purge(item: TrashItem, *, artifact_root: Path) -> None:
         from .knowledge_card_service import purge_saved_card
 
         purge_saved_card(item.entity_id)
+        return
+    if item.entity_type == "notebook_note":
+        from .notebook_note_service import purge_deleted_notebook_note
+
+        purge_deleted_notebook_note(item.entity_id)
         return
     if item.entity_type == "learning_document":
         from .learning_document_service import purge_saved_learning_document
@@ -904,8 +914,14 @@ def _purge_course_documents(
     course_id: str,
     _artifact_root: Path,
 ) -> None:
+    from .notebook_note_service import purge_course_notebook_notes
     from .learning_document_service import purge_saved_learning_document
     from .learning_document_store import list_learning_documents_for_course
+
+    # Notebook notes and their derived projections are database-only children.
+    # Purging them in this retryable pre-artifact stage avoids changing the
+    # persisted course purge-plan version while keeping parent cleanup atomic.
+    purge_course_notebook_notes(course_id)
 
     for document in list_learning_documents_for_course(
         course_id,

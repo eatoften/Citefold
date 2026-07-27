@@ -102,11 +102,21 @@ def replace_source_projection(
     chunks: list[CourseSourceChunk],
 ) -> None:
     ensure_db()
+    with connect() as conn:
+        replace_source_projection_in_connection(conn, source, chunks)
+
+
+def replace_source_projection_in_connection(
+    conn,
+    source: CourseSource,
+    chunks: list[CourseSourceChunk],
+) -> None:
+    """Replace one derived projection inside the caller-owned transaction."""
+
     if any(chunk.source_id != source.id for chunk in chunks):
         raise ValueError("Source chunk belongs to a different source.")
-    with connect() as conn:
-        _upsert_source(conn, source)
-        _replace_source_chunks(conn, source, chunks)
+    _upsert_source(conn, source)
+    _replace_source_chunks(conn, source, chunks)
 
 
 def list_sources_for_course(course_id: str) -> list[CourseSource]:
@@ -367,7 +377,13 @@ def move_sources_to_course(
 def delete_source_projection(source_id: str) -> None:
     ensure_db()
     with connect() as conn:
-        _delete_sources(conn, {source_id})
+        delete_source_projection_in_connection(conn, source_id)
+
+
+def delete_source_projection_in_connection(conn, source_id: str) -> None:
+    """Delete one projection inside the caller-owned transaction."""
+
+    _delete_sources(conn, {source_id})
 
 
 def delete_source_projections_for_course(course_id: str) -> None:

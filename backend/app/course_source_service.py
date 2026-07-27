@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from threading import RLock
 
 from . import course_service
@@ -29,6 +30,11 @@ from .course_source_store import (
 )
 from .job import VideoJob, VideoJobStatus
 from .job_store import get_job, list_jobs_for_course
+from .notebook_note_source import build_note_source_projection
+from .notebook_note_store import (
+    get_notebook_note,
+    list_published_notebook_notes_for_course,
+)
 from .source_asset import SourceAssetDetail, SourceUnit
 from .source_asset_store import (
     get_source_asset,
@@ -56,6 +62,14 @@ class CourseSourceScopeError(CourseSourceServiceError):
 
 class CourseSourceUnavailableError(CourseSourceServiceError):
     pass
+
+
+@contextmanager
+def source_projection_lifecycle():
+    """Serialize derived-root snapshots with full projection replacement."""
+
+    with _reconciliation_lock:
+        yield
 
 
 def reconcile_course_sources(course_id: str) -> list[CourseSource]:
@@ -86,6 +100,14 @@ def reconcile_course_sources(course_id: str) -> list[CourseSource]:
                 _chunk_from_source_unit(source, unit)
                 for unit in list_source_units_for_asset(asset.id)
             )
+
+        for note, snapshot in list_published_notebook_notes_for_course(
+            course.id,
+            include_deleted=True,
+        ):
+            source, note_chunks = build_note_source_projection(note, snapshot)
+            sources.append(source)
+            chunks.extend(note_chunks)
 
         replace_course_source_projection(course.id, sources, chunks)
         return _active_sources(list_sources_for_course(course.id))
@@ -249,6 +271,10 @@ def _source_root_is_active(source: CourseSource) -> bool:
         return get_job(source.origin_id) is not None
     if source.origin_type == "source_asset":
         return get_source_asset(source.origin_id) is not None
+    if source.origin_type == "notebook_note":
+        return (
+            get_notebook_note(source.course_id, source.origin_id) is not None
+        )
     return False
 
 

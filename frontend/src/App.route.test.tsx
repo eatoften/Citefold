@@ -17,9 +17,24 @@ const tauriApi = vi.hoisted(() => ({
   invoke: vi.fn(),
 }))
 
+const navigationGuard = vi.hoisted(() => ({
+  canLeave: vi.fn(() => true),
+  useInternalNavigationGuard: vi.fn(),
+}))
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: tauriApi.invoke,
 }))
+
+vi.mock('./features/reliability', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('./features/reliability')>()
+  return {
+    ...actual,
+    useInternalNavigationGuard:
+      navigationGuard.useInternalNavigationGuard,
+  }
+})
 
 import {
   checkBackendHealth,
@@ -293,6 +308,12 @@ describe('App source-first shell', () => {
   beforeEach(() => {
     Reflect.deleteProperty(window, '__TAURI_INTERNALS__')
     tauriApi.invoke.mockReset()
+    navigationGuard.canLeave.mockReset()
+    navigationGuard.canLeave.mockReturnValue(true)
+    navigationGuard.useInternalNavigationGuard.mockReset()
+    navigationGuard.useInternalNavigationGuard.mockReturnValue(
+      navigationGuard.canLeave,
+    )
     window.history.replaceState(
       {},
       '',
@@ -403,6 +424,63 @@ describe('App source-first shell', () => {
       expect(document.activeElement).toBe(studioHeading)
     })
     expect(container.querySelectorAll('main')).toHaveLength(1)
+  })
+
+  it('keeps the active route when internal navigation is declined', async () => {
+    const user = userEvent.setup()
+    navigationGuard.canLeave.mockReturnValue(false)
+    render(<App />)
+
+    await screen.findByRole('heading', {
+      level: 1,
+      name: 'Sources',
+    })
+    await user.click(screen.getByRole('link', { name: 'Chat' }))
+
+    expect(navigationGuard.canLeave).toHaveBeenCalledTimes(1)
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Sources' }),
+    ).toBeInTheDocument()
+    expect(new URL(window.location.href).searchParams.get('view')).toBe(
+      'sources',
+    )
+  })
+
+  it('restores a declined history route and accepts it after confirmation', async () => {
+    navigationGuard.canLeave.mockReturnValue(false)
+    render(<App />)
+
+    await screen.findByRole('heading', {
+      level: 1,
+      name: 'Sources',
+    })
+    act(() => {
+      window.history.pushState({}, '', '/?view=chat')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    expect(
+      screen.getByRole('heading', { level: 1, name: 'Sources' }),
+    ).toBeInTheDocument()
+    expect(new URL(window.location.href).searchParams.get('view')).toBe(
+      'sources',
+    )
+
+    navigationGuard.canLeave.mockReturnValue(true)
+    act(() => {
+      window.history.pushState({}, '', '/?view=chat')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+
+    expect(
+      await screen.findByRole('heading', {
+        level: 1,
+        name: 'Chat',
+      }),
+    ).toBeInTheDocument()
+    expect(new URL(window.location.href).searchParams.get('view')).toBe(
+      'chat',
+    )
   })
 
   it('keeps video processing behind an explicit Sources action', async () => {

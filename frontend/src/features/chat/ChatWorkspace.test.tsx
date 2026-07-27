@@ -35,6 +35,7 @@ describe('ChatWorkspace', () => {
 
   it('wraps the full ChatPanel without creating a main landmark', () => {
     const onOpenCitation = vi.fn()
+    const onOpenNote = vi.fn()
     const { container } = render(
       <ChatWorkspace
         apiBaseUrl="http://127.0.0.1:8001"
@@ -43,6 +44,7 @@ describe('ChatWorkspace', () => {
         selectedModel="local-model"
         onSelectCourse={vi.fn()}
         onOpenCitation={onOpenCitation}
+        onOpenNote={onOpenNote}
       />,
     )
 
@@ -70,6 +72,7 @@ describe('ChatWorkspace', () => {
         model: 'local-model',
         compact: false,
         onOpenCitation,
+        onOpenNote,
       }),
     )
   })

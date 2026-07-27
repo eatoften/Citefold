@@ -36,6 +36,7 @@ from . import job_service
 from . import knowledge_card_service
 from . import knowledge_card_note_service
 from . import learning_document_service
+from . import notebook_note_service
 from . import rag_service
 from . import review_item_service
 from . import review_service
@@ -110,6 +111,15 @@ from .learning_document import (
     LearningDocumentGenerationResult,
     LearningDocumentRestoreRequest,
     LearningDocumentUpdate,
+)
+from .notebook_note import (
+    NotebookNote,
+    NotebookNoteChatCaptureRequest,
+    NotebookNoteCreate,
+    NotebookNotePromotionRequest,
+    NotebookNotePromotionResult,
+    NotebookNoteSummary,
+    NotebookNoteUpdate,
 )
 from .llm_client import LLMModelList, LLMStatus, LocalLLMClient
 from .rag import RagRetrieveRequest, RagRetrieveResponse
@@ -745,6 +755,48 @@ def raise_knowledge_card_note_http_error(
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="Unexpected knowledge card note service error.",
+    ) from exc
+
+
+def raise_notebook_note_http_error(
+    exc: notebook_note_service.NotebookNoteServiceError,
+) -> None:
+    if isinstance(
+        exc,
+        notebook_note_service.NotebookNoteNotFoundError,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    if isinstance(exc, notebook_note_service.NotebookNoteConflictError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": str(exc),
+                "current": (
+                    exc.current.model_dump(mode="json")
+                    if exc.current is not None
+                    else None
+                ),
+            },
+        ) from exc
+    if isinstance(
+        exc,
+        notebook_note_service.NotebookNoteCaptureConflictError,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    if isinstance(exc, notebook_note_service.InvalidNotebookNoteError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Unexpected notebook note service error.",
     ) from exc
 
 
@@ -2462,6 +2514,140 @@ def get_chat_citation_content(
         method=request.method,
         range_header=request.headers.get("range"),
     )
+
+
+@app.get(
+    "/courses/{course_id}/notes",
+    response_model=list[NotebookNoteSummary],
+)
+def list_course_notebook_notes(
+    course_id: str,
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+) -> list[NotebookNoteSummary]:
+    try:
+        return notebook_note_service.list_course_notebook_notes(
+            course_id,
+            limit=limit,
+            offset=offset,
+        )
+    except notebook_note_service.NotebookNoteServiceError as exc:
+        raise_notebook_note_http_error(exc)
+
+
+@app.post(
+    "/courses/{course_id}/notes",
+    response_model=NotebookNote,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_course_notebook_note(
+    course_id: str,
+    request: NotebookNoteCreate,
+) -> NotebookNote:
+    try:
+        return notebook_note_service.create_course_notebook_note(
+            course_id,
+            request,
+        )
+    except notebook_note_service.NotebookNoteServiceError as exc:
+        raise_notebook_note_http_error(exc)
+
+
+@app.post(
+    "/courses/{course_id}/notes/from-chat/{message_id}",
+    response_model=NotebookNote,
+    status_code=status.HTTP_201_CREATED,
+)
+def capture_chat_answer_as_notebook_note(
+    course_id: str,
+    message_id: str,
+    request: NotebookNoteChatCaptureRequest | None = None,
+) -> NotebookNote:
+    try:
+        return notebook_note_service.capture_chat_answer_as_notebook_note(
+            course_id,
+            message_id,
+            request or NotebookNoteChatCaptureRequest(),
+        )
+    except notebook_note_service.NotebookNoteServiceError as exc:
+        raise_notebook_note_http_error(exc)
+
+
+@app.get(
+    "/courses/{course_id}/notes/{note_id}",
+    response_model=NotebookNote,
+)
+def get_course_notebook_note(
+    course_id: str,
+    note_id: str,
+) -> NotebookNote:
+    try:
+        return notebook_note_service.get_course_notebook_note(
+            course_id,
+            note_id,
+        )
+    except notebook_note_service.NotebookNoteServiceError as exc:
+        raise_notebook_note_http_error(exc)
+
+
+@app.patch(
+    "/courses/{course_id}/notes/{note_id}",
+    response_model=NotebookNote,
+)
+def update_course_notebook_note(
+    course_id: str,
+    note_id: str,
+    request: NotebookNoteUpdate,
+) -> NotebookNote:
+    try:
+        return notebook_note_service.update_course_notebook_note(
+            course_id,
+            note_id,
+            request,
+        )
+    except notebook_note_service.NotebookNoteServiceError as exc:
+        raise_notebook_note_http_error(exc)
+
+
+@app.delete(
+    "/courses/{course_id}/notes/{note_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_course_notebook_note(
+    course_id: str,
+    note_id: str,
+    expected_revision: int = Query(ge=1),
+) -> Response:
+    with workspace_lifecycle_lock():
+        try:
+            notebook_note_service.delete_course_notebook_note(
+                course_id,
+                note_id,
+                expected_revision=expected_revision,
+            )
+        except notebook_note_service.NotebookNoteServiceError as exc:
+            raise_notebook_note_http_error(exc)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post(
+    "/courses/{course_id}/notes/{note_id}/source",
+    response_model=NotebookNotePromotionResult,
+)
+def publish_notebook_note_as_source(
+    course_id: str,
+    note_id: str,
+    request: NotebookNotePromotionRequest,
+) -> NotebookNotePromotionResult:
+    with workspace_lifecycle_lock():
+        try:
+            return notebook_note_service.publish_notebook_note_as_source(
+                course_id,
+                note_id,
+                request,
+            )
+        except notebook_note_service.NotebookNoteServiceError as exc:
+            raise_notebook_note_http_error(exc)
 
 
 @app.get(

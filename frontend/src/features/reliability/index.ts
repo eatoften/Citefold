@@ -2,6 +2,11 @@ export { ReliabilityProvider } from './ReliabilityContext'
 export { ReliabilityCenter } from './ReliabilityCenter'
 export { SaveStatus } from './SaveStatus'
 export { useAutosavedDraft } from './useAutosavedDraft'
+export {
+  confirmInternalNavigation,
+  UNPROTECTED_NAVIGATION_MESSAGE,
+  useInternalNavigationGuard,
+} from './navigationGuard'
 export { announceTrashCreated } from './trashEvents'
 export {
   cancelReliableTask,

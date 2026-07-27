@@ -3,6 +3,7 @@ export const PRIMARY_VIEWS = ['sources', 'chat', 'studio'] as const
 export type PrimaryView = (typeof PRIMARY_VIEWS)[number]
 
 export const STUDIO_TOOLS = [
+  'notes',
   'cards',
   'study',
   'review',
@@ -17,6 +18,7 @@ export type AppRoute = {
   tool: StudioTool | null
   courseId: string | null
   cardId: string | null
+  noteId: string | null
   documentId: string | null
   conversationId: string | null
   sourceId: string | null
@@ -28,6 +30,7 @@ export type AppRouteDestination = {
   tool?: StudioTool
   courseId?: string | null
   cardId?: string | null
+  noteId?: string | null
   documentId?: string | null
   conversationId?: string | null
   sourceId?: string | null
@@ -123,6 +126,7 @@ function normalizeRoute(route: AppRoute): AppRoute {
       tool: null,
       courseId,
       cardId: null,
+      noteId: null,
       documentId: null,
       conversationId: null,
       sourceId: normalizedId(route.sourceId),
@@ -136,6 +140,7 @@ function normalizeRoute(route: AppRoute): AppRoute {
       tool: null,
       courseId,
       cardId: null,
+      noteId: null,
       documentId: null,
       conversationId: normalizedId(route.conversationId),
       sourceId: null,
@@ -155,6 +160,8 @@ function normalizeRoute(route: AppRoute): AppRoute {
     tool,
     courseId,
     cardId: supportsCard ? normalizedId(route.cardId) : null,
+    noteId:
+      tool === 'notes' ? normalizedId(route.noteId) : null,
     documentId:
       tool === 'study' ? normalizedId(route.documentId) : null,
     conversationId: null,
@@ -172,6 +179,7 @@ function parseUrl(input: URL | string): AppRoute {
     ...resolvedView,
     courseId: queryId(parameters, 'course'),
     cardId: queryId(parameters, 'card'),
+    noteId: queryId(parameters, 'note'),
     documentId: queryId(parameters, 'document'),
     conversationId: queryId(parameters, 'conversation'),
     sourceId: queryId(parameters, 'source'),
@@ -218,6 +226,7 @@ export function serializeAppRoute(
   setQueryValue(parameters, 'tool', canonical.tool)
   setQueryValue(parameters, 'course', canonical.courseId)
   setQueryValue(parameters, 'card', canonical.cardId)
+  setQueryValue(parameters, 'note', canonical.noteId)
   setQueryValue(parameters, 'document', canonical.documentId)
   setQueryValue(
     parameters,
@@ -252,6 +261,7 @@ function destinationValue(
   destination: AppRouteDestination,
   key:
     | 'cardId'
+    | 'noteId'
     | 'documentId'
     | 'conversationId'
     | 'sourceId'
@@ -295,6 +305,11 @@ export function buildAppRouteUrl(
       destination,
       'cardId',
       fallback(current.cardId),
+    ),
+    noteId: destinationValue(
+      destination,
+      'noteId',
+      fallback(current.noteId),
     ),
     documentId: destinationValue(
       destination,

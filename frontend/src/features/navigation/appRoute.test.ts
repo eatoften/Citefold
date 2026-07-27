@@ -28,6 +28,7 @@ describe('parseAppRoute', () => {
       tool: null,
       courseId: 'course-1',
       cardId: null,
+      noteId: null,
       documentId: null,
       conversationId: null,
       sourceId: 'source-1',
@@ -44,6 +45,7 @@ describe('parseAppRoute', () => {
       tool: null,
       courseId: 'course-1',
       cardId: null,
+      noteId: null,
       documentId: null,
       conversationId: 'conversation-1',
       sourceId: null,
@@ -60,7 +62,25 @@ describe('parseAppRoute', () => {
       tool: 'study',
       courseId: 'course-1',
       cardId: 'card-1',
+      noteId: null,
       documentId: 'document-1',
+      conversationId: null,
+      sourceId: null,
+      jobId: null,
+    })
+    expect(
+      parseAppRoute(
+        url(
+          '?view=studio&tool=notes&course=course-1&note=note-1',
+        ),
+      ),
+    ).toEqual({
+      view: 'studio',
+      tool: 'notes',
+      courseId: 'course-1',
+      cardId: null,
+      noteId: 'note-1',
+      documentId: null,
       conversationId: null,
       sourceId: null,
       jobId: null,
@@ -155,23 +175,51 @@ describe('parseAppRoute', () => {
   it.each<{
     tool: StudioTool
     cardId: string | null
+    noteId: string | null
     documentId: string | null
   }>([
-    { tool: 'cards', cardId: 'card-1', documentId: null },
+    {
+      tool: 'notes',
+      cardId: null,
+      noteId: 'note-1',
+      documentId: null,
+    },
+    {
+      tool: 'cards',
+      cardId: 'card-1',
+      noteId: null,
+      documentId: null,
+    },
     {
       tool: 'study',
       cardId: 'card-1',
+      noteId: null,
       documentId: 'document-1',
     },
-    { tool: 'review', cardId: null, documentId: null },
-    { tool: 'map', cardId: 'card-1', documentId: null },
-    { tool: 'explore', cardId: 'card-1', documentId: null },
+    {
+      tool: 'review',
+      cardId: null,
+      noteId: null,
+      documentId: null,
+    },
+    {
+      tool: 'map',
+      cardId: 'card-1',
+      noteId: null,
+      documentId: null,
+    },
+    {
+      tool: 'explore',
+      cardId: 'card-1',
+      noteId: null,
+      documentId: null,
+    },
   ])(
     'keeps only the entity parameters supported by Studio/$tool',
-    ({ tool, cardId, documentId }) => {
+    ({ tool, cardId, noteId, documentId }) => {
       const route = parseAppRoute(
         url(
-          `?view=studio&tool=${tool}&course=course-1&card=card-1&document=document-1&conversation=conversation-1&source=source-1&job=job-1`,
+          `?view=studio&tool=${tool}&course=course-1&card=card-1&note=note-1&document=document-1&conversation=conversation-1&source=source-1&job=job-1`,
         ),
       )
       expect(route).toMatchObject({
@@ -179,6 +227,7 @@ describe('parseAppRoute', () => {
         tool,
         courseId: 'course-1',
         cardId,
+        noteId,
         documentId,
         conversationId: null,
         sourceId: null,
@@ -293,7 +342,7 @@ describe('canonicalizeAppRoute', () => {
   it('removes route-inapplicable entity parameters', () => {
     const chat = canonicalizeAppRoute(
       url(
-        '?view=chat&tool=study&course=course-1&conversation=conversation-1&card=card-1&document=document-1&source=source-1&job=job-1',
+        '?view=chat&tool=study&course=course-1&conversation=conversation-1&card=card-1&note=note-1&document=document-1&source=source-1&job=job-1',
       ),
     )
     expect(chat.shouldReplace).toBe(true)
@@ -302,19 +351,21 @@ describe('canonicalizeAppRoute', () => {
     )
     expect(chat.url.searchParams.has('tool')).toBe(false)
     expect(chat.url.searchParams.has('card')).toBe(false)
+    expect(chat.url.searchParams.has('note')).toBe(false)
     expect(chat.url.searchParams.has('document')).toBe(false)
     expect(chat.url.searchParams.has('source')).toBe(false)
     expect(chat.url.searchParams.has('job')).toBe(false)
 
     const sources = canonicalizeAppRoute(
       url(
-        '?view=sources&tool=cards&course=course-1&source=source-1&job=job-1&conversation=conversation-1&card=card-1',
+        '?view=sources&tool=cards&course=course-1&source=source-1&job=job-1&conversation=conversation-1&card=card-1&note=note-1',
       ),
     )
     expect(sources.url.searchParams.get('source')).toBe('source-1')
     expect(sources.url.searchParams.get('job')).toBe('job-1')
     expect(sources.url.searchParams.has('conversation')).toBe(false)
     expect(sources.url.searchParams.has('card')).toBe(false)
+    expect(sources.url.searchParams.has('note')).toBe(false)
   })
 
   it('collapses duplicate owned parameters', () => {
@@ -365,6 +416,7 @@ describe('serializeAppRoute', () => {
     tool: null,
     courseId: 'course-2',
     cardId: 'ignored-card',
+    noteId: 'ignored-note',
     documentId: 'ignored-document',
     conversationId: 'conversation-2',
     sourceId: 'ignored-source',
@@ -384,6 +436,7 @@ describe('serializeAppRoute', () => {
       'conversation-2',
     )
     expect(result.searchParams.has('card')).toBe(false)
+    expect(result.searchParams.has('note')).toBe(false)
     expect(result.searchParams.has('document')).toBe(false)
     expect(result.searchParams.has('source')).toBe(false)
     expect(result.searchParams.has('job')).toBe(false)
@@ -468,6 +521,15 @@ describe('buildAppRouteUrl', () => {
     })
     expect(review.searchParams.has('card')).toBe(false)
     expect(review.searchParams.has('document')).toBe(false)
+
+    const notes = buildAppRouteUrl(current, {
+      view: 'studio',
+      tool: 'notes',
+      noteId: 'note-1',
+    })
+    expect(notes.searchParams.get('note')).toBe('note-1')
+    expect(notes.searchParams.has('card')).toBe(false)
+    expect(notes.searchParams.has('document')).toBe(false)
   })
 
   it('clears old entity scope when the course changes', () => {
@@ -509,5 +571,20 @@ describe('buildAppRouteUrl', () => {
     expect(result.searchParams.get('conversation')).toBe(
       'conversation-1',
     )
+  })
+
+  it('clears a selected note when the course scope changes', () => {
+    const result = buildAppRouteUrl(
+      url(
+        '?view=studio&tool=notes&course=course-1&note=note-1',
+      ),
+      {
+        view: 'studio',
+        tool: 'notes',
+        courseId: 'course-2',
+      },
+    )
+    expect(result.searchParams.get('course')).toBe('course-2')
+    expect(result.searchParams.has('note')).toBe(false)
   })
 })

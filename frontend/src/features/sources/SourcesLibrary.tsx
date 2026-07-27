@@ -6,6 +6,7 @@ import {
   File,
   FileText,
   LoaderCircle,
+  NotebookPen,
   Plus,
   RefreshCw,
   SearchCheck,
@@ -60,9 +61,10 @@ export type SourcesLibraryProps = {
   onSelectSource?: (
     sourceId: string | null,
     mode: 'push' | 'replace',
-  ) => void
+  ) => boolean | void
   onAddVideo?: () => void
   onOpenVideo?: (jobId: string) => void
+  onOpenNote?: (noteId: string) => void
   onOpenChat?: () => void
 }
 
@@ -85,6 +87,9 @@ const SOURCE_ACCEPT =
   '.pdf,.pptx,.docx,.txt,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown'
 
 function sourceIcon(source: CourseSource) {
+  if (source.origin_type === 'notebook_note') {
+    return <NotebookPen aria-hidden="true" size={19} />
+  }
   if (source.source_type === 'video' || source.source_type === 'audio') {
     return <Video aria-hidden="true" size={19} />
   }
@@ -92,6 +97,18 @@ function sourceIcon(source: CourseSource) {
     return <FileText aria-hidden="true" size={19} />
   }
   return <File aria-hidden="true" size={19} />
+}
+
+function sourceKindLabel(source: CourseSource): string {
+  return source.origin_type === 'notebook_note'
+    ? 'NOTE'
+    : source.source_type.toUpperCase()
+}
+
+function sourceSizeLabel(source: CourseSource): string {
+  return source.origin_type === 'notebook_note'
+    ? 'Published note'
+    : formatBytes(source.size_bytes)
 }
 
 function formatBytes(value: number | null): string {
@@ -129,6 +146,7 @@ export function SourcesLibrary({
   onSelectSource,
   onAddVideo,
   onOpenVideo,
+  onOpenNote,
   onOpenChat,
 }: SourcesLibraryProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -190,6 +208,22 @@ export function SourcesLibrary({
     () =>
       scopedSources.filter(
         (source) => source.origin_type === 'source_asset',
+      ).length,
+    [scopedSources],
+  )
+  const videoAudioCount = useMemo(
+    () =>
+      scopedSources.filter(
+        (source) =>
+          source.source_type === 'video' ||
+          source.source_type === 'audio',
+      ).length,
+    [scopedSources],
+  )
+  const noteCount = useMemo(
+    () =>
+      scopedSources.filter(
+        (source) => source.origin_type === 'notebook_note',
       ).length,
     [scopedSources],
   )
@@ -365,11 +399,13 @@ export function SourcesLibrary({
   ])
 
   function selectSource(sourceId: string) {
+    if (onSelectSource?.(sourceId, 'push') === false) {
+      return
+    }
     chunkRequestEpochRef.current += 1
     selectedSourceIdRef.current = sourceId
     setSelectedSourceId(sourceId)
     setError(null)
-    onSelectSource?.(sourceId, 'push')
   }
 
   async function refreshSources() {
@@ -955,12 +991,17 @@ export function SourcesLibrary({
         <div>
           <Video aria-hidden="true" size={17} />
           <span>Video or audio</span>
-          <strong>{scopedSources.length - documentCount}</strong>
+          <strong>{videoAudioCount}</strong>
         </div>
         <div>
           <BookOpenText aria-hidden="true" size={17} />
           <span>Documents</span>
           <strong>{documentCount}</strong>
+        </div>
+        <div>
+          <NotebookPen aria-hidden="true" size={17} />
+          <span>Notes</span>
+          <strong>{noteCount}</strong>
         </div>
         <div>
           <CheckCircle2 aria-hidden="true" size={17} />
@@ -1070,8 +1111,8 @@ export function SourcesLibrary({
                     <span className="source-list-copy">
                       <strong>{source.title}</strong>
                       <small>
-                        {source.source_type.toUpperCase()} ·{' '}
-                        {formatBytes(source.size_bytes)} ·{' '}
+                        {sourceKindLabel(source)} ·{' '}
+                        {sourceSizeLabel(source)} ·{' '}
                         {source.chunk_count} chunk
                         {source.chunk_count === 1 ? '' : 's'}
                       </small>
@@ -1110,7 +1151,7 @@ export function SourcesLibrary({
                       >
                         Open video
                       </button>
-                    ) : (
+                    ) : source.origin_type === 'source_asset' ? (
                       <button
                         type="button"
                         className="source-delete-action"
@@ -1128,6 +1169,15 @@ export function SourcesLibrary({
                           <Trash2 aria-hidden="true" size={14} />
                         )}
                         Remove
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={!onOpenNote}
+                        onClick={() => onOpenNote?.(source.origin_id)}
+                      >
+                        <NotebookPen aria-hidden="true" size={14} />
+                        Open note
                       </button>
                     )}
                   </div>
@@ -1175,7 +1225,9 @@ export function SourcesLibrary({
                 <span>{sourceIcon(selectedSource)}</span>
                 <div>
                   <span className="sources-eyebrow">
-                    {selectedSource.source_type} source
+                    {selectedSource.origin_type === 'notebook_note'
+                      ? 'notebook note source'
+                      : `${selectedSource.source_type} source`}
                   </span>
                   <h2>{selectedSource.title}</h2>
                   <p>

@@ -7,6 +7,7 @@ import {
   FileText,
   LoaderCircle,
   MessageSquareText,
+  NotebookPen,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -16,6 +17,7 @@ import {
   X,
 } from 'lucide-react'
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -23,11 +25,15 @@ import {
 } from 'react'
 import { formatSourceLocator } from '../citations/citationFormat'
 import type { CourseSource } from '../sources/sourceTypes'
+import { saveChatAnswerAsNote } from '../notes/noteApi'
+import type { NotebookNoteSaveState } from '../notes/noteTypes'
 import type { ChatCitation, ChatMessage } from './chatTypes'
+import { isAbortError } from './chatApi'
 import { useChat } from './useChat'
 import {
   SaveStatus,
   useAutosavedDraft,
+  useInternalNavigationGuard,
 } from '../reliability'
 import './ChatPanel.css'
 
@@ -53,6 +59,7 @@ export type ChatPanelProps = {
     citation: ChatCitation,
     trigger: HTMLButtonElement,
   ) => void
+  onOpenNote?: (noteId: string) => void
 }
 
 type SentenceCitations = {
@@ -174,6 +181,9 @@ function AssistantMessage({
   statusPollingExhausted,
   onRefreshStatus,
   newAttemptDisabled,
+  noteSaveState,
+  onSaveToNotes,
+  onOpenNote,
 }: {
   message: ChatMessage
   onStartNewAttempt: (message: ChatMessage) => void
@@ -184,6 +194,9 @@ function AssistantMessage({
   statusPollingExhausted: boolean
   onRefreshStatus: () => void
   newAttemptDisabled: boolean
+  noteSaveState: NotebookNoteSaveState
+  onSaveToNotes: (message: ChatMessage) => void
+  onOpenNote?: (noteId: string) => void
 }) {
   if (message.status === 'generating') {
     if (statusPollingExhausted) {
@@ -255,6 +268,10 @@ function AssistantMessage({
   }
 
   const sentences = sentenceCitations(message)
+  const canSaveToNotes =
+    message.status === 'complete' &&
+    message.answer_status === 'answered' &&
+    message.citations.length > 0
   return (
     <div className="chat-message assistant">
       <div className="chat-message-label">
@@ -287,6 +304,51 @@ function AssistantMessage({
       ) : (
         <p>{message.content}</p>
       )}
+      {canSaveToNotes && (
+        <div className="chat-message-note-actions">
+          {noteSaveState.status === 'saved' ? (
+            <>
+              <span role="status">
+                <Check aria-hidden="true" size={14} />
+                Saved to notes
+              </span>
+              {onOpenNote && (
+                <button
+                  type="button"
+                  onClick={() => onOpenNote(noteSaveState.noteId)}
+                >
+                  Open note
+                  <ArrowUpRight aria-hidden="true" size={14} />
+                </button>
+              )}
+            </>
+          ) : (
+            <button
+              type="button"
+              disabled={noteSaveState.status === 'pending'}
+              onClick={() => onSaveToNotes(message)}
+            >
+              {noteSaveState.status === 'pending' ? (
+                <LoaderCircle
+                  aria-hidden="true"
+                  className="chat-icon-spin"
+                  size={14}
+                />
+              ) : (
+                <NotebookPen aria-hidden="true" size={14} />
+              )}
+              {noteSaveState.status === 'pending'
+                ? 'Saving to notes'
+                : noteSaveState.status === 'error'
+                  ? 'Retry save to notes'
+                  : 'Save to notes'}
+            </button>
+          )}
+          {noteSaveState.status === 'error' && (
+            <small role="alert">{noteSaveState.message}</small>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -301,6 +363,7 @@ export function ChatPanel({
   initialConversationId = null,
   onConversationChange,
   onOpenCitation,
+  onOpenNote,
 }: ChatPanelProps) {
   const chat = useChat({
     apiBaseUrl,
@@ -309,14 +372,62 @@ export function ChatPanel({
     initialConversationId,
     onConversationChange,
   })
-  const [draft, setDraft] = useState('')
+  const canLeaveCurrentDraft = useInternalNavigationGuard()
+  const composerScope = `${courseId ?? 'none'}:${
+    chat.activeConversationId ?? 'new'
+  }`
+  const composerScopeRef = useRef(composerScope)
+  composerScopeRef.current = composerScope
+  const [draftsByScope, setDraftsByScope] = useState<
+    Record<string, string>
+  >({})
+  const draft = draftsByScope[composerScope] ?? ''
+  const setDraftForScope = useCallback(
+    (scope: string, content: string) => {
+      setDraftsByScope((current) => {
+        if ((current[scope] ?? '') === content) return current
+        return { ...current, [scope]: content }
+      })
+    },
+    [],
+  )
+  const setDraft = useCallback(
+    (content: string) => {
+      setDraftForScope(composerScopeRef.current, content)
+    },
+    [setDraftForScope],
+  )
   const [isSourcePickerOpen, setIsSourcePickerOpen] = useState(!compact)
+  const [noteSaveStates, setNoteSaveStates] = useState<
+    Record<string, NotebookNoteSaveState>
+  >({})
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const noteSaveEpochRef = useRef(0)
+  const noteSaveOperationsRef = useRef<Record<string, number>>({})
+  const noteSaveControllersRef = useRef<
+    Map<string, AbortController>
+  >(new Map())
 
   useEffect(() => {
-    setDraft('')
     setIsSourcePickerOpen(!compact)
   }, [compact, courseId])
+
+  useEffect(() => {
+    const controllers = noteSaveControllersRef.current
+    noteSaveEpochRef.current += 1
+    for (const controller of controllers.values()) {
+      controller.abort()
+    }
+    controllers.clear()
+    noteSaveOperationsRef.current = {}
+    setNoteSaveStates({})
+    return () => {
+      for (const controller of controllers.values()) {
+        controller.abort()
+      }
+      controllers.clear()
+    }
+  }, [courseId])
 
   const chatDraft = useAutosavedDraft({
     apiBaseUrl,
@@ -329,7 +440,8 @@ export function ChatPanel({
     enabled: Boolean(courseId),
     value: { content: draft },
     initialValue: { content: '' },
-    onRestore: (payload) => setDraft(payload.content),
+    onRestore: (payload) =>
+      setDraftForScope(composerScope, payload.content),
   })
 
   const messages = chat.conversation?.messages ?? []
@@ -348,7 +460,8 @@ export function ChatPanel({
     Boolean(draft.trim()) &&
     chat.selectedReadySourceCount > 0 &&
     !hasGeneratingMessage &&
-    !isBusy
+    !isBusy &&
+    chatDraft.recoveryConflict === null
   const isSourceSelectionBusy = isBusy || hasGeneratingMessage
 
   useEffect(() => {
@@ -365,13 +478,109 @@ export function ChatPanel({
 
   async function submitMessage(content = draft): Promise<void> {
     const question = content.trim()
-    if (!question) return
-    setDraft('')
-    const sent = await chat.sendMessage(question)
-    if (sent) {
+    if (!question || !courseId) return
+    const submittedScope = composerScope
+    const submittedCourseId = courseId
+    const result = await chat.sendMessage(question)
+    const resolvedScope = result.conversationId
+      ? `${submittedCourseId}:${result.conversationId}`
+      : submittedScope
+    if (result.succeeded) {
+      setDraftForScope(submittedScope, '')
+      if (resolvedScope !== submittedScope) {
+        setDraftForScope(resolvedScope, '')
+      }
       await chatDraft.clearDraft()
     } else {
-      setDraft(question)
+      setDraftForScope(submittedScope, question)
+      if (resolvedScope !== submittedScope) {
+        setDraftForScope(resolvedScope, question)
+      }
+    }
+  }
+
+  async function saveAnswerToNotes(
+    message: ChatMessage,
+  ): Promise<void> {
+    if (
+      !courseId ||
+      message.role !== 'assistant' ||
+      message.status !== 'complete' ||
+      message.answer_status !== 'answered' ||
+      message.citations.length === 0
+    ) {
+      return
+    }
+
+    noteSaveControllersRef.current.get(message.id)?.abort()
+    const controller = new AbortController()
+    noteSaveControllersRef.current.set(message.id, controller)
+    const courseEpoch = noteSaveEpochRef.current
+    const operation =
+      (noteSaveOperationsRef.current[message.id] ?? 0) + 1
+    noteSaveOperationsRef.current[message.id] = operation
+    setNoteSaveStates((current) => ({
+      ...current,
+      [message.id]: { status: 'pending' },
+    }))
+
+    try {
+      const saved = await saveChatAnswerAsNote(
+        apiBaseUrl,
+        courseId,
+        message.id,
+        undefined,
+        controller.signal,
+      )
+      if (
+        controller.signal.aborted ||
+        courseEpoch !== noteSaveEpochRef.current ||
+        noteSaveOperationsRef.current[message.id] !== operation
+      ) {
+        return
+      }
+      if (
+        saved.course_id !== courseId ||
+        saved.origin_type !== 'chat_answer' ||
+        saved.origin_snapshot.origin_type !== 'chat_answer' ||
+        saved.origin_snapshot.message_id !== message.id
+      ) {
+        throw new Error(
+          'The server returned a note outside the active Chat message scope.',
+        )
+      }
+      setNoteSaveStates((current) => ({
+        ...current,
+        [message.id]: {
+          status: 'saved',
+          noteId: saved.id,
+        },
+      }))
+    } catch (requestError: unknown) {
+      if (
+        isAbortError(requestError) ||
+        controller.signal.aborted ||
+        courseEpoch !== noteSaveEpochRef.current ||
+        noteSaveOperationsRef.current[message.id] !== operation
+      ) {
+        return
+      }
+      setNoteSaveStates((current) => ({
+        ...current,
+        [message.id]: {
+          status: 'error',
+          message:
+            requestError instanceof Error
+              ? requestError.message
+              : 'Could not save this answer to notes.',
+        },
+      }))
+    } finally {
+      if (
+        noteSaveControllersRef.current.get(message.id) === controller
+      ) {
+        noteSaveControllersRef.current.delete(message.id)
+      }
     }
   }
 
@@ -392,7 +601,7 @@ export function ChatPanel({
     >
       <aside className="chat-conversation-rail">
         <div className="chat-rail-heading">
-          <div>
+          <div className="chat-composer-input">
             <span>Chat history</span>
             <strong>{chat.conversations.length}</strong>
           </div>
@@ -417,7 +626,11 @@ export function ChatPanel({
               aria-label="New conversation"
               title="New conversation"
               disabled={isBusy}
-              onClick={() => void chat.createConversation()}
+              onClick={() => {
+                if (canLeaveCurrentDraft()) {
+                  void chat.createConversation()
+                }
+              }}
             >
               <Plus aria-hidden="true" size={16} />
             </button>
@@ -438,7 +651,14 @@ export function ChatPanel({
                   ? 'true'
                   : undefined
               }
-              onClick={() => chat.selectConversation(item.id)}
+              onClick={() => {
+                if (
+                  item.id === chat.activeConversationId ||
+                  canLeaveCurrentDraft()
+                ) {
+                  chat.selectConversation(item.id)
+                }
+              }}
             >
               <span>{item.title}</span>
               <small>
@@ -624,6 +844,13 @@ export function ChatPanel({
                   }
                   onRefreshStatus={chat.refreshConversation}
                   newAttemptDisabled={isBusy || hasGeneratingMessage}
+                  noteSaveState={
+                    noteSaveStates[message.id] ?? { status: 'idle' }
+                  }
+                  onSaveToNotes={(answer) =>
+                    void saveAnswerToNotes(answer)
+                  }
+                  onOpenNote={onOpenNote}
                 />
               ),
             )
@@ -694,6 +921,28 @@ export function ChatPanel({
             state={chatDraft.state}
             message={chatDraft.message}
           />
+          {chatDraft.recoveryConflict && (
+            <div className="chat-draft-conflict" role="alert">
+              <div>
+                <strong>Another saved draft is available</strong>
+                <span>
+                  Choose which version to keep before continuing.
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={chatDraft.restoreRecoveryDraft}
+              >
+                Restore saved draft
+              </button>
+              <button
+                type="button"
+                onClick={() => void chatDraft.discardRecoveryDraft()}
+              >
+                Keep current draft
+              </button>
+            </div>
+          )}
           {chat.selectedReadySourceCount === 0 && (
             <div className="chat-source-warning">
               Select at least one ready source before asking a question.
@@ -708,7 +957,9 @@ export function ChatPanel({
               rows={3}
               value={draft}
               maxLength={8000}
-              readOnly={isBusy}
+              readOnly={
+                isBusy || chatDraft.recoveryConflict !== null
+              }
               aria-busy={chat.isSending}
               placeholder="Ask a question grounded in your sources…"
               onChange={(event) => setDraft(event.target.value)}

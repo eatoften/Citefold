@@ -12,7 +12,7 @@ from .source_asset import SourceAssetType
 
 SOURCE_SCHEMA_VERSION = 1
 
-SourceOriginType = Literal["video_job", "source_asset"]
+SourceOriginType = Literal["video_job", "source_asset", "notebook_note"]
 SourceContentStatus = Literal["pending", "processing", "ready", "failed"]
 SourceIndexStatus = Literal[
     "not_indexed",
@@ -21,7 +21,11 @@ SourceIndexStatus = Literal[
     "stale",
     "failed",
 ]
-SourceChunkOriginType = Literal["transcript_chunk", "source_unit"]
+SourceChunkOriginType = Literal[
+    "transcript_chunk",
+    "source_unit",
+    "notebook_note_snapshot",
+]
 SourceChunkType = Literal[
     "transcript",
     "slide",
@@ -87,12 +91,22 @@ class TextSectionLocator(BaseModel):
     metadata: dict[str, object] = Field(default_factory=dict)
 
 
+class NotebookNoteSectionLocator(BaseModel):
+    schema_version: Literal[1] = SOURCE_SCHEMA_VERSION
+    kind: Literal["note_section"] = "note_section"
+    note_id: str = Field(min_length=1)
+    snapshot_id: str = Field(min_length=1)
+    section_number: int = Field(ge=1)
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
 SourceLocator = Annotated[
     VideoTimeLocator
     | PdfPageLocator
     | PptSlideLocator
     | DocxParagraphLocator
-    | TextSectionLocator,
+    | TextSectionLocator
+    | NotebookNoteSectionLocator,
     Field(discriminator="kind"),
 ]
 
@@ -204,6 +218,10 @@ def source_id_for_job(job_id: str) -> str:
 
 def source_id_for_asset(asset_id: str) -> str:
     return f"asset:{asset_id}"
+
+
+def source_id_for_note(note_id: str) -> str:
+    return f"note:{note_id}"
 
 
 def source_chunk_id(

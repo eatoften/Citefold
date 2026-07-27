@@ -33,6 +33,7 @@ import {
   retryReliableTask,
   SaveStatus,
   useAutosavedDraft,
+  useInternalNavigationGuard,
   waitForReliableTask,
   type ReliableTask,
 } from './features/reliability'
@@ -72,7 +73,7 @@ type StudyViewProps = {
     documentId: string | null,
     cardId: string | null,
     mode: 'push' | 'replace',
-  ) => void
+  ) => boolean | void
 }
 
 
@@ -133,6 +134,7 @@ export function StudyView({
   onManageSources,
   onDocumentRouteChange,
 }: StudyViewProps) {
+  const canLeaveCurrentDraft = useInternalNavigationGuard()
   const [cards, setCards] = useState<StudyCard[]>([])
   const [documents, setDocuments] = useState<LearningDocument[]>([])
   const [assets, setAssets] = useState<SourceAsset[]>([])
@@ -539,6 +541,7 @@ export function StudyView({
   async function createDocument() {
     const courseId = selectedCourseId
     if (!courseId || !selectedCardId) return
+    if (!canLeaveCurrentDraft()) return
     setIsSaving(true)
     setError(null)
     try {
@@ -557,14 +560,21 @@ export function StudyView({
       ) {
         return
       }
-      setSelectedDocumentId(created.id)
-      setMode('edit')
-      setMessage('Study document created.')
-      onDocumentRouteChangeRef.current?.(
+      const routed = onDocumentRouteChangeRef.current?.(
         created.id,
         selectedCardId,
         'push',
       )
+      if (routed === false) {
+        setMessage(
+          'Study document created, but the current view stayed open.',
+        )
+        await loadLibrary()
+        return
+      }
+      setSelectedDocumentId(created.id)
+      setMode('edit')
+      setMessage('Study document created.')
       await loadLibrary()
       if (activeCourseIdRef.current === courseId) {
         setSelectedDocumentId(created.id)
@@ -578,6 +588,30 @@ export function StudyView({
         setIsSaving(false)
       }
     }
+  }
+
+  function selectAnchorCard(cardId: string): void {
+    if (cardId === selectedCardId) return
+    if (!canLeaveCurrentDraft()) return
+    const routed = onDocumentRouteChangeRef.current?.(
+      selectedDocumentId || null,
+      cardId || null,
+      'push',
+    )
+    if (routed === false) return
+    setSelectedCardId(cardId)
+  }
+
+  function selectDocument(documentId: string): void {
+    if (documentId === selectedDocumentId) return
+    if (!canLeaveCurrentDraft()) return
+    const routed = onDocumentRouteChangeRef.current?.(
+      documentId,
+      selectedCardId || null,
+      'push',
+    )
+    if (routed === false) return
+    setSelectedDocumentId(documentId)
   }
 
   async function saveDocument() {
@@ -961,15 +995,9 @@ export function StudyView({
           <span>Anchor card</span>
           <select
             value={selectedCardId}
-            onChange={(event) => {
-              const cardId = event.target.value
-              setSelectedCardId(cardId)
-              onDocumentRouteChangeRef.current?.(
-                selectedDocumentId || null,
-                cardId || null,
-                'push',
-              )
-            }}
+            onChange={(event) =>
+              selectAnchorCard(event.target.value)
+            }
           >
             {scopedCards.map((card) => (
               <option key={card.id} value={card.id}>{card.title}</option>
@@ -1011,14 +1039,7 @@ export function StudyView({
                   type="button"
                   key={item.id}
                   className={item.id === selectedDocumentId ? 'selected' : ''}
-                  onClick={() => {
-                    setSelectedDocumentId(item.id)
-                    onDocumentRouteChangeRef.current?.(
-                      item.id,
-                      selectedCardId || null,
-                      'push',
-                    )
-                  }}
+                  onClick={() => selectDocument(item.id)}
                 >
                   <strong>{item.title}</strong>
                   <span>{item.summary || 'No summary'}</span>

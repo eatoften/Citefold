@@ -5,6 +5,7 @@ export type TrashEntityType =
   | 'knowledge_card'
   | 'learning_document'
   | 'chat_conversation'
+  | 'notebook_note'
 
 export type TrashItem = {
   id: string

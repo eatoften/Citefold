@@ -52,6 +52,11 @@ export type ChatPanelError = {
   retry: RetryIntent
 }
 
+export type ChatSendResult = {
+  succeeded: boolean
+  conversationId: string | null
+}
+
 type UseChatOptions = {
   apiBaseUrl: string
   courseId: string | null
@@ -84,7 +89,7 @@ export type UseChatResult = {
   toggleSource: (sourceId: string) => Promise<void>
   selectAllReadySources: () => Promise<void>
   clearSelectedSources: () => Promise<void>
-  sendMessage: (content: string) => Promise<boolean>
+  sendMessage: (content: string) => Promise<ChatSendResult>
   startNewAttemptForMessage: (message: ChatMessage) => Promise<boolean>
   retryLastRequest: () => Promise<boolean>
   cancelGeneration: () => Promise<void>
@@ -912,8 +917,9 @@ export function useChat({
     async (
       rawContent: string,
       retryAttempt?: SendAttemptSnapshot,
-    ): Promise<boolean> => {
+    ): Promise<ChatSendResult> => {
       const content = rawContent.trim()
+      const initialConversationId = activeConversationIdRef.current
       if (
         !courseId ||
         workspaceCourseId !== courseId ||
@@ -922,7 +928,10 @@ export function useChat({
         isSending ||
         isUpdatingSources
       ) {
-        return false
+        return {
+          succeeded: false,
+          conversationId: initialConversationId,
+        }
       }
       const readySourceIds = new Set(
         sources
@@ -945,7 +954,10 @@ export function useChat({
             'Select at least one enabled, ready source before sending.',
           retry: { kind: 'workspace' },
         })
-        return false
+        return {
+          succeeded: false,
+          conversationId: initialConversationId,
+        }
       }
 
       const epoch = epochRef.current
@@ -973,7 +985,9 @@ export function useChat({
             { source_ids: sourceSnapshot },
             controller.signal,
           )
-          if (!isCurrentEpoch(epoch)) return false
+          if (!isCurrentEpoch(epoch)) {
+            return { succeeded: false, conversationId: created.id }
+          }
           conversationId = created.id
           setConversations((current) =>
             upsertConversation(current, created),
@@ -1006,15 +1020,16 @@ export function useChat({
             task as ReliableTask<ChatGenerationTaskResult>,
           )
         }
-        return await waitForMessageTask(
+        const succeeded = await waitForMessageTask(
           task.id,
           conversationId,
           controller,
           epoch,
         )
+        return { succeeded, conversationId }
       } catch (requestError: unknown) {
         if (isAbortError(requestError) || !isCurrentEpoch(epoch)) {
-          return false
+          return { succeeded: false, conversationId }
         }
         const retry: RetryIntent = !didStartMessageRequest
           ? { kind: 'create' }
@@ -1042,7 +1057,7 @@ export function useChat({
         if (conversationId) {
           setConversationReloadKey((value) => value + 1)
         }
-        return false
+        return { succeeded: false, conversationId }
       } finally {
         finishRequest(controller)
         if (isCurrentEpoch(epoch)) {
@@ -1083,7 +1098,9 @@ export function useChat({
             candidate.turn_id === message.turn_id),
       )
       return userMessage
-        ? sendMessage(userMessage.content)
+        ? (
+            await sendMessage(userMessage.content)
+          ).succeeded
         : false
     },
     [sendMessage],
@@ -1106,11 +1123,13 @@ export function useChat({
         await saveSourceSelection(retry.sourceIds)
         return true
       case 'send':
-        return sendMessage(retry.content, {
-          clientRequestId: retry.clientRequestId,
-          sourceIds: retry.sourceIds,
-          model: retry.model,
-        })
+        return (
+          await sendMessage(retry.content, {
+            clientRequestId: retry.clientRequestId,
+            sourceIds: retry.sourceIds,
+            model: retry.model,
+          })
+        ).succeeded
       case 'message-task': {
         if (
           activeConversationIdRef.current !== retry.conversationId

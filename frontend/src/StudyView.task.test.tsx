@@ -19,6 +19,7 @@ const taskApi = vi.hoisted(() => ({
   retryReliableTask: vi.fn(),
   cancelReliableTask: vi.fn(),
   clearDraft: vi.fn(),
+  useInternalNavigationGuard: vi.fn(),
 }))
 
 vi.mock('./features/reliability', () => ({
@@ -28,6 +29,8 @@ vi.mock('./features/reliability', () => ({
     message: 'Saved',
     clearDraft: taskApi.clearDraft,
   }),
+  useInternalNavigationGuard:
+    taskApi.useInternalNavigationGuard,
   enqueueLearningDocumentGeneration:
     taskApi.enqueueLearningDocumentGeneration,
   waitForReliableTask: taskApi.waitForReliableTask,
@@ -148,6 +151,7 @@ describe('StudyView durable generation tasks', () => {
     generationFinished = false
     taskApi.enqueueLearningDocumentGeneration.mockResolvedValue(task())
     taskApi.retryReliableTask.mockResolvedValue(task({ attempt: 2 }))
+    taskApi.useInternalNavigationGuard.mockReturnValue(() => true)
 
     vi.stubGlobal(
       'fetch',
@@ -177,7 +181,13 @@ describe('StudyView durable generation tasks', () => {
     )
   })
 
-  function renderStudy() {
+  function renderStudy(
+    onDocumentRouteChange?: (
+      documentId: string | null,
+      cardId: string | null,
+      mode: 'push' | 'replace',
+    ) => boolean | void,
+  ) {
     return render(
       <StudyView
         apiBaseUrl="http://api.test"
@@ -190,6 +200,7 @@ describe('StudyView durable generation tasks', () => {
         initialCardId={card.id}
         initialDocumentId="document-1"
         onSelectCourse={vi.fn()}
+        onDocumentRouteChange={onDocumentRouteChange}
       />,
     )
   }
@@ -388,5 +399,164 @@ describe('StudyView durable generation tasks', () => {
     expect(
       screen.queryByText('Stale first-document cancellation'),
     ).not.toBeInTheDocument()
+  })
+
+  it('keeps the current document open when leaving its draft is rejected', async () => {
+    const user = userEvent.setup()
+    const firstDocument = documentDetail()
+    const secondDocument = documentDetail({
+      id: 'document-2',
+      title: 'Second protected document',
+      body_markdown: 'Second protected body',
+      card_links: [
+        {
+          id: 'link-2',
+          document_id: 'document-2',
+          card_id: card.id,
+          role: 'primary_anchor',
+          position: 0,
+          created_at: TIMESTAMP,
+        },
+      ],
+    })
+    const stay = vi.fn().mockReturnValue(false)
+    const onDocumentRouteChange = vi.fn()
+    taskApi.useInternalNavigationGuard.mockReturnValue(stay)
+    const fetchMock = vi.fn(
+      (input: RequestInfo | URL): Promise<Response> => {
+        const url = String(input)
+        let payload: unknown
+        if (url.endsWith('/courses/course-1/card-index')) {
+          payload = [card]
+        } else if (
+          url.endsWith('/courses/course-1/learning-documents')
+        ) {
+          payload = [firstDocument, secondDocument]
+        } else if (
+          url.endsWith('/courses/course-1/source-assets')
+        ) {
+          payload = []
+        } else if (
+          url.endsWith('/learning-documents/document-1')
+        ) {
+          payload = firstDocument
+        } else if (
+          url.endsWith('/learning-documents/document-2')
+        ) {
+          payload = secondDocument
+        } else {
+          throw new Error(`Unexpected Study request: ${url}`)
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(payload), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    renderStudy(onDocumentRouteChange)
+
+    expect(await screen.findByText('Initial body')).toBeVisible()
+    onDocumentRouteChange.mockClear()
+    await user.click(
+      screen.getByRole('button', {
+        name: /Second protected document/,
+      }),
+    )
+
+    expect(stay).toHaveBeenCalledTimes(1)
+    expect(onDocumentRouteChange).not.toHaveBeenCalled()
+    expect(screen.getByText('Initial body')).toBeVisible()
+    expect(screen.queryByText('Second protected body')).not.toBeInTheDocument()
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).endsWith(
+          '/learning-documents/document-2',
+        ),
+      ),
+    ).toBe(false)
+  })
+
+  it('rejects anchor and new-document transitions before changing state or creating data', async () => {
+    const user = userEvent.setup()
+    const firstDocument = documentDetail()
+    const secondCard: StudyCard = {
+      ...card,
+      id: 'card-2',
+      job_id: 'job-2',
+      title: 'Reranking',
+      summary: 'Reranking summary',
+    }
+    const stay = vi.fn().mockReturnValue(false)
+    const onDocumentRouteChange = vi.fn()
+    taskApi.useInternalNavigationGuard.mockReturnValue(stay)
+    const fetchMock = vi.fn(
+      (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ): Promise<Response> => {
+        const url = String(input)
+        let payload: unknown
+        if (url.endsWith('/courses/course-1/card-index')) {
+          payload = [card, secondCard]
+        } else if (
+          url.endsWith('/courses/course-1/learning-documents')
+        ) {
+          payload = [firstDocument]
+        } else if (
+          url.endsWith('/courses/course-1/source-assets')
+        ) {
+          payload = []
+        } else if (
+          url.endsWith('/learning-documents/document-1')
+        ) {
+          payload = firstDocument
+        } else if (
+          url.endsWith('/cards/card-1/learning-documents') &&
+          init?.method === 'POST'
+        ) {
+          throw new Error(
+            'The guarded create request must not be sent.',
+          )
+        } else {
+          throw new Error(`Unexpected Study request: ${url}`)
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify(payload), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        )
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    renderStudy(onDocumentRouteChange)
+
+    expect(await screen.findByText('Initial body')).toBeVisible()
+    onDocumentRouteChange.mockClear()
+    const anchorSelect = screen.getByLabelText('Anchor card')
+    await user.selectOptions(anchorSelect, secondCard.id)
+
+    expect(stay).toHaveBeenCalledTimes(1)
+    expect(anchorSelect).toHaveValue(card.id)
+    expect(onDocumentRouteChange).not.toHaveBeenCalled()
+
+    await user.click(
+      screen.getByRole('button', { name: 'New document' }),
+    )
+
+    expect(stay).toHaveBeenCalledTimes(2)
+    expect(onDocumentRouteChange).not.toHaveBeenCalled()
+    expect(screen.getByText('Initial body')).toBeVisible()
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input).endsWith(
+            '/cards/card-1/learning-documents',
+          ) && init?.method === 'POST',
+      ),
+    ).toBe(false)
   })
 })

@@ -147,6 +147,7 @@ const ENTITY_LABELS: Record<TrashItem['entity_type'], string> = {
   knowledge_card: 'Card',
   learning_document: 'Studio document',
   chat_conversation: 'Conversation',
+  notebook_note: 'Note',
 }
 
 function readableDate(value: string | null): string {

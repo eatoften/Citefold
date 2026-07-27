@@ -7,6 +7,7 @@ from app.chat_store import clear_chat
 from app.job_store import clear_jobs
 from app.knowledge_card_store import clear_cards
 from app.knowledge_card_note_store import clear_notes
+from app.notebook_note_store import clear_notebook_notes
 from app.transcript_chunk_store import clear_chunks
 from app.topic_store import clear_topics
 from app.learning_document_store import clear_learning_documents
@@ -39,6 +40,7 @@ def isolated_job_db(tmp_path_factory):
     clear_card_relations()
     clear_chat()
     clear_notes()
+    clear_notebook_notes()
     clear_runs()
     clear_cards()
     clear_learning_documents()
@@ -55,6 +57,7 @@ def isolated_job_db(tmp_path_factory):
     clear_card_relations()
     clear_chat()
     clear_notes()
+    clear_notebook_notes()
     clear_runs()
     clear_cards()
     clear_learning_documents()
