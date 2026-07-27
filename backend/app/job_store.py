@@ -72,7 +72,11 @@ def _row_to_job(row: Row) -> VideoJob:
     )
 
 
-def create_job(job: VideoJob) -> None:
+def create_job(
+    job: VideoJob,
+    *,
+    video_sha256: str | None = None,
+) -> None:
     ensure_db()
 
     with connect() as conn:
@@ -92,8 +96,9 @@ def create_job(job: VideoJob) -> None:
                 created_at,
                 updated_at,
                 started_at,
-                completed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                completed_at,
+                video_sha256
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job.id,
@@ -110,6 +115,7 @@ def create_job(job: VideoJob) -> None:
                 _datetime_to_text(job.updated_at),
                 _datetime_to_text(job.started_at),
                 _datetime_to_text(job.completed_at),
+                video_sha256,
             ),
         )
 
@@ -127,6 +133,64 @@ def get_job(job_id: str) -> VideoJob | None:
         return None
 
     return _row_to_job(row)
+
+
+def get_job_video_sha256(job_id: str) -> str | None:
+    ensure_db()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT video_sha256 FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    if row is None or row["video_sha256"] is None:
+        return None
+    value = str(row["video_sha256"]).strip().lower()
+    return value or None
+
+
+def list_jobs_missing_video_sha256() -> list[VideoJob]:
+    """Return legacy jobs that still lack a persisted upload fingerprint."""
+
+    ensure_db()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM jobs
+            WHERE video_sha256 IS NULL OR trim(video_sha256) = ''
+            ORDER BY created_at ASC, id ASC
+            """
+        ).fetchall()
+    return [_row_to_job(row) for row in rows]
+
+
+def set_job_video_sha256_if_missing(
+    job_id: str,
+    sha256: str,
+) -> str | None:
+    """Persist a legacy fingerprint once without replacing an existing value."""
+
+    ensure_db()
+    normalized = sha256.strip().lower()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            UPDATE jobs
+            SET video_sha256 = ?
+            WHERE id = ?
+              AND (video_sha256 IS NULL OR trim(video_sha256) = '')
+            """,
+            (normalized, job_id),
+        )
+        row = conn.execute(
+            "SELECT video_sha256 FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+    if row is None or row["video_sha256"] is None:
+        return None
+    value = str(row["video_sha256"]).strip().lower()
+    return value or None
 
 
 def list_jobs() -> list[VideoJob]:

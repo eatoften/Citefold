@@ -1,5 +1,6 @@
 import {
   AlertCircle,
+  ArrowUpRight,
   BookOpenText,
   Check,
   ChevronDown,
@@ -20,7 +21,8 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { CourseSource, SourceLocator } from '../sources/sourceTypes'
+import { formatSourceLocator } from '../citations/citationFormat'
+import type { CourseSource } from '../sources/sourceTypes'
 import type { ChatCitation, ChatMessage } from './chatTypes'
 import { useChat } from './useChat'
 import './ChatPanel.css'
@@ -38,7 +40,10 @@ export type ChatPanelProps = {
   model?: string | null
   compact?: boolean
   recommendedQuestions?: readonly string[]
-  onOpenCitation?: (citation: ChatCitation) => void
+  onOpenCitation?: (
+    citation: ChatCitation,
+    trigger: HTMLButtonElement,
+  ) => void
 }
 
 type SentenceCitations = {
@@ -47,31 +52,6 @@ type SentenceCitations = {
   endOffset: number
   text: string
   citations: ChatCitation[]
-}
-
-function formatTime(seconds: number): string {
-  const wholeSeconds = Math.max(0, Math.floor(seconds))
-  const minutes = Math.floor(wholeSeconds / 60)
-  const remainder = String(wholeSeconds % 60).padStart(2, '0')
-  return `${minutes}:${remainder}`
-}
-
-function formatCitationLocator(locator: SourceLocator): string {
-  switch (locator.kind) {
-    case 'video_time': {
-      const start = formatTime(locator.start_seconds)
-      const end = formatTime(locator.end_seconds)
-      return start === end ? start : `${start}–${end}`
-    }
-    case 'pdf_page':
-      return `Page ${locator.page_number}`
-    case 'ppt_slide':
-      return `Slide ${locator.slide_number}`
-    case 'docx_paragraph':
-      return `Paragraph ${locator.paragraph_number}`
-    case 'text_section':
-      return `Section ${locator.section_number}`
-  }
 }
 
 function sourceIcon(source: CourseSource) {
@@ -154,33 +134,27 @@ function CitationDetails({
   onOpenCitation,
 }: {
   citation: ChatCitation
-  onOpenCitation?: (citation: ChatCitation) => void
+  onOpenCitation?: (
+    citation: ChatCitation,
+    trigger: HTMLButtonElement,
+  ) => void
 }) {
   return (
-    <details className="chat-citation">
-      <summary>
-        <span>[{citation.ordinal}]</span>
-        <span>{citation.source_title}</span>
-        <small>{formatCitationLocator(citation.locator)}</small>
-        <ChevronDown aria-hidden="true" size={13} />
-      </summary>
-      <div className="chat-citation-detail">
-        <blockquote>{citation.quote}</blockquote>
-        <div>
-          <span>{citation.source_type.toUpperCase()}</span>
-          <span>{formatCitationLocator(citation.locator)}</span>
-          <span>{Math.round(citation.score * 100)}% match</span>
-        </div>
-        {onOpenCitation && (
-          <button
-            type="button"
-            onClick={() => onOpenCitation(citation)}
-          >
-            Open source
-          </button>
-        )}
-      </div>
-    </details>
+    <button
+      type="button"
+      className="chat-citation"
+      disabled={!onOpenCitation}
+      aria-label={`Open source ${citation.ordinal}: ${citation.source_title}, ${formatSourceLocator(citation.locator)}`}
+      title="Open the exact source location"
+      onClick={(event) =>
+        onOpenCitation?.(citation, event.currentTarget)
+      }
+    >
+      <span>[{citation.ordinal}]</span>
+      <span>{citation.source_title}</span>
+      <small>{formatSourceLocator(citation.locator)}</small>
+      <ArrowUpRight aria-hidden="true" size={13} />
+    </button>
   )
 }
 
@@ -194,7 +168,10 @@ function AssistantMessage({
 }: {
   message: ChatMessage
   onStartNewAttempt: (message: ChatMessage) => void
-  onOpenCitation?: (citation: ChatCitation) => void
+  onOpenCitation?: (
+    citation: ChatCitation,
+    trigger: HTMLButtonElement,
+  ) => void
   statusPollingExhausted: boolean
   onRefreshStatus: () => void
   newAttemptDisabled: boolean

@@ -39,8 +39,8 @@ commit, and remote push are all complete.
 | P0.0 Product contract | One product direction, acceptance gates, and engineering journal | Complete |
 | P0.1 Unified Sources | Videos and local documents expose one Source/Chunk/Locator contract and index | Complete |
 | P0.2 Grounded Chat | Persistent multi-turn answers with abstention and source-scoped retrieval | Complete |
-| P0.3 Verifiable citations | Sentence-level citations open the exact video time or document location | In progress |
-| P0.4 Source-first workspace | A course opens as Sources / Chat / Studio, with advanced tools secondary | Planned |
+| P0.3 Verifiable citations | Sentence-level citations open the exact video time or document location | Complete |
+| P0.4 Source-first workspace | A course opens as Sources / Chat / Studio, with advanced tools secondary | In progress |
 | P0.5 Reliability | Autosave, recoverable tasks, backup/restore, safe desktop lifecycle | Planned |
 | P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Planned |
 | P1.2 Studio | Study, Review, and Course Map become a coherent output library | Planned |
@@ -414,9 +414,9 @@ POST /topics/{topic_id}/accept
 ## Milestone 32: Card-Based Grounded RAG (Superseded)
 
 This deferred card-only plan has been superseded by productization stages
-P0.1-P0.3. P0.1 and P0.2 now provide unified original Sources and durable
-grounded Chat; P0.3 is connecting each stored citation to its exact original
-location. The old dense-retrieval endpoint remains compatible:
+P0.1-P0.3. Unified original Sources, durable grounded Chat, and exact
+server-authoritative citation navigation are now complete. The old
+dense-retrieval endpoint remains compatible:
 
 ```text
 question

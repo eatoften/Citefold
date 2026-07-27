@@ -1,3 +1,5 @@
+import hashlib
+
 from fastapi.testclient import TestClient
 
 import app.main as main
@@ -6,7 +8,7 @@ from app.job import (
     VideoJob,
     VideoJobStatus,
 )
-from app.job_store import create_job, get_job
+from app.job_store import create_job, get_job, get_job_video_sha256
 
 
 client = TestClient(main.app)
@@ -69,6 +71,9 @@ def test_upload_video_creates_job(monkeypatch, tmp_path):
     assert job.metadata is None
     assert job.created_at is not None
     assert job.updated_at is not None
+    assert get_job_video_sha256(job.id) == hashlib.sha256(
+        video_content
+    ).hexdigest()
 
 
 

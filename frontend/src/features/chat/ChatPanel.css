@@ -230,8 +230,7 @@
   cursor: pointer;
 }
 
-.chat-source-picker > summary::-webkit-details-marker,
-.chat-citation > summary::-webkit-details-marker {
+.chat-source-picker > summary::-webkit-details-marker {
   display: none;
 }
 
@@ -248,13 +247,11 @@
   font-weight: 600;
 }
 
-.chat-source-picker[open] > summary svg:last-child,
-.chat-citation[open] > summary svg {
+.chat-source-picker[open] > summary svg:last-child {
   transform: rotate(180deg);
 }
 
-.chat-source-picker summary svg,
-.chat-citation summary svg {
+.chat-source-picker summary svg {
   transition: transform 150ms ease;
 }
 
@@ -559,25 +556,34 @@
 }
 
 .chat-citation {
-  max-width: 100%;
-  font-size: 11px;
-}
-
-.chat-citation > summary {
   display: inline-flex;
   max-width: 100%;
   align-items: center;
   gap: 5px;
+  height: auto;
+  min-height: 27px;
   padding: 4px 7px;
   color: var(--chat-accent);
   background: var(--chat-accent-soft);
   border: 1px solid #c6ddd3;
   border-radius: 999px;
-  list-style: none;
+  font-size: 11px;
   cursor: pointer;
 }
 
-.chat-citation > summary span:nth-child(2) {
+.chat-citation:hover,
+.chat-citation:focus-visible {
+  color: #1e5945;
+  background: #e2f0ea;
+  border-color: #8db6a5;
+}
+
+.chat-citation:disabled {
+  cursor: default;
+  opacity: 0.78;
+}
+
+.chat-citation span:nth-child(2) {
   max-width: 170px;
   overflow: hidden;
   font-weight: 700;
@@ -585,50 +591,8 @@
   white-space: nowrap;
 }
 
-.chat-citation > summary small {
+.chat-citation small {
   color: #637a70;
-}
-
-.chat-citation-detail {
-  width: min(440px, 72vw);
-  margin-top: 6px;
-  padding: 10px;
-  color: var(--chat-ink);
-  background: #f8faf9;
-  border: 1px solid var(--chat-border);
-  border-radius: 9px;
-}
-
-.chat-citation-detail blockquote {
-  margin: 0;
-  padding-left: 10px;
-  color: #43524b;
-  border-left: 2px solid #aac9bc;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.chat-citation-detail > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px 10px;
-  margin-top: 8px;
-  color: var(--chat-muted);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-}
-
-.chat-citation-detail button {
-  margin-top: 9px;
-  padding: 5px 8px;
-  color: var(--chat-accent);
-  background: #fff;
-  border: 1px solid #bdd2c9;
-  border-radius: 7px;
-  font-size: 10px;
-  font-weight: 700;
-  cursor: pointer;
 }
 
 .chat-welcome {
@@ -839,8 +803,7 @@
     animation-duration: 1800ms;
   }
 
-  .chat-source-picker summary svg,
-  .chat-citation summary svg {
+  .chat-source-picker summary svg {
     transition: none;
   }
 }

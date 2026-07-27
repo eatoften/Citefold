@@ -49,14 +49,16 @@ Implemented:
 - persistent multi-turn Chat with Source selection, bounded history,
   idempotent requests, explicit insufficient-evidence refusal, and durable
   sentence-level citation snapshots;
+- one-click verifiable citations that return to a video timestamp, PDF page,
+  slide, paragraph, or text section through a server-authoritative Source
+  inspector, while preserving the saved quotation when a local file changes;
 - timestamped knowledge cards, versioned Study documents, FSRS Review, Course
   Map, graph exploration, and local Markdown export;
 - recoverable SQLite schema migrations with validated pre-migration backups.
 
-The next product gates are clickable citations that open the exact video time,
-page, slide, or paragraph; a Sources / Chat / Studio information architecture;
-and durable task, backup/restore, Notes, and product-polish workflows. See the
-[active roadmap](docs/roadmap.md) and
+The next product gates are a Sources / Chat / Studio information architecture;
+durable task and backup/restore workflows; then Notes, Studio unification, and
+product polish. See the [active roadmap](docs/roadmap.md) and
 [append-only engineering log](docs/productization-log.md) for verified scope,
 tradeoffs, tests, and known limitations.
 

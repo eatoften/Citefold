@@ -696,7 +696,7 @@ def complete_turn(
                     citation.source_type,
                     citation.quote,
                     citation.score,
-                    citation.locator.model_dump_json(),
+                    _json_text(_locator_dict(citation.locator)),
                     _datetime_text(citation.created_at),
                 ),
             )
@@ -1125,6 +1125,10 @@ def _prepare_citations(
     chunks: set[str] = set()
     spans: set[tuple[str, int, int, int]] = set()
     for citation in citations:
+        if isinstance(citation.locator, dict):
+            raise ChatStoreIntegrityError(
+                "New citations require a supported canonical locator."
+            )
         if citation.message_id != assistant_message_id:
             raise ChatStoreIntegrityError(
                 "Citation belongs to a different assistant message."
@@ -1180,7 +1184,11 @@ def _citation_core(citation: ChatCitation) -> tuple[object, ...]:
         citation.source_type,
         citation.quote,
         citation.score,
-        citation.locator.model_dump_json(),
+        json.dumps(
+            _locator_dict(citation.locator),
+            ensure_ascii=False,
+            sort_keys=True,
+        ),
     )
 
 
@@ -1236,7 +1244,7 @@ def _validate_canonical_evidence(
             row["locator_json"],
             field="source chunk locator",
         )
-        if current_locator != citation.locator.model_dump(mode="json"):
+        if current_locator != _locator_dict(citation.locator):
             raise ChatEvidenceConflictError(
                 "Citation locator changed before the answer was saved."
             )
@@ -1562,6 +1570,18 @@ def _json_text(value: object) -> str:
         raise ChatStoreIntegrityError(
             "Chat data must be JSON serializable."
         ) from exc
+
+
+def _locator_dict(locator: object) -> dict[str, object]:
+    if isinstance(locator, dict):
+        return dict(locator)
+    model_dump = getattr(locator, "model_dump", None)
+    if not callable(model_dump):
+        raise ChatStoreIntegrityError("Citation locator is invalid.")
+    value = model_dump(mode="json")
+    if not isinstance(value, dict):
+        raise ChatStoreIntegrityError("Citation locator is invalid.")
+    return value
 
 
 def _json_object(value: str, *, field: str) -> dict[str, object]:

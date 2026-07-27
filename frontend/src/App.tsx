@@ -11,13 +11,19 @@ import {
 import { invoke } from '@tauri-apps/api/core'
 import { AppSidebar, type AppView } from './AppSidebar'
 import { CourseMapView } from './CourseMapView'
-import { ChatPanel } from './features/chat'
+import { restoreCitationFocus } from './features/citations/citationFormat'
+import { ChatPanel, type ChatCitation } from './features/chat'
 import { GraphView } from './GraphView'
 import { ReviewView } from './ReviewView'
 import './App.css'
 
 const StudyView = lazy(() =>
   import('./StudyView').then((module) => ({ default: module.StudyView })),
+)
+const CitationInspector = lazy(() =>
+  import('./features/citations/CitationInspector').then((module) => ({
+    default: module.CitationInspector,
+  })),
 )
 
 const API_BASE_URL =
@@ -694,7 +700,11 @@ function ClaimsBlock({
 function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const cardGenerationAbortRef = useRef<AbortController | null>(null)
+  const citationTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const citationCourseIdRef = useRef<string | null>(null)
   const [appView, setAppView] = useState<AppView>(getViewFromUrl)
+  const [activeCitation, setActiveCitation] =
+    useState<ChatCitation | null>(null)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [courses, setCourses] = useState<Course[]>([])
@@ -796,6 +806,36 @@ function App() {
   const totalSavedCardCount = useMemo(() => {
     return courses.reduce((total, course) => total + course.card_count, 0)
   }, [courses])
+
+  function openCitationInspector(
+    citation: ChatCitation,
+    trigger: HTMLButtonElement,
+  ) {
+    citationTriggerRef.current = trigger
+    citationCourseIdRef.current = selectedCourseId
+    setActiveCitation(citation)
+  }
+
+  function closeCitationInspector() {
+    const trigger = citationTriggerRef.current
+    setActiveCitation(null)
+    citationTriggerRef.current = null
+    citationCourseIdRef.current = null
+    window.setTimeout(() => {
+      restoreCitationFocus(trigger)
+    }, 0)
+  }
+
+  useEffect(() => {
+    if (
+      activeCitation &&
+      citationCourseIdRef.current !== selectedCourseId
+    ) {
+      setActiveCitation(null)
+      citationTriggerRef.current = null
+      citationCourseIdRef.current = null
+    }
+  }, [activeCitation, selectedCourseId])
 
   const selectedSegments = useMemo(() => {
     if (!transcript || !selectedRange) {
@@ -2844,6 +2884,7 @@ function App() {
                 courseTitle={selectedCourse?.title}
                 model={selectedModel}
                 compact
+                onOpenCitation={openCitationInspector}
               />
             </div>
           )}
@@ -4028,6 +4069,16 @@ function App() {
             onOpenWorkspaceCard={openWorkspaceCard}
           />
         </main>
+      )}
+      {activeCitation && (
+        <Suspense fallback={null}>
+          <CitationInspector
+            apiBaseUrl={API_BASE_URL}
+            courseId={selectedCourseId}
+            citation={activeCitation}
+            onClose={closeCitationInspector}
+          />
+        </Suspense>
       )}
     </div>
   )

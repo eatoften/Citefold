@@ -57,12 +57,23 @@ export type TextSectionLocator = LocatorBase & {
   section_number: number
 }
 
-export type SourceLocator =
+export type KnownSourceLocator =
   | VideoTimeLocator
   | PdfPageLocator
   | PptSlideLocator
   | DocxParagraphLocator
   | TextSectionLocator
+
+export type UnknownSourceLocator = {
+  kind: string
+  schema_version: number
+  metadata: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export type SourceLocator =
+  | KnownSourceLocator
+  | UnknownSourceLocator
 
 export type CourseSource = {
   id: string

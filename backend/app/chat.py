@@ -23,6 +23,7 @@ ChatTurnStatus = Literal[
     "refused",
     "failed",
 ]
+HistoricalSourceLocator = SourceLocator | dict[str, object]
 
 
 class ChatConversation(BaseModel):
@@ -51,7 +52,7 @@ class ChatCitation(BaseModel):
     source_type: SourceAssetType
     quote: str = Field(min_length=1)
     score: float = Field(ge=-1.0, le=1.0)
-    locator: SourceLocator
+    locator: HistoricalSourceLocator
     created_at: datetime = Field(default_factory=utc_now)
 
     @model_validator(mode="after")

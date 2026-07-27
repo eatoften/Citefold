@@ -385,6 +385,24 @@ def _align_grounded_chat_turn_contract(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_video_content_fingerprint(conn: sqlite3.Connection) -> None:
+    jobs_table = conn.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'jobs'
+        """
+    ).fetchone()
+    if jobs_table is None:
+        return
+    columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(jobs)").fetchall()
+    }
+    if "video_sha256" not in columns:
+        conn.execute("ALTER TABLE jobs ADD COLUMN video_sha256 TEXT")
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version=1,
@@ -400,6 +418,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=3,
         name="align_grounded_chat_turn_contract",
         apply=_align_grounded_chat_turn_contract,
+    ),
+    Migration(
+        version=4,
+        name="video_content_fingerprint",
+        apply=_add_video_content_fingerprint,
     ),
 )
 

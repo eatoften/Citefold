@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from functools import cache
+from ipaddress import ip_address
 
 from fastapi import (
     BackgroundTasks,
@@ -7,6 +8,7 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Request,
     UploadFile,
 )
 from fastapi import status
@@ -19,6 +21,7 @@ from . import card_embedding_service
 from . import card_relation_service
 from . import card_service
 from . import chat_service
+from . import citation_target_service
 from . import course_source_service
 from . import course_service
 from . import export_service
@@ -55,6 +58,8 @@ from .chat import (
     ChatMessageCreate,
     ChatTurnResponse,
 )
+from .citation_target import CitationTargetResponse
+from .citation_content_response import build_citation_content_response
 from .card_embedding import CardEmbeddingBatchResult, CardEmbeddingStatus
 from .card_relation import (
     CardRelatedCardsResponse,
@@ -684,6 +689,56 @@ def raise_chat_http_error(exc: chat_service.ChatServiceError) -> None:
     ) from exc
 
 
+def raise_citation_target_http_error(
+    exc: citation_target_service.CitationTargetServiceError,
+) -> None:
+    headers = {"Cache-Control": "private, no-store"}
+    if isinstance(
+        exc,
+        citation_target_service.CitationTargetNotFoundError,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Citation not found.",
+            headers=headers,
+        ) from exc
+    if isinstance(
+        exc,
+        citation_target_service.CitationContentUnavailableError,
+    ):
+        raise HTTPException(
+            status_code=(
+                status.HTTP_409_CONFLICT
+                if exc.integrity_conflict
+                else status.HTTP_410_GONE
+            ),
+            detail=str(exc),
+            headers=headers,
+        ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Unexpected citation target service error.",
+        headers=headers,
+    ) from exc
+
+
+def require_loopback_client(request: Request) -> None:
+    host = request.client.host if request.client is not None else ""
+    try:
+        address = ip_address(host)
+        mapped = getattr(address, "ipv4_mapped", None)
+        is_loopback = address.is_loopback or bool(
+            mapped is not None and mapped.is_loopback
+        )
+    except ValueError:
+        is_loopback = False
+    if not is_loopback:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Citation source access is limited to this device.",
+        )
+
+
 def archive_response(archive: export_service.MarkdownArchive) -> Response:
     return Response(
         content=archive.content,
@@ -699,6 +754,9 @@ def archive_response(archive: export_service.MarkdownArchive) -> Response:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    app.state.legacy_video_fingerprint_backfill_report = (
+        citation_target_service.backfill_legacy_video_fingerprints()
+    )
     chat_service.recover_interrupted_chat_turns()
     for course in course_service.list_video_courses():
         course_source_service.reconcile_course_sources(course.id)
@@ -1150,6 +1208,60 @@ def send_chat_message(
         raise_course_source_http_error(exc)
     except chat_service.ChatServiceError as exc:
         raise_chat_http_error(exc)
+
+
+@app.get(
+    "/courses/{course_id}/chat/citations/{citation_id}/target",
+    response_model=CitationTargetResponse,
+)
+def get_chat_citation_target(
+    course_id: str,
+    citation_id: str,
+    request: Request,
+    response: Response,
+) -> CitationTargetResponse:
+    require_loopback_client(request)
+    response.headers["Cache-Control"] = "private, no-store"
+    media_url = str(
+        request.url_for(
+            "get_chat_citation_content",
+            course_id=course_id,
+            citation_id=citation_id,
+        )
+    )
+    try:
+        return citation_target_service.resolve_citation_target(
+            course_id,
+            citation_id,
+            media_url=media_url,
+        )
+    except citation_target_service.CitationTargetServiceError as exc:
+        raise_citation_target_http_error(exc)
+
+
+@app.api_route(
+    "/courses/{course_id}/chat/citations/{citation_id}/content",
+    methods=["GET", "HEAD"],
+    name="get_chat_citation_content",
+)
+def get_chat_citation_content(
+    course_id: str,
+    citation_id: str,
+    request: Request,
+) -> Response:
+    require_loopback_client(request)
+    try:
+        managed_file = citation_target_service.resolve_citation_content(
+            course_id,
+            citation_id,
+        )
+    except citation_target_service.CitationTargetServiceError as exc:
+        raise_citation_target_http_error(exc)
+    return build_citation_content_response(
+        managed_file,
+        method=request.method,
+        range_header=request.headers.get("range"),
+    )
 
 
 @app.get(

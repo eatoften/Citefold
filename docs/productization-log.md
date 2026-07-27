@@ -827,3 +827,421 @@ sentence or citation chip must:
 The acceptance gate includes stale/missing local files, deleted Sources,
 locator-version handling, keyboard activation, and a visible fallback rather
 than a dead click.
+
+## P0.3 - Verifiable Citation Navigation
+
+**Date:** 2026-07-27
+**Status:** Complete
+**Decision record:**
+[`ADR-0004`](decisions/ADR-0004-server-authoritative-citation-navigation.md)
+
+### User outcome
+
+Every citation emitted by grounded Chat is now an actionable evidence link.
+One click opens a single Source inspector and returns to the exact normalized
+location used by retrieval:
+
+```text
+video / audio -> canonical start time
+PDF           -> canonical page + extracted page text
+PPTX          -> canonical extracted slide
+DOCX          -> canonical extracted non-empty paragraph
+TXT / MD      -> canonical extracted section
+```
+
+The saved quotation is rendered before live resolution and is never removed
+when the current Source is missing, changed, or unsupported. When the current
+canonical chunk is still valid but only the original file is unavailable, the
+last verified extracted context remains visible and read-only.
+
+### Why this stage now
+
+P0.1 established one Source/Chunk/Locator contract and P0.2 persisted immutable
+sentence-level citation snapshots. Without a safe navigation layer, those
+citations were still labels rather than verifiable product behavior. Building
+the viewer before the P0.4 navigation rewrite also provides one reusable
+component for both the compact Ask rail and the future top-level Chat surface.
+
+### Scope and non-goals
+
+Implemented:
+
+- course-scoped citation target and content endpoints;
+- server-authoritative resolution from an opaque citation ID;
+- current Source/chunk/owner/integrity validation;
+- historical snapshot fallback with explicit reason codes;
+- exact video/audio seeking and PDF page fragments;
+- exact extracted-unit navigation for PPTX, DOCX, text, and Markdown;
+- native citation buttons, modal keyboard behavior, focus return, and safe
+  text-node highlighting;
+- managed-file streaming with full, bounded, open-ended, and suffix byte
+  ranges;
+- upload-time video fingerprints and a guarded legacy-fingerprint upgrade;
+- frontend component-test infrastructure for citation behavior.
+
+Deliberately not implemented:
+
+- the Sources / Chat / Studio navigation rewrite, which is P0.4;
+- pixel-perfect PowerPoint or Word rendering;
+- operating-system file launching as the primary navigation contract;
+- remote API binding or a general-purpose local file server;
+- task cancellation, backup/restore UI, and path-field compatibility cleanup,
+  which remain P0.5 work.
+
+### API and trust contract
+
+The browser sends only:
+
+```text
+course_id + server-issued citation_id
+```
+
+It never supplies a locator, Source ID, asset ID, job ID, or path for the
+server to trust. The server resolves:
+
+```text
+chat citation
+-> assistant message
+-> conversation course
+-> immutable Source/chunk snapshot
+-> current canonical Source/chunk
+-> current owner
+-> managed file
+```
+
+Endpoints:
+
+```text
+GET      /courses/{course_id}/chat/citations/{citation_id}/target
+GET|HEAD /courses/{course_id}/chat/citations/{citation_id}/content
+```
+
+Another course's citation and an unknown citation intentionally produce the
+same `404`. Target responses return either:
+
+```text
+available      current chunk and managed file still match
+snapshot_only  saved evidence remains, but the current original cannot be
+               claimed as the evidence used by the answer
+```
+
+The response contains no absolute local path. Both target metadata and content
+are private/no-store. Content is restricted to loopback clients, uses a
+server-controlled MIME type, is forced inline, and includes `nosniff`.
+
+### Decisions and alternatives
+
+1. **Server-authoritative citation IDs instead of client locators.** A typed
+   locator is useful display data but is not a file capability. Resolving the
+   persisted citation again centralizes course isolation, current-health
+   checks, relocation, and deletion semantics.
+2. **Historical truth and current health are separate.** Rewriting or deleting
+   a citation when a file changes would corrupt the answer's provenance.
+   Silently opening a changed file would be worse. The immutable quotation
+   therefore survives while live navigation degrades explicitly.
+3. **One internal inspector instead of default OS launching.** Browser and
+   Tauri now share one testable behavior. PDF can use the embedded viewer;
+   Office formats use the exact normalized unit that retrieval actually saw.
+4. **Open and stream one verified file handle.** Returning a validated `Path`
+   and letting `FileResponse` reopen it leaves a path-swap and symlink race.
+   The content response now hashes and streams the same no-follow regular-file
+   handle and implements bounded single-range semantics around that handle.
+5. **Cryptographic content checks instead of metadata-only caching.** File
+   size, timestamps, and inode/file ID do not prove content identity on
+   Windows. Every content decision uses SHA-256; a metadata-keyed digest cache
+   was removed after an independent review reproduced a same-size overwrite
+   with restored timestamps.
+6. **Controlled startup backfill instead of citation-time trust on first use.**
+   New uploads hash bytes during the existing copy pass. Legacy rows are
+   fingerprinted before Chat is served, only after managed-root, immutable
+   storage-name, recorded-size, regular-file, stable-read checks. A row that
+   cannot pass remains null and every later citation read returns
+   `legacy_fingerprint_unverified`; citation reads never establish trust.
+7. **Tolerant historical locator reads and strict new writes.** An unknown
+   future kind or schema version disables only that old citation. New citations
+   must validate against the supported version-1 discriminated union.
+8. **Extracted text is the deterministic document fallback.** A PDF plugin may
+   be unavailable and Office layout conversion would add a large dependency.
+   Canonical extracted context is always sufficient to verify the quote and
+   exact normalized location.
+
+Rejected alternatives included a client-supplied `/files?path=...` endpoint,
+trusting the locator sent back by the browser, returning a dead error when the
+current file is gone, and making pixel-perfect Office conversion a prerequisite
+for evidence navigation.
+
+### Technology and responsibilities
+
+| Component | Technology | Responsibility |
+| --- | --- | --- |
+| Target API | FastAPI + Pydantic | Course isolation, response validation, stable snapshot/current states |
+| Citation join | SQLite store query | Resolve immutable citation ownership and current canonical Source state |
+| Integrity | SHA-256 + upload-copy hashing | Detect changed video and document bytes without trusting client metadata |
+| File boundary | `resolve(strict=True)`, no-follow open, `fstat`, regular-file checks | Constrain bytes to managed roots and bind validation to the opened object |
+| Streaming | Starlette `StreamingResponse` + bounded range parser | Serve GET/HEAD, 200/206/416, and seekable media from the verified handle |
+| Schema upgrade | SQLite migration v4 | Add nullable `jobs.video_sha256` with validated pre-migration backup |
+| Inspector | React 19 + TypeScript + native `<dialog>` | Lazy-load one keyboard-accessible viewer and preserve the saved quote |
+| Deep links | HTML media APIs + PDF page fragment | Seek media and open exact PDF pages without desktop-only dependencies |
+| Document fallback | Canonical Source chunks | Highlight exact slide/page/paragraph/section text with React text nodes |
+| Desktop boundary | Tauri CSP | Permit only loopback media/frame content required by the inspector |
+| Frontend tests | Vitest + Testing Library + jsdom | Verify URL trust, locator versions, seeking, fallback, focus, and highlighting |
+
+### Problems encountered and resolutions
+
+1. **The first file endpoint design still reopened a validated path.** This
+   created a time-of-check/time-of-use window between integrity validation and
+   response streaming. The final design keeps the opened handle, verifies its
+   identity and digest, and streams that same handle.
+2. **A performance cache was not an integrity cache.** The initial SHA cache
+   used size, mtime, ctime, and inode as its key. An independent Windows test
+   overwrote a file with equal-length bytes, restored mtime, kept the other
+   fields unchanged, and received the old digest. The cache was deleted and a
+   regression test now reproduces that exact attack.
+3. **Legacy-video hashing initially happened on the first citation click.**
+   That could bless any bytes present before the first click. Backfill moved
+   into FastAPI lifespan immediately after schema initialization and before
+   interrupted-turn recovery or Source reconciliation. The read path now
+   refuses every still-unfingerprinted legacy video.
+4. **File lifecycle races surfaced as 500s.** Delete, permission, and open
+   failures between resolution steps are normalized to path-free
+   `file_lifecycle_error` or `file_missing` states. Target metadata remains a
+   `200 snapshot_only`; the content endpoint returns a stable gone/conflict
+   class.
+5. **The initial frontend trusted any returned media URL.** The resolver now
+   accepts only HTTP(S), the exact API origin, and the exact encoded current
+   course/citation `/content` path. It rejects credentials, query strings,
+   fragments, `javascript:`, `data:`, cross-origin URLs, and other API paths.
+6. **A known locator kind with a future schema version looked valid.** All
+   formatting, PDF navigation, and media seeking now gate on
+   `schema_version === 1`; future versions display an explicit unsupported
+   label.
+7. **Snapshot-only mode hid still-trustworthy extracted context.** Backend
+   file-integrity failures already retained canonical context, but the UI
+   rendered it only for `available`. The inspector now distinguishes a missing
+   original file from Source/chunk drift and keeps safe extracted context
+   visible.
+8. **Relocated data roots invalidated old absolute paths.** Resolution treats
+   immutable stored names and owner IDs as authority, rebases video files under
+   the configured upload root, and accepts a document relocation only when
+   exactly one owner-named candidate under the managed Source root matches its
+   persisted hash.
+9. **The first migration rehearsal left its temporary backup locked.**
+   `sqlite3.Connection` used as a context manager commits or rolls back but
+   does not close the connection. The rehearsal script was changed to an
+   explicit closing context, the guarded temporary directory was removed, and
+   the complete rehearsal was rerun successfully before touching the real
+   database.
+10. **Windows blocked the `npm.ps1` shim.** Validation uses the equivalent
+    `npm.cmd` entrypoint, so the repository did not require a machine-wide
+    execution-policy change.
+
+### Verification
+
+Backend coverage includes:
+
+- all five typed locator kinds and imported audio/video;
+- cross-course and unknown-citation indistinguishability;
+- Source disabled, deleted, moved, changed, and re-indexed states;
+- missing file, owner mismatch, bad stored identity, relocation, and hash
+  mismatch;
+- same-size byte replacement with restored mtime;
+- managed-root and symbolic-link/reparse escape rejection;
+- stable lifecycle-error mapping and no path leakage;
+- upload-time video hashing, startup-only legacy backfill, failed-backfill
+  refusal, and no citation-time TOFU;
+- full GET, HEAD, bounded, open-ended, and suffix Range responses plus 416;
+- the single verified open handle being the one streamed;
+- unknown historical locator survival and strict new-citation writes;
+- v3-to-v4 backup/migration and fresh-schema idempotency.
+
+Final automated gates:
+
+```text
+backend focused citation/migration/job tests: 33 passed / 1 skipped
+backend full pytest suite:                     526 passed / 1 skipped
+backend compileall:                            pass
+frontend Vitest:                               2 files / 14 tests pass
+frontend ESLint:                               pass
+frontend TypeScript + production build:        pass
+npm audit --audit-level=high:                  0 vulnerabilities
+git diff --check:                              pass
+```
+
+The skipped test requires Windows symlink-creation permission that this host
+does not grant. The only warning is the existing upstream
+Starlette-TestClient/httpx deprecation; it is not produced by P0.3 behavior.
+
+Production bundle checkpoint:
+
+```text
+main JS:               498.91 kB / 150.71 kB gzip
+CitationInspector JS:    7.75 kB /   2.58 kB gzip
+CitationInspector CSS:   5.47 kB /   1.64 kB gzip
+```
+
+The inspector remains a real lazy chunk; the main bundle stays below Vite's
+500 kB warning threshold.
+
+#### Manual browser acceptance
+
+An isolated temporary workspace was seeded with one text Source, one completed
+historical conversation, and one sentence citation. In the real Vite/FastAPI
+application at a 1280 x 720 viewport:
+
+```text
+open course -> expand rail -> Ask -> click [1]
+-> Source inspector title = optimization-notes.md
+-> locator = Section 1
+-> saved quote is visible
+-> the identical quote is marked inside canonical context
+-> target article receives focus
+-> Escape closes the dialog
+-> focus returns to the original citation button
+```
+
+The 920 x 680 dialog stayed inside the viewport, the page had no horizontal
+overflow, and the browser emitted no warnings or errors. Both temporary
+servers, browser tabs, seeded database, and temporary Source files were
+stopped or removed after acceptance.
+
+#### Real database migration
+
+Migration v4 was rehearsed on an isolated copy before the active database was
+opened:
+
+```text
+quick_check before / after: ok / ok
+applied versions:           [4]
+elapsed:                    0.030957 seconds
+rows before / after:
+  jobs                      5 / 5
+  cards                     118 / 118
+  sources                   8 / 8
+  source_chunks             491 / 491
+  chat rows                 0 / 0
+backup schema:              v1-v3, no video_sha256 column
+```
+
+The active migration then created:
+
+```text
+backend/data/backups/jobs.pre-migration-v4-20260727T080412405704Z.db
+```
+
+Before the later data-only legacy fingerprint backfill, a second SQLite-native
+backup was created and validated:
+
+```text
+backend/data/backups/
+jobs.pre-video-fingerprint-backfill-20260727T082942224771Z.db
+```
+
+Post-migration checks:
+
+```text
+active quick_check: ok
+active schema:      v1-v4, video_sha256 present
+backup quick_check: ok
+backup schema:      v1-v3, video_sha256 absent
+row counts:         unchanged
+```
+
+Integrity checkpoints:
+
+```text
+pre-migration active SHA-256:
+F097CE715543BBC1DCA502DC3319D836A304EFB3B9A1929F24D137014BA44060
+
+post-v4/pre-backfill active SHA-256:
+f28f0ba3591540f7962cd3db1341b20a6000034f2057fbdc465956cbcab58642
+
+pre-v4 backup SHA-256:
+5ab97300915cbf1aa529f05fd14e92a1e82cb55bdb86a634b0335c9cb68a1e55
+
+pre-backfill v4 backup SHA-256:
+7f77ec0fed73591f59671f6672709790a0be943c0cf56bfbe5e1e31e81d12cef
+```
+
+The legacy backfill was first run against a SQLite-native database copy while
+reading the real managed uploads. The copy accepted all five rows, the source
+database SHA-256 remained unchanged, and both databases passed `quick_check`.
+The backed-up active database was then upgraded through the same service:
+
+```text
+rehearsal:       5 scanned / 5 backfilled / 0 refused
+active:          5 scanned / 5 backfilled / 0 refused
+fingerprints:    5 / 5 independently matched managed files
+verified bytes:  5,328,217,687
+quick_check:     ok
+schema versions: 1, 2, 3, 4
+row counts:      unchanged
+
+final active database SHA-256:
+cae70b36dc8e6954096719405c608ab5817b0fe04728c9f4004f3a1a533c17ad
+```
+
+### Independent acceptance
+
+Two independent read-only reviews reproduced and blocked release on the
+legacy TOFU window and the metadata-keyed hash-cache flaw. A third full
+acceptance review also identified the path-reopen race, unknown-version
+locator behavior, untrusted frontend media URLs, and hidden snapshot context.
+All release-blocking findings were converted into regression tests and fixed
+before the stage checkpoint. The one environment-dependent symlink test is
+skipped on this Windows host because creating symlinks is not permitted; the
+no-follow open, resolved-root containment, owner-name checks, and outside-root
+tests still run. A Linux CI job remains advisable.
+
+### Known limitations
+
+- A legacy video fingerprint proves the bytes present during the controlled
+  v4 startup upgrade, not that no local process changed the file before that
+  upgrade. This is an explicit one-time local trust boundary. Any video that
+  cannot pass the upgrade remains snapshot-only until it is re-imported.
+- Strong file integrity requires a complete SHA-256 pass. Target resolution
+  and content delivery currently validate independently, so first open of a
+  large video may be noticeably slower. P0.5 should measure this and consider
+  an immutable/content-addressed managed store rather than reintroducing a
+  metadata-only cache.
+- Streaming the verified handle closes path replacement and symlink races, but
+  this local desktop design is not a defense against a privileged malicious
+  process modifying the same open file in place during delivery.
+- PDF rendering depends on embedded-browser support; extracted page text is
+  the deterministic fallback. PPTX and DOCX navigation is exact at the
+  normalized retrieval unit, not pixel-perfect original layout.
+- The PDF frame has no reliable cross-browser load-error signal. Failure does
+  not remove the quote or extracted context.
+- Loopback-only access prevents remote file serving but is not a per-launch
+  authentication token. A token is required before any future remote binding.
+- Older compatibility responses still expose local path fields. The citation
+  viewer does not consume them; removal belongs to a versioned P0.5/P1.4 API
+  cleanup.
+- Component tests cover the citation feature slice and manual browser
+  acceptance covers the host integration. A durable app-level end-to-end suite
+  and Linux symlink CI remain P1.4 work.
+
+### Git checkpoint
+
+Intended commit subject:
+
+```text
+feat(citations): open grounded evidence at its source location
+```
+
+### Next gate
+
+P0.4 will replace the tool-first shell with the product's source-first
+information architecture:
+
+```text
+course notebook
+-> Sources
+-> Chat
+-> Studio
+```
+
+Study, Review, Course Map, and Explore remain available as secondary or Studio
+workflows rather than five co-equal starting points. The acceptance gate will
+cover responsive navigation, preserved deep links, current feature parity,
+clear empty/loading/error states, and a measured reduction of `App.tsx`
+responsibility rather than a cosmetic label change.

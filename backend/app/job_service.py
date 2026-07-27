@@ -1,4 +1,4 @@
-import shutil
+import hashlib
 from collections.abc import Callable
 from pathlib import Path
 from typing import BinaryIO
@@ -127,8 +127,7 @@ def create_video_job(
     try:
         upload_dir.mkdir(parents=True, exist_ok=True)
 
-        with destination.open("wb") as output_file:
-            shutil.copyfileobj(video_file, output_file)
+        video_sha256 = _copy_with_sha256(video_file, destination)
 
         probe_video(destination)
 
@@ -156,7 +155,7 @@ def create_video_job(
         updated_at=now,
     )
 
-    create_job(job)
+    create_job(job, video_sha256=video_sha256)
     course_source_service.sync_video_source(job.id)
 
     return job
@@ -360,3 +359,20 @@ def _unlink_artifact(path: Path, artifact_root: Path) -> None:
 
     if resolved_path.is_file():
         resolved_path.unlink(missing_ok=True)
+
+
+def _copy_with_sha256(
+    source: BinaryIO,
+    destination: Path,
+    *,
+    chunk_size: int = 1024 * 1024,
+) -> str:
+    digest = hashlib.sha256()
+    with destination.open("wb") as output_file:
+        while True:
+            chunk = source.read(chunk_size)
+            if not chunk:
+                break
+            output_file.write(chunk)
+            digest.update(chunk)
+    return digest.hexdigest()
