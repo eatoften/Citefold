@@ -1,0 +1,668 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+MigrationCallable = Callable[[sqlite3.Connection], None]
+
+
+@dataclass(frozen=True)
+class Migration:
+    version: int
+    name: str
+    apply: MigrationCallable
+
+
+def _create_unified_source_index(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE sources (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            origin_type TEXT NOT NULL,
+            origin_id TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            content_status TEXT NOT NULL,
+            index_status TEXT NOT NULL DEFAULT 'not_indexed',
+            index_generation TEXT,
+            index_model TEXT,
+            index_dimension INTEGER,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            size_bytes INTEGER,
+            mime_type TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            error_message TEXT,
+            index_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            indexed_at TEXT,
+            UNIQUE(origin_type, origin_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_sources_course
+        ON sources (course_id, updated_at)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_sources_index_status
+        ON sources (index_status)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE source_chunks (
+            id TEXT PRIMARY KEY,
+            source_id TEXT NOT NULL,
+            origin_type TEXT NOT NULL,
+            origin_id TEXT NOT NULL,
+            chunk_type TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            text_hash TEXT NOT NULL,
+            locator_json TEXT NOT NULL,
+            chunker_version TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(origin_type, origin_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_source_chunks_source
+        ON source_chunks (source_id, is_active, ordinal)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE source_chunk_embeddings (
+            chunk_id TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            model TEXT NOT NULL,
+            dimension INTEGER NOT NULL,
+            text_hash TEXT NOT NULL,
+            vector BLOB NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(chunk_id, model)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_source_chunk_embeddings_source
+        ON source_chunk_embeddings (source_id, model)
+        """
+    )
+    _backfill_sources(conn)
+    _backfill_source_chunks(conn)
+    _validate_source_backfill(conn)
+
+
+MIGRATIONS: tuple[Migration, ...] = (
+    Migration(
+        version=1,
+        name="unified_source_index",
+        apply=_create_unified_source_index,
+    ),
+)
+
+
+def latest_schema_version(
+    migrations: Sequence[Migration] = MIGRATIONS,
+) -> int:
+    return max((migration.version for migration in migrations), default=0)
+
+
+def prepare_migration_backup(
+    db_path: Path,
+    migrations: Sequence[Migration] = MIGRATIONS,
+) -> Path | None:
+    if not db_path.is_file() or db_path.stat().st_size == 0:
+        return None
+
+    with sqlite3.connect(db_path) as source:
+        applied = _read_applied_versions(source)
+        pending = [
+            migration
+            for migration in migrations
+            if migration.version not in applied
+        ]
+        if not pending:
+            return None
+
+        quick_check = source.execute("PRAGMA quick_check").fetchone()
+        if quick_check is None or quick_check[0] != "ok":
+            detail = quick_check[0] if quick_check is not None else "no result"
+            raise RuntimeError(
+                f"Database quick_check failed before migration: {detail}"
+            )
+
+        backup_dir = db_path.parent / "backups"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        target_version = max(migration.version for migration in pending)
+        backup_path = (
+            backup_dir
+            / f"{db_path.stem}.pre-migration-v{target_version}-{stamp}.db"
+        )
+        with sqlite3.connect(backup_path) as destination:
+            source.backup(destination)
+
+    with sqlite3.connect(backup_path) as backup:
+        backup_check = backup.execute("PRAGMA quick_check").fetchone()
+        if backup_check is None or backup_check[0] != "ok":
+            backup_path.unlink(missing_ok=True)
+            detail = (
+                backup_check[0]
+                if backup_check is not None
+                else "no result"
+            )
+            raise RuntimeError(
+                f"Migration backup quick_check failed: {detail}"
+            )
+
+    return backup_path
+
+
+def apply_migrations(
+    conn: sqlite3.Connection,
+    migrations: Sequence[Migration] = MIGRATIONS,
+) -> list[int]:
+    conn.row_factory = sqlite3.Row
+    ordered = sorted(migrations, key=lambda item: item.version)
+    versions = [migration.version for migration in ordered]
+    if len(versions) != len(set(versions)) or any(
+        version <= 0
+        for version in versions
+    ):
+        raise RuntimeError("Migration versions must be unique and positive.")
+
+    conn.execute("SAVEPOINT vcc_schema_migrations")
+    completed: list[int] = []
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        applied_rows = {
+            int(row["version"]): str(row["name"])
+            for row in conn.execute(
+                "SELECT version, name FROM schema_migrations"
+            ).fetchall()
+        }
+        known = {migration.version: migration.name for migration in ordered}
+        unknown_versions = sorted(set(applied_rows) - set(known))
+        if unknown_versions:
+            raise RuntimeError(
+                "Database schema is newer than this application: "
+                + ", ".join(str(version) for version in unknown_versions)
+            )
+        for version, name in applied_rows.items():
+            if known[version] != name:
+                raise RuntimeError(
+                    f"Migration {version} name does not match the database."
+                )
+
+        for migration in ordered:
+            if migration.version in applied_rows:
+                continue
+            migration.apply(conn)
+            conn.execute(
+                """
+                INSERT INTO schema_migrations (version, name, applied_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    migration.version,
+                    migration.name,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            completed.append(migration.version)
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT vcc_schema_migrations")
+        conn.execute("RELEASE SAVEPOINT vcc_schema_migrations")
+        raise
+    conn.execute("RELEASE SAVEPOINT vcc_schema_migrations")
+    return completed
+
+
+def _read_applied_versions(conn: sqlite3.Connection) -> set[int]:
+    table = conn.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'schema_migrations'
+        """
+    ).fetchone()
+    if table is None:
+        return set()
+    return {
+        int(row[0])
+        for row in conn.execute(
+            "SELECT version FROM schema_migrations"
+        ).fetchall()
+    }
+
+
+def _backfill_sources(conn: sqlite3.Connection) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    job_rows = conn.execute(
+        """
+        SELECT
+            id, course_id, status, original_filename, stored_name,
+            size_bytes, metadata, error_message, created_at, updated_at
+        FROM jobs
+        """
+    ).fetchall()
+    for row in job_rows:
+        origin_id = str(row["id"])
+        status = str(row["status"])
+        content_status = {
+            "uploaded": "pending",
+            "probing": "processing",
+            "extracting_audio": "processing",
+            "transcribing": "processing",
+            "completed": "ready",
+            "failed": "failed",
+        }.get(status, "pending")
+        title = (
+            row["original_filename"]
+            or row["stored_name"]
+            or f"Video {origin_id}"
+        )
+        metadata_json = row["metadata"] or "{}"
+        _validate_json_object(metadata_json)
+        conn.execute(
+            """
+            INSERT INTO sources (
+                id, course_id, origin_type, origin_id, source_type, title,
+                content_status, index_status, index_generation, index_model,
+                index_dimension,
+                enabled, size_bytes, mime_type, metadata_json, error_message,
+                index_error, created_at, updated_at, indexed_at
+            ) VALUES (?, ?, 'video_job', ?, 'video', ?, ?, 'not_indexed',
+                      NULL, NULL, NULL, 1, ?, NULL, ?, ?, NULL, ?, ?, NULL)
+            """,
+            (
+                f"job:{origin_id}",
+                row["course_id"],
+                origin_id,
+                str(title),
+                content_status,
+                row["size_bytes"],
+                metadata_json,
+                row["error_message"],
+                row["created_at"] or now,
+                row["updated_at"] or row["created_at"] or now,
+            ),
+        )
+
+    asset_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(source_assets)")
+    }
+    job_id_expression = (
+        "job_id"
+        if "job_id" in asset_columns
+        else "NULL AS job_id"
+    )
+    asset_rows = conn.execute(
+        f"""
+        SELECT
+            id, course_id, {job_id_expression}, asset_type,
+            original_filename, mime_type,
+            size_bytes, extraction_status, metadata_json, error_message,
+            created_at, updated_at
+        FROM source_assets
+        """
+    ).fetchall()
+    for row in asset_rows:
+        origin_id = str(row["id"])
+        metadata_json = row["metadata_json"] or "{}"
+        _validate_json_object(metadata_json)
+        metadata = _json_object(metadata_json)
+        if row["job_id"]:
+            metadata["job_id"] = row["job_id"]
+        metadata_json = json.dumps(metadata, ensure_ascii=False)
+        conn.execute(
+            """
+            INSERT INTO sources (
+                id, course_id, origin_type, origin_id, source_type, title,
+                content_status, index_status, index_generation, index_model,
+                index_dimension,
+                enabled, size_bytes, mime_type, metadata_json, error_message,
+                index_error, created_at, updated_at, indexed_at
+            ) VALUES (?, ?, 'source_asset', ?, ?, ?, ?, 'not_indexed',
+                      NULL, NULL, NULL, 1, ?, ?, ?, ?, NULL, ?, ?, NULL)
+            """,
+            (
+                f"asset:{origin_id}",
+                row["course_id"],
+                origin_id,
+                row["asset_type"],
+                row["original_filename"],
+                row["extraction_status"],
+                row["size_bytes"],
+                row["mime_type"],
+                metadata_json,
+                row["error_message"],
+                row["created_at"] or now,
+                row["updated_at"] or row["created_at"] or now,
+            ),
+        )
+
+
+def _backfill_source_chunks(conn: sqlite3.Connection) -> None:
+    transcript_rows = conn.execute(
+        """
+        SELECT
+            id, job_id, chunk_index, start_seconds, end_seconds, text,
+            segment_ids, chunker_version, created_at
+        FROM transcript_chunks
+        ORDER BY job_id, chunk_index
+        """
+    ).fetchall()
+    for row in transcript_rows:
+        origin_id = str(row["id"])
+        segment_ids = _json_list(row["segment_ids"])
+        locator = {
+            "schema_version": 1,
+            "kind": "video_time",
+            "job_id": row["job_id"],
+            "start_seconds": row["start_seconds"],
+            "end_seconds": row["end_seconds"],
+            "segment_ids": segment_ids,
+            "metadata": {},
+        }
+        _insert_backfilled_chunk(
+            conn,
+            chunk_id=f"transcript_chunk:{origin_id}",
+            source_id=f"job:{row['job_id']}",
+            origin_type="transcript_chunk",
+            origin_id=origin_id,
+            chunk_type="transcript",
+            ordinal=row["chunk_index"],
+            text=row["text"],
+            locator=locator,
+            chunker_version=row["chunker_version"],
+            created_at=row["created_at"],
+        )
+
+    asset_columns = {
+        str(row["name"])
+        for row in conn.execute("PRAGMA table_info(source_assets)")
+    }
+    job_id_expression = (
+        "source_assets.job_id"
+        if "job_id" in asset_columns
+        else "NULL AS job_id"
+    )
+    unit_rows = conn.execute(
+        f"""
+        SELECT
+            source_units.id, source_units.asset_id, source_units.unit_type,
+            source_units.ordinal, source_units.text,
+            source_units.locator_json, source_units.created_at,
+            source_assets.asset_type, {job_id_expression}
+        FROM source_units
+        INNER JOIN source_assets
+            ON source_assets.id = source_units.asset_id
+        ORDER BY source_units.asset_id, source_units.ordinal
+        """
+    ).fetchall()
+    for row in unit_rows:
+        origin_id = str(row["id"])
+        raw_locator = _json_object(row["locator_json"])
+        locator = _canonical_asset_locator(
+            asset_id=row["asset_id"],
+            asset_type=row["asset_type"],
+            unit_type=row["unit_type"],
+            job_id=row["job_id"],
+            ordinal=row["ordinal"],
+            raw_locator=raw_locator,
+        )
+        _insert_backfilled_chunk(
+            conn,
+            chunk_id=f"source_unit:{origin_id}",
+            source_id=f"asset:{row['asset_id']}",
+            origin_type="source_unit",
+            origin_id=origin_id,
+            chunk_type=(
+                "transcript"
+                if row["unit_type"] == "transcript_segment"
+                else row["unit_type"]
+            ),
+            ordinal=row["ordinal"],
+            text=row["text"],
+            locator=locator,
+            chunker_version="source-unit-v1",
+            created_at=row["created_at"],
+        )
+
+
+def _insert_backfilled_chunk(
+    conn: sqlite3.Connection,
+    *,
+    chunk_id: str,
+    source_id: str,
+    origin_type: str,
+    origin_id: str,
+    chunk_type: str,
+    ordinal: int,
+    text: str,
+    locator: dict[str, object],
+    chunker_version: str,
+    created_at: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO source_chunks (
+            id, source_id, origin_type, origin_id, chunk_type, ordinal,
+            text, text_hash, locator_json, chunker_version, is_active,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+        """,
+        (
+            chunk_id,
+            source_id,
+            origin_type,
+            origin_id,
+            chunk_type,
+            ordinal,
+            text,
+            hashlib.sha256(str(text).encode("utf-8")).hexdigest(),
+            json.dumps(locator, ensure_ascii=False),
+            chunker_version,
+            created_at,
+            created_at,
+        ),
+    )
+
+
+def _validate_source_backfill(conn: sqlite3.Connection) -> None:
+    expected_sources = conn.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM jobs)
+            + (SELECT COUNT(*) FROM source_assets)
+        """
+    ).fetchone()[0]
+    actual_sources = conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
+    expected_chunks = conn.execute(
+        """
+        SELECT
+            (SELECT COUNT(*) FROM transcript_chunks)
+            + (SELECT COUNT(*) FROM source_units)
+        """
+    ).fetchone()[0]
+    actual_chunks = conn.execute(
+        "SELECT COUNT(*) FROM source_chunks"
+    ).fetchone()[0]
+    if actual_sources != expected_sources:
+        raise RuntimeError(
+            "Unified source migration count mismatch: "
+            f"expected {expected_sources}, found {actual_sources}."
+        )
+    if actual_chunks != expected_chunks:
+        raise RuntimeError(
+            "Unified source chunk migration count mismatch: "
+            f"expected {expected_chunks}, found {actual_chunks}."
+        )
+
+
+def _canonical_asset_locator(
+    *,
+    asset_id: str,
+    asset_type: str,
+    unit_type: str,
+    job_id: str | None,
+    ordinal: int,
+    raw_locator: dict[str, object],
+) -> dict[str, object]:
+    start_seconds, end_seconds = _video_time_range(raw_locator)
+    metadata = {
+        key: value
+        for key, value in raw_locator.items()
+        if key
+        not in {
+            "start_seconds",
+            "end_seconds",
+            "timestamp_seconds",
+            "segment_ids",
+            "page_number",
+            "slide_number",
+            "paragraph_number",
+            "section_number",
+        }
+    }
+    if (
+        asset_type in {"video", "audio"}
+        or unit_type in {"transcript_segment", "video_frame"}
+    ):
+        return {
+            "schema_version": 1,
+            "kind": "video_time",
+            "job_id": job_id,
+            "asset_id": None if job_id else asset_id,
+            "start_seconds": start_seconds,
+            "end_seconds": end_seconds,
+            "segment_ids": _int_list(
+                raw_locator.get("segment_ids")
+            ),
+            "metadata": metadata,
+        }
+    if asset_type == "pdf":
+        return {
+            "schema_version": 1,
+            "kind": "pdf_page",
+            "asset_id": asset_id,
+            "page_number": _positive_int(
+                raw_locator.get("page_number"),
+                ordinal + 1,
+            ),
+            "metadata": metadata,
+        }
+    if asset_type == "pptx":
+        return {
+            "schema_version": 1,
+            "kind": "ppt_slide",
+            "asset_id": asset_id,
+            "slide_number": _positive_int(
+                raw_locator.get("slide_number"),
+                ordinal + 1,
+            ),
+            "metadata": metadata,
+        }
+    if asset_type == "docx":
+        return {
+            "schema_version": 1,
+            "kind": "docx_paragraph",
+            "asset_id": asset_id,
+            "paragraph_number": _positive_int(
+                raw_locator.get("paragraph_number"),
+                ordinal + 1,
+            ),
+            "metadata": metadata,
+        }
+    return {
+        "schema_version": 1,
+        "kind": "text_section",
+        "asset_id": asset_id,
+        "section_number": _positive_int(
+            raw_locator.get("section_number"),
+            ordinal + 1,
+        ),
+        "metadata": metadata,
+    }
+
+
+def _positive_int(value: object, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed >= 1 else fallback
+
+
+def _non_negative_float(value: object, fallback: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed >= 0 else fallback
+
+
+def _video_time_range(
+    raw: dict[str, object],
+) -> tuple[float, float]:
+    timestamp = _non_negative_float(raw.get("timestamp_seconds"), 0)
+    start = _non_negative_float(raw.get("start_seconds"), timestamp)
+    end = _non_negative_float(raw.get("end_seconds"), start)
+    return start, max(start, end)
+
+
+def _int_list(value: object) -> list[int]:
+    if not isinstance(value, list):
+        return []
+    parsed: list[int] = []
+    for item in value:
+        try:
+            parsed.append(int(item))
+        except (TypeError, ValueError):
+            continue
+    return parsed
+
+
+def _validate_json_object(value: str) -> None:
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise RuntimeError("Source metadata must be a JSON object.")
+
+
+def _json_object(value: str) -> dict[str, object]:
+    parsed = json.loads(value)
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _json_list(value: str) -> list[object]:
+    parsed = json.loads(value)
+    return parsed if isinstance(parsed, list) else []

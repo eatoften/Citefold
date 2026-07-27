@@ -4,6 +4,7 @@ import hashlib
 from pathlib import Path
 from uuid import uuid4
 
+from . import course_source_service
 from . import course_service
 from .job import utc_now
 from .settings import get_app_path_settings
@@ -96,6 +97,7 @@ def import_course_source_asset(
         updated_at=now,
     )
     create_source_asset(asset)
+    course_source_service.sync_source_asset(asset.id)
 
     try:
         units, metadata = parse_source_asset(asset.id, asset.asset_type, content)
@@ -108,11 +110,13 @@ def import_course_source_asset(
         asset.metadata = metadata
         asset.updated_at = utc_now()
         update_source_asset(asset)
+        course_source_service.sync_source_asset(asset.id)
     except SourceAssetParseError as exc:
         asset.extraction_status = "failed"
         asset.error_message = str(exc)
         asset.updated_at = utc_now()
         update_source_asset(asset)
+        course_source_service.sync_source_asset(asset.id)
         raise SourceAssetExtractionError(str(exc)) from exc
 
     detail = get_source_asset(asset.id)
@@ -145,3 +149,4 @@ def remove_source_asset(asset_id: str) -> None:
     except OSError:
         pass
     delete_source_asset(asset.id)
+    course_source_service.remove_asset_source(asset.id)

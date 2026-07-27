@@ -9,6 +9,7 @@ from app.knowledge_card_note_store import clear_notes
 from app.transcript_chunk_store import clear_chunks
 from app.topic_store import clear_topics
 from app.learning_document_store import clear_learning_documents
+from app.course_source_store import clear_course_sources
 from app.source_asset_store import clear_source_assets
 
 @pytest.fixture(autouse=True)
@@ -22,6 +23,7 @@ def isolated_job_db(tmp_path_factory):
     clear_runs()
     clear_cards()
     clear_learning_documents()
+    clear_course_sources()
     clear_source_assets()
     clear_topics()
     clear_chunks()
@@ -34,6 +36,7 @@ def isolated_job_db(tmp_path_factory):
     clear_runs()
     clear_cards()
     clear_learning_documents()
+    clear_course_sources()
     clear_source_assets()
     clear_topics()
     clear_chunks()

@@ -1,7 +1,14 @@
 from contextlib import asynccontextmanager
 from functools import cache
 
-from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, UploadFile
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+)
 from fastapi import status
 from fastapi import Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,6 +18,7 @@ from . import auto_card_generation_service
 from . import card_embedding_service
 from . import card_relation_service
 from . import card_service
+from . import course_source_service
 from . import course_service
 from . import export_service
 from . import job_service
@@ -22,10 +30,21 @@ from . import review_item_service
 from . import review_service
 from . import runtime_service
 from . import source_asset_service
+from . import source_index_service
+from . import source_search_service
 from . import transcript_chunk_service
 from . import topic_service
 from . import topic_suggestion_service
 from .course import Course, CourseCreate, CourseUpdate
+from .course_source import (
+    CourseSource,
+    CourseSourceChunk,
+    CourseSourceUpdate,
+    SourceIndexRequest,
+    SourceIndexResult,
+    SourceSearchRequest,
+    SourceSearchResponse,
+)
 from .card_generation_run import AutoCardGenerationRequest, CardGenerationRun
 from .card_embedding import CardEmbeddingBatchResult, CardEmbeddingStatus
 from .card_relation import (
@@ -267,6 +286,70 @@ def raise_source_asset_http_error(
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="Unexpected source asset service error.",
+    ) from exc
+
+
+def raise_course_source_http_error(
+    exc: course_source_service.CourseSourceServiceError,
+) -> None:
+    if isinstance(
+        exc,
+        course_source_service.CourseSourceNotFoundError,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    if isinstance(exc, course_source_service.CourseSourceScopeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    if isinstance(
+        exc,
+        course_source_service.CourseSourceUnavailableError,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Unexpected source service error.",
+    ) from exc
+
+
+def raise_source_index_http_error(
+    exc: source_index_service.SourceIndexServiceError,
+) -> None:
+    if isinstance(exc, source_index_service.SourceIndexConflictError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Sources changed while indexing. Please retry.",
+        ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(
+            "Source indexing failed. Check the local model settings "
+            "and retry."
+        ),
+    ) from exc
+
+
+def raise_source_search_http_error(
+    exc: source_search_service.SourceSearchServiceError,
+) -> None:
+    if isinstance(exc, source_search_service.SourceSearchConflictError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Sources changed while searching. Please retry.",
+        ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(
+            "Source search failed. Check the local model settings "
+            "and retry."
+        ),
     ) from exc
 
 
@@ -561,6 +644,8 @@ def archive_response(archive: export_service.MarkdownArchive) -> Response:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    for course in course_service.list_video_courses():
+        course_source_service.reconcile_course_sources(course.id)
 
     yield
 
@@ -801,6 +886,114 @@ def delete_source_asset(asset_id: str) -> Response:
     except source_asset_service.SourceAssetServiceError as exc:
         raise_source_asset_http_error(exc)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get(
+    "/courses/{course_id}/sources",
+    response_model=list[CourseSource],
+)
+def list_course_sources(course_id: str) -> list[CourseSource]:
+    try:
+        return course_source_service.list_course_sources(course_id)
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except course_source_service.CourseSourceServiceError as exc:
+        raise_course_source_http_error(exc)
+
+
+@app.get(
+    "/sources/{source_id}",
+    response_model=CourseSource,
+)
+def get_course_source(source_id: str) -> CourseSource:
+    try:
+        return course_source_service.get_course_source(source_id)
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except course_source_service.CourseSourceServiceError as exc:
+        raise_course_source_http_error(exc)
+
+
+@app.get(
+    "/sources/{source_id}/chunks",
+    response_model=list[CourseSourceChunk],
+)
+def list_course_source_chunks(
+    source_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+) -> list[CourseSourceChunk]:
+    try:
+        return course_source_service.list_source_chunks(
+            source_id,
+            limit=limit,
+            offset=offset,
+        )
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except course_source_service.CourseSourceServiceError as exc:
+        raise_course_source_http_error(exc)
+
+
+@app.patch(
+    "/sources/{source_id}",
+    response_model=CourseSource,
+)
+def update_course_source(
+    source_id: str,
+    request: CourseSourceUpdate,
+) -> CourseSource:
+    try:
+        return course_source_service.update_source_enabled(
+            source_id,
+            enabled=request.enabled,
+        )
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except course_source_service.CourseSourceServiceError as exc:
+        raise_course_source_http_error(exc)
+
+
+@app.post(
+    "/courses/{course_id}/sources/index",
+    response_model=SourceIndexResult,
+)
+def index_course_sources(
+    course_id: str,
+    request: SourceIndexRequest | None = None,
+) -> SourceIndexResult:
+    try:
+        return source_index_service.index_course_sources(
+            course_id,
+            request,
+        )
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except course_source_service.CourseSourceServiceError as exc:
+        raise_course_source_http_error(exc)
+    except source_index_service.SourceIndexServiceError as exc:
+        raise_source_index_http_error(exc)
+
+
+@app.post(
+    "/courses/{course_id}/sources/search",
+    response_model=SourceSearchResponse,
+)
+def search_course_sources(
+    course_id: str,
+    request: SourceSearchRequest,
+) -> SourceSearchResponse:
+    try:
+        return source_search_service.search_course_sources(
+            course_id,
+            request,
+        )
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except course_source_service.CourseSourceServiceError as exc:
+        raise_course_source_http_error(exc)
+    except source_search_service.SourceSearchServiceError as exc:
+        raise_source_search_http_error(exc)
 
 
 @app.get(

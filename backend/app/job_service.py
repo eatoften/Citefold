@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel
 
+from . import course_source_service
 from .course import DEFAULT_COURSE_ID
 from .card_generation_run_store import delete_runs_for_job
 from .course_store import get_course
@@ -156,6 +157,7 @@ def create_video_job(
     )
 
     create_job(job)
+    course_source_service.sync_video_source(job.id)
 
     return job
 
@@ -183,6 +185,7 @@ def start_job(job_id: str) -> VideoJob:
 
     _mark_started(job)
     update_job(job)
+    course_source_service.sync_video_source(job.id)
 
     return job
 
@@ -200,6 +203,7 @@ def retry_job(job_id: str) -> VideoJob:
 
     _mark_started(job)
     update_job(job)
+    course_source_service.sync_video_source(job.id)
 
     return job
 
@@ -214,6 +218,7 @@ def delete_video_job(
     delete_cards_for_job(job.id)
     delete_chunks_for_job(job.id)
     delete_job(job.id)
+    course_source_service.remove_video_source(job.id)
 
     _unlink_artifact(job.video_path, artifact_root)
 
@@ -267,6 +272,7 @@ def save_job_progress(job: VideoJob) -> None:
         job.completed_at = now
 
     update_job(job)
+    course_source_service.sync_video_source(job.id)
 
 
 def get_job_transcript(job_id: str) -> TranscriptionResult:

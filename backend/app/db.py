@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .course import DEFAULT_COURSE_ID, DEFAULT_COURSE_TITLE
+from .migrations import apply_migrations, prepare_migration_backup
 from .settings import get_app_path_settings
 
 DEFAULT_DB_PATH = get_app_path_settings().db_path
@@ -287,6 +288,7 @@ def connect() -> Iterator[sqlite3.Connection]:
 
 def init_db() -> None:
     db_path = get_db_path()
+    prepare_migration_backup(db_path)
 
     with connect() as conn:
         conn.execute(
@@ -794,6 +796,8 @@ def init_db() -> None:
             ON card_generation_runs (job_id)
             """
         )
+
+        apply_migrations(conn)
 
     _initialized_paths.add(db_path)
 

@@ -160,3 +160,246 @@ P0.1 must expose video transcript chunks and imported document units through
 one typed Source/Chunk/Locator contract, build a persistent incremental index,
 preserve the legacy `/rag/retrieve` API, and pass migration plus mixed-source
 retrieval tests.
+
+## P0.1 - Unified Sources
+
+**Status:** Complete
+
+**Date:** 2026-07-27
+
+**Branch:** `codex/notebooklm-product-core`
+
+### User outcome
+
+The backend can now treat a course's videos and imported documents as one
+selectable evidence library. A client can list Sources, inspect their chunks,
+enable or disable them, index them incrementally, and retrieve mixed video and
+document evidence with an exact typed location.
+
+This is the evidence foundation for Chat and citations. It does not yet claim a
+new visible Sources page or a generated answer.
+
+### Why this stage now
+
+The old Ask flow searched generated knowledge cards. Video transcripts and
+local documents had separate schemas, lifecycles, and locators. Building
+conversation persistence first would have anchored citations to that split and
+made future answer history difficult to migrate safely.
+
+The first irreversible user data in the new product loop should therefore be a
+stable Source and chunk identity, not an LLM response.
+
+### Scope and non-goals
+
+Included:
+
+- canonical `Source`, `SourceChunk`, and versioned typed `Locator` models;
+- unified video, audio, PDF, PPTX, DOCX, Markdown, and text source projection;
+- deterministic source/chunk IDs suitable for persistent citations;
+- per-source enable/disable selection;
+- persistent source-chunk embeddings with incremental skip behavior;
+- course- and source-scoped mixed evidence search;
+- a versioned migration, pre-migration backup, and startup repair;
+- compatibility with jobs, source assets, cards, Study, and `/rag/retrieve`.
+
+Not included:
+
+- no answer generation, multi-turn history, or abstention policy;
+- no citation viewer or frontend source-management workspace;
+- no durable background indexing queue, cancellation, or progress UI;
+- no hybrid lexical retrieval, reranking, OCR redesign, or web sources.
+
+### API contract
+
+```text
+GET   /courses/{course_id}/sources
+GET   /sources/{source_id}
+GET   /sources/{source_id}/chunks?limit=&offset=
+PATCH /sources/{source_id}                    { enabled }
+POST  /courses/{course_id}/sources/index
+POST  /courses/{course_id}/sources/search
+```
+
+The locator union is:
+
+```text
+video_time | pdf_page | ppt_slide | docx_paragraph | text_section
+```
+
+Video-time locators resolve to the originating job when one exists and fall
+back to the imported asset ID for standalone audio/video evidence.
+
+### Decisions and alternatives
+
+The chosen design is a canonical query projection over the existing origin
+stores. Video jobs and document assets remain authoritative; `sources`,
+`source_chunks`, and `source_chunk_embeddings` provide the stable product
+contract.
+
+This was chosen over:
+
+- a pure SQL union, which could not own persistent selection and indexing
+  state or stable future citation IDs;
+- moving 5.33 GB of installed videos into `source_assets`, which would
+  duplicate lifecycle ownership and make migration unnecessarily expensive;
+- a flag-day rewrite, which would risk mature upload, Study, card, and review
+  workflows;
+- model inference during migration, which would make schema upgrades depend on
+  model availability and memory.
+
+Cards remain derived artifacts. The legacy card retrieval endpoint stays
+available, but future factual Chat citations will point to original source
+chunks.
+
+See
+[`ADR-0002`](decisions/ADR-0002-canonical-source-projection.md).
+
+### Technology and responsibilities
+
+| Component | Technology | Responsibility |
+| --- | --- | --- |
+| Contract | Pydantic discriminated unions | Validate locator kind and fields at the API boundary |
+| API | FastAPI | Course isolation, selection, pagination, index, and search endpoints |
+| Origin data | Existing job/transcript and asset/unit services | Remain the authoritative evidence lifecycle |
+| Query projection | SQLite | Stable source IDs, chunk text, status, selection, and vector metadata |
+| Migration | SQLite savepoint + backup API + `quick_check` | Atomic forward upgrade with a recoverable pre-migration copy |
+| Embeddings | Existing sentence-transformer abstraction | Local dense vectors and cosine retrieval |
+| Consistency | Lock-serialized projection writes + generation-token compare-and-swap | Prevent stale projection/task overwrites and publish only for the expected course/chunk generation |
+| Verification | pytest, compileall, ESLint, TypeScript, Vite | Regression, schema, API, and build gates |
+
+### Problems encountered and resolutions
+
+1. **Migration cost was initially easy to underestimate.** The real workspace
+   contains five videos totaling 5,328,217,687 bytes. Migration now reads only
+   database metadata and extracted UTF-8 chunk text; it never opens or hashes a
+   media file.
+2. **A read-time full reconciliation caused writes and race risk.** Source GET
+   requests are now pure. Origin mutation workflows update their own
+   projection; one startup reconciliation remains as an explicit repair path.
+3. **Embedding outside a transaction created a time-of-check/time-of-use
+   window.** Index commit now rechecks course ownership, source existence,
+   readiness, chunk ID, active state, and text hash inside one transaction. A
+   concurrent edit, deletion, or course move returns conflict and leaves the
+   source stale.
+4. **Model names do not guarantee vector compatibility.** Index state and
+   indexed counts now bind model, dimension, and text hash. Direct indexing
+   uses the model's declared dimension when available and a one-chunk probe
+   otherwise, so a same-name model that changes output dimension is re-indexed
+   safely.
+5. **Imported media could lose its real video target.** The source projection
+   preserves a linked job ID, and `video_time` supports either job or asset
+   ownership. Runtime sync and migration now emit the same locator shape.
+6. **Legacy unit names did not exactly match the canonical contract.**
+   `transcript_segment` is normalized to canonical `transcript` while retaining
+   its video-time locator.
+7. **Caller-owned transactions did not prove migration atomicity.**
+   `apply_migrations` now owns an internal savepoint and tests failure rollback
+   of schema, data, and migration-version records.
+8. **Ordinary model runtime failures bypassed service errors.** OOM and backend
+   `RuntimeError` failures are now normalized, move an indexing Source to
+   `failed`, and retain the original exception only in application logs.
+9. **Raw local model errors could expose machine paths.** Both HTTP errors and
+   the public `Source.index_error` field now contain stable retry guidance, not
+   the original machine path.
+10. **Search performed inference before validating scope.** Course and selected
+    Sources are resolved first. Missing/cross-course requests preserve their
+    404/400 semantics, and an empty notebook returns without loading a model.
+11. **Concurrent projection writers could publish an old origin snapshot.**
+    Full reconciliation, per-source sync, deletion, and course moves now share
+    one process lock. HTTP GET misses remain pure 404s rather than hidden repair
+    writes.
+12. **An older failed index could overwrite a newer successful one.** Every
+    attempt now owns a UUID generation token. Begin, commit, and failure
+    transitions are course- and generation-scoped; source edits and moves
+    invalidate the token. A short `BEGIN IMMEDIATE` protects the final
+    compare-and-swap.
+13. **A source could move after search validation but before evidence reads.**
+    Final chunk and vector queries now join `sources` and require the original
+    course ID. Concurrent moves therefore return no former-course evidence.
+
+### Verification
+
+Focused Source, migration, and course regression after concurrency fixes:
+
+```text
+37 passed, 1 warning
+```
+
+Complete backend regression after the source implementation:
+
+```text
+443 passed, 1 warning in 71.47s
+```
+
+Frontend repository gates:
+
+```text
+ESLint: passed
+TypeScript + Vite production build: passed
+```
+
+The one warning is the existing Starlette TestClient deprecation notice for its
+legacy `httpx` bridge; it is unrelated to this stage.
+
+The current real database was exercised only through an isolated temporary
+copy:
+
+```text
+jobs:                 5 -> 5
+knowledge_cards:    118 -> 118
+card_embeddings:    101 -> 101
+canonical sources:          8
+canonical chunks:         491
+index generations:     8 NULL
+schema migration:           1 (unified_source_index)
+migrated quick_check:       ok
+backup quick_check:         ok
+migration time:       0.027929 s
+```
+
+The eight Sources are five video jobs and three document assets. The 491 chunks
+are 121 transcript chunks and 370 source units. Instrumentation observed zero
+video opens and exactly 491 text-hash inputs totaling 376,021 bytes. The
+original `jobs.db` SHA-256 remained:
+
+```text
+019587307a58e4b16e024c4fd2ef7c197ac3bf7575471a7d7b46c23d29a33026
+```
+
+The migration backup was independently readable and remained at the
+pre-migration schema. Temporary files were removed.
+
+### Known limitations
+
+- Indexing is a synchronous request and does not yet expose durable progress,
+  cancellation, or retry state. P0.5 owns that reliability work.
+- Retrieval is a dense cosine baseline without lexical recall or reranking.
+- Startup reconciliation is intentionally a repair mechanism; future source
+  types must add their own write-through sync hook.
+- Origin writes and projection sync still span two SQLite transactions. The
+  shared lock prevents stale overwrites, and startup repair recovers drift
+  after restart, but a durable retry/outbox belongs to P0.5 task reliability.
+- The projection lock matches the current single-process desktop backend. A
+  future multi-worker deployment would require cross-process coordination.
+- A changed vector dimension is detected, but a model whose name and dimension
+  stay constant while its weights change needs a persisted model
+  revision/fingerprint before old vectors can be invalidated automatically.
+- The projection duplicates extracted text to buy stable IDs and independent
+  query lifecycle.
+- This stage has no new frontend surface. It becomes user-visible through
+  P0.2-P0.4.
+
+### Git checkpoint
+
+Intended commit subject:
+
+```text
+feat(sources): unify course evidence under source chunks
+```
+
+### Next gate
+
+P0.2 will add durable conversations and messages, bounded multi-turn context,
+source-scoped retrieval, grounded local answer generation, explicit abstention,
+and persisted sentence-level citation records. P0.3 will make those citations
+open their exact original location.

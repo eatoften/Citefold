@@ -91,6 +91,24 @@ class SentenceTransformerEmbedder:
             for vector in encoded
         ]
 
+    def get_embedding_dimension(self) -> int:
+        model = self._get_model()
+        dimension_getter = getattr(
+            model,
+            "get_sentence_embedding_dimension",
+            None,
+        )
+        if not callable(dimension_getter):
+            raise EmbeddingError(
+                "The embedding model does not report its vector dimension."
+            )
+        dimension = dimension_getter()
+        if not isinstance(dimension, int) or dimension < 1:
+            raise EmbeddingError(
+                "The embedding model reported an invalid vector dimension."
+            )
+        return dimension
+
     def _get_model(self):
         if self._model is None:
             try:

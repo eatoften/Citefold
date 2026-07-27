@@ -2,7 +2,9 @@ from fastapi.testclient import TestClient
 
 import app.job_service as job_service
 import app.main as main
+import app.course_source_service as course_source_service
 from app.course import DEFAULT_COURSE_ID
+from app.course_source_store import get_source
 from app.job import VideoJob, VideoJobStatus
 from app.job_store import create_job, get_job
 from app.knowledge_card import KnowledgeCard
@@ -222,11 +224,17 @@ def test_delete_course_moves_jobs_to_default(tmp_path):
         job_id="course-job",
         course_id=course["id"],
     )
+    course_source_service.sync_video_source(job.id)
+    source_response = client.get(f"/courses/{course['id']}/sources")
+    assert source_response.status_code == 200
 
     response = client.delete(f"/courses/{course['id']}")
 
     assert response.status_code == 204
     assert get_job(job.id).course_id == DEFAULT_COURSE_ID
+    source = get_source(f"job:{job.id}")
+    assert source is not None
+    assert source.course_id == DEFAULT_COURSE_ID
 
 
 def test_delete_default_course_is_rejected():

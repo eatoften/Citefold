@@ -101,6 +101,8 @@ def update_video_course(
 
 
 def delete_video_course(course_id: str) -> None:
+    from . import course_source_service
+
     course = get_video_course(course_id)
 
     if course.id == DEFAULT_COURSE_ID:
@@ -109,6 +111,10 @@ def delete_video_course(course_id: str) -> None:
     move_jobs_to_course(course.id, DEFAULT_COURSE_ID)
     move_learning_documents_to_course(course.id, DEFAULT_COURSE_ID)
     move_source_assets_to_course(course.id, DEFAULT_COURSE_ID)
+    course_source_service.move_course_sources(
+        course.id,
+        DEFAULT_COURSE_ID,
+    )
     delete_topics_for_course(course.id)
     delete_course(course.id)
 

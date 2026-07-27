@@ -1,4 +1,5 @@
 from . import course_service
+from . import course_source_service
 from . import job_service
 from .embedding import EmbeddingError, SentenceTransformerEmbedder, TextEmbedder
 from .transcript_chunk import TranscriptChunk, TranscriptChunkGenerationRequest
@@ -55,6 +56,8 @@ def generate_job_chunks(
         replace_chunks_for_job(job.id, chunks)
     else:
         create_chunks(chunks)
+
+    course_source_service.sync_video_source(job.id)
 
     return chunks
 

@@ -37,7 +37,7 @@ commit, and remote push are all complete.
 | Stage | User outcome | Status |
 | --- | --- | --- |
 | P0.0 Product contract | One product direction, acceptance gates, and engineering journal | Complete |
-| P0.1 Unified Sources | Videos and local documents expose one Source/Chunk/Locator contract and index | In progress |
+| P0.1 Unified Sources | Videos and local documents expose one Source/Chunk/Locator contract and index | Complete |
 | P0.2 Grounded Chat | Persistent multi-turn answers with abstention and source-scoped retrieval | Planned |
 | P0.3 Verifiable citations | Sentence-level citations open the exact video time or document location | Planned |
 | P0.4 Source-first workspace | A course opens as Sources / Chat / Studio, with advanced tools secondary | Planned |
@@ -96,6 +96,8 @@ local video
 -> local Qwen grounded card generation
 -> SQLite cards + claims + evidence + review items
 -> local PPTX / PDF / DOCX / text source units
+-> canonical course Sources + typed locatable chunks
+-> persistent incremental source-chunk embeddings
 -> versioned concept study documents
 -> card embeddings and persistent relations
 -> Course Map / Study / Review / Explore / RAG baseline
