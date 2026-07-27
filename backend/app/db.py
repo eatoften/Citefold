@@ -267,8 +267,11 @@ def get_conn() -> sqlite3.Connection:
     db_path = get_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=10.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 10000")
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA synchronous = NORMAL")
     return conn
 
 
@@ -291,6 +294,9 @@ def init_db() -> None:
     prepare_migration_backup(db_path)
 
     with connect() as conn:
+        # WAL lets short autosave and task-progress writes coexist with reads
+        # without turning a long local operation into a global UI lock.
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS courses (

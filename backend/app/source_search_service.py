@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from . import course_source_service
+from . import course_service, course_source_service
 from .course_source import (
     SourceIndexRequest,
     SourceSearchRequest,
@@ -21,6 +21,7 @@ from .source_index_service import (
     SourceIndexGenerationError,
     index_course_sources,
 )
+from .workspace_lifecycle import workspace_lifecycle_lock
 
 
 class SourceSearchServiceError(Exception):
@@ -95,63 +96,89 @@ def search_course_sources(
             results=[],
         )
 
-    sources = course_source_service.resolve_course_sources(
-        course_id,
-        selected_ids,
-    )
-    sources_by_id = {source.id: source for source in sources}
-    chunks = list_chunks_for_course_sources(
-        course_id,
-        selected_ids,
-    )
-    chunks_by_id = {chunk.id: chunk for chunk in chunks}
-    embeddings = list_source_chunk_embeddings(
-        selected_ids,
-        expected_course_id=course_id,
-        model=index_result.model,
-    )
-    candidates = [
-        (chunks_by_id[embedding.chunk_id], embedding)
-        for embedding in embeddings
-        if (
-            embedding.chunk_id in chunks_by_id
-            and embedding.text_hash
-            == chunks_by_id[embedding.chunk_id].text_hash
+    # The expensive embedding/index work stays outside the lifecycle gate.
+    # Final reads and result publication share the gate with delete/restore so
+    # a Source tombstoned during search cannot leak one last stale result.
+    with workspace_lifecycle_lock():
+        chunks = list_chunks_for_course_sources(
+            course_id,
+            selected_ids,
         )
-    ]
-    if not candidates:
+        try:
+            sources = course_source_service.resolve_course_sources(
+                course_id,
+                selected_ids,
+            )
+        except (
+            course_service.CourseServiceError,
+            course_source_service.CourseSourceServiceError,
+        ):
+            # The request passed its initial scope checks, so a missing or
+            # out-of-scope Source here means a lifecycle change won the race.
+            return SourceSearchResponse(
+                question=request.question,
+                results=[],
+            )
+        sources_by_id = {source.id: source for source in sources}
+        chunks_by_id = {
+            chunk.id: chunk
+            for chunk in chunks
+            if chunk.source_id in sources_by_id
+        }
+        embeddings = list_source_chunk_embeddings(
+            list(sources_by_id),
+            expected_course_id=course_id,
+            model=index_result.model,
+        )
+        candidates = [
+            (chunks_by_id[embedding.chunk_id], embedding)
+            for embedding in embeddings
+            if (
+                embedding.chunk_id in chunks_by_id
+                and embedding.text_hash
+                == chunks_by_id[embedding.chunk_id].text_hash
+            )
+        ]
+        if not candidates:
+            return SourceSearchResponse(
+                question=request.question,
+                results=[],
+            )
+
+        results: list[SourceSearchResult] = []
+        for chunk, embedding in candidates:
+            if len(query_vector) != embedding.dimension:
+                raise SourceSearchError(
+                    "Query and source embedding dimensions do not match."
+                )
+            score = cosine_similarity(query_vector, embedding.vector)
+            if (
+                request.min_score is not None
+                and score < request.min_score
+            ):
+                continue
+            source = sources_by_id[chunk.source_id]
+            results.append(
+                SourceSearchResult(
+                    chunk_id=chunk.id,
+                    source_id=source.id,
+                    source_title=source.title,
+                    source_type=source.source_type,
+                    chunk_type=chunk.chunk_type,
+                    quote=chunk.text,
+                    score=score,
+                    locator=chunk.locator,
+                )
+            )
+
         return SourceSearchResponse(
             question=request.question,
-            results=[],
+            results=sorted(
+                results,
+                key=lambda item: (
+                    -item.score,
+                    item.source_id,
+                    item.chunk_id,
+                ),
+            )[:request.top_k],
         )
-
-    results: list[SourceSearchResult] = []
-    for chunk, embedding in candidates:
-        if len(query_vector) != embedding.dimension:
-            raise SourceSearchError(
-                "Query and source embedding dimensions do not match."
-            )
-        score = cosine_similarity(query_vector, embedding.vector)
-        if request.min_score is not None and score < request.min_score:
-            continue
-        source = sources_by_id[chunk.source_id]
-        results.append(
-            SourceSearchResult(
-                chunk_id=chunk.id,
-                source_id=source.id,
-                source_title=source.title,
-                source_type=source.source_type,
-                chunk_type=chunk.chunk_type,
-                quote=chunk.text,
-                score=score,
-                locator=chunk.locator,
-            )
-        )
-
-    return SourceSearchResponse(
-        question=request.question,
-        results=sorted(
-            results,
-            key=lambda item: (-item.score, item.source_id, item.chunk_id),
-        )[:request.top_k],
-    )

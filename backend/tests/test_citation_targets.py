@@ -21,7 +21,11 @@ from app.chat_store import (
     transition_turn,
 )
 from app.course import DEFAULT_COURSE_ID, Course, CourseCreate
-from app.course_service import create_video_course, delete_video_course
+from app.course_service import (
+    create_video_course,
+    delete_video_course,
+    restore_video_course,
+)
 from app.course_source import (
     CourseSource,
     CourseSourceChunk,
@@ -1119,7 +1123,7 @@ def test_video_time_asset_has_explicit_snapshot_fallback(
     assert unavailable.json()["reason"] == "asset_media_unavailable"
 
 
-def test_course_move_keeps_citation_bound_to_new_course(
+def test_course_trash_hides_citation_until_original_scope_is_restored(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1149,17 +1153,24 @@ def test_course_move_keeps_citation_bound_to_new_course(
         old_course = client.get(
             f"/courses/{course.id}/chat/citations/{citation_id}/target"
         )
-        moved = client.get(
+        default_course = client.get(
             f"/courses/{DEFAULT_COURSE_ID}/chat/citations/"
             f"{citation_id}/target"
         )
 
     assert old_course.status_code == 404
-    assert moved.status_code == 200
-    assert moved.json()["availability"] == "available"
-    assert moved.json()["locator"]["page_number"] == 7
+    assert default_course.status_code == 404
     assert original_path.is_file()
     assert original_path.parent.name == course.id
+
+    restore_video_course(course.id)
+    with _client() as client:
+        restored = client.get(
+            f"/courses/{course.id}/chat/citations/{citation_id}/target"
+        )
+    assert restored.status_code == 200
+    assert restored.json()["availability"] == "available"
+    assert restored.json()["locator"]["page_number"] == 7
 
 
 def test_managed_root_relocation_uses_stable_names_and_hashes(
@@ -1258,7 +1269,7 @@ def test_v4_video_fingerprint_migrates_v3_database_and_backup(
 
     backup = prepare_migration_backup(db_path)
     assert backup is not None
-    assert ".pre-migration-v4-" in backup.name
+    assert ".pre-migration-v7-" in backup.name
     with sqlite3.connect(backup) as conn:
         backup_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(jobs)")
@@ -1267,7 +1278,7 @@ def test_v4_video_fingerprint_migrates_v3_database_and_backup(
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        assert apply_migrations(conn) == [4]
+        assert apply_migrations(conn) == [4, 5, 6, 7]
         columns = {
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(jobs)")
@@ -1288,3 +1299,4 @@ def test_fresh_schema_has_video_fingerprint_column() -> None:
         }
     assert "video_sha256" in columns
     assert 4 in versions
+    assert 5 in versions

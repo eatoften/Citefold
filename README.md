@@ -54,9 +54,15 @@ Implemented:
   inspector, while preserving the saved quotation when a local file changes;
 - timestamped knowledge cards, versioned Study documents, FSRS Review, Course
   Map, graph exploration, and local Markdown export;
-- recoverable SQLite schema migrations with validated pre-migration backups.
+- recoverable SQLite schema migrations with validated pre-migration backups;
+- immediate device and revisioned workspace drafts across the main editing
+  surfaces, with honest save/conflict/leave-warning states;
+- durable, bounded processing tasks with persisted progress, cooperative
+  cancel, retry, idempotency, and restart recovery;
+- recoverable Trash for the main workspace entities, plus validated full
+  workspace backup/import/restore covering SQLite and managed local files.
 
-P0.4 reorganizes the application around this product navigation:
+P0.4 reorganized the application around this product navigation:
 
 ```text
 Sources
@@ -69,18 +75,20 @@ Studio
   -> Explore
 ```
 
-The accepted checkpoint includes a typed canonical route contract, legacy-link
+That checkpoint includes a typed canonical route contract, legacy-link
 migration, one mixed Source catalog, full course Chat with conversation deep
 links, the five Studio tools, and cross-course request isolation. P0.4 is
 complete on the productization branch but is **not part of the published
 `v0.1.1` desktop release**.
 
-The next product gate after P0.4 is reliability: automatic preservation,
-recoverable and cancellable processing tasks, safe deletion, and validated
-backup/restore. Notes, a persistent Studio output library, product polish, and
-frontend decomposition follow as separate stages. See the
+P0.5 completes automatic preservation, recoverable and cancellable processing
+tasks, safe deletion, validated backup/restore, and an owned desktop-backend
+lifecycle on the productization branch. The next gate is P1.1 Notebook Notes:
+free notes, save-answer-to-note, and note-to-Source. A persistent Studio output
+library, product polish, and frontend decomposition follow as separate stages.
+See the
 [active roadmap](docs/roadmap.md),
-[P0.4 decision record](docs/decisions/ADR-0005-source-first-workspace-and-route-contract.md),
+[P0.5 decision record](docs/decisions/ADR-0006-local-workspace-lifecycle-and-recovery.md),
 and [append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.
 

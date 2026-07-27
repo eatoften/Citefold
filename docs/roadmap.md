@@ -41,7 +41,7 @@ commit, and remote push are all complete.
 | P0.2 Grounded Chat | Persistent multi-turn answers with abstention and source-scoped retrieval | Complete |
 | P0.3 Verifiable citations | Sentence-level citations open the exact video time or document location | Complete |
 | P0.4 Source-first workspace | A course opens as Sources / Chat / Studio, with advanced tools secondary | Complete |
-| P0.5 Reliability | Autosave, recoverable tasks, backup/restore, safe desktop lifecycle | Planned |
+| P0.5 Reliability | Autosave, recoverable tasks, backup/restore, safe desktop lifecycle | Complete |
 | P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Planned |
 | P1.2 Studio | Study, Review, and Course Map become a coherent output library | Planned |
 | P1.3 Product polish | Onboarding, previews, search, empty/error states, accessibility, localization | Planned |
@@ -89,6 +89,63 @@ in the delivery summary. Exact commands, bundle sizes, browser fixtures,
 tradeoffs, and remaining risks are recorded in the
 [productization log](productization-log.md); the architectural contract is recorded in
 [ADR-0005](decisions/ADR-0005-source-first-workspace-and-route-contract.md).
+
+### P0.5 completion summary
+
+P0.5 makes local work recoverable instead of treating reliability as a set of
+UI error messages. The checkpoint adds four connected guarantees:
+
+```text
+editing
+-> immediate device draft
+-> revisioned workspace draft
+-> explicit domain save
+
+long-running work
+-> durable task reservation
+-> bounded worker + persisted progress
+-> cooperative cancel / retry / restart recovery
+
+ordinary deletion
+-> tombstone + trash journal
+-> same-identity restore
+-> namespace-bound, globally exclusive, restart-recoverable permanent purge
+
+workspace recovery
+-> online SQLite snapshot + managed files
+-> manifest/hash/integrity validation
+-> restart-bound restore + pre-restore safety point
+-> write-ahead commit/rollback fences + receipt-last cleanup
+```
+
+The global Activity and Data & recovery utilities expose task progress,
+cancel/retry, Trash restore/purge, and workspace backup/import/restore without
+adding another primary product destination. Draft protection is integrated
+into Chat, Study, cards, card notes, review input, and generated-card work. Video
+processing, Source import/indexing, card generation, Chat generation, and
+Study generation now share one persisted task protocol. Automatic cards also
+publish cards, review items, and a per-chunk completion record atomically, so a
+restart retries only unfinished model work. Frontend operation epochs prevent
+late responses from a previous course, Source, conversation, or job from
+publishing into the newly selected scope.
+
+The desktop boundary now identifies a specific backend instance, stops only
+its owned sidecar, asks the worker to quiesce before termination, and never
+kills an unrelated process because it happens to own the configured port.
+Restore is queued and applied before the database is opened; its result is
+validated and reported separately from the restart itself. Interrupted Trash
+claims recover before worker dispatch, and an imported purge plan must prove
+the same entity/course ownership and global path exclusivity before it can
+remove a managed file. Parent purge also preserves an incomplete child purge
+journal, and database cleanup cannot touch files again after the artifact
+phase. A completed restore rollback is also a durable, restart-resumable
+publication phase rather than a best-effort error path.
+
+The implementation and verification record is in the
+[productization log](productization-log.md). The durable task, draft, Trash,
+backup/restore, and desktop ownership contracts are recorded in
+[ADR-0006](decisions/ADR-0006-local-workspace-lifecycle-and-recovery.md).
+P1.1 is the next gate: free Notes, save-answer-to-note, and note-to-Source.
 
 ### Stage gates
 

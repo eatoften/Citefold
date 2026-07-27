@@ -1,12 +1,15 @@
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
+import app.learning_document_service as learning_document_service
 import app.main as main
 import app.source_asset_service as source_asset_service
 from app.course import DEFAULT_COURSE_ID
 from app.job import VideoJob, VideoJobStatus
 from app.job_store import create_job
+from app.learning_document import LearningDocumentGenerateRequest
 
 
 client = TestClient(main.app)
@@ -28,6 +31,18 @@ Backpropagation applies the chain rule [C1].
 
 The imported notes provide a worked explanation [S1].
 """
+
+
+class CardOnlyStudyLLM:
+    settings = SimpleNamespace(provider="ollama", model="qwen-test")
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def create_chat_completion(self, messages, **kwargs) -> str:
+        self.calls += 1
+        assert "[C1]" in messages[-1].content
+        return "# Backpropagation Study\n\nThe chain rule applies [C1]."
 
 
 def create_card(tmp_path) -> dict:
@@ -139,6 +154,105 @@ def test_import_text_and_generate_grounded_document(tmp_path, monkeypatch):
         "card_claim",
         "source_unit",
     }
+
+
+def test_generation_checkpoint_and_operation_id_prevent_partial_or_duplicate_publish(
+    tmp_path,
+):
+    card = create_card(tmp_path)
+    supporting_response = client.post(
+        "/jobs/study-job/cards",
+        json={
+            "title": "Chain rule",
+            "summary": "The chain rule composes local derivatives.",
+            "claims": [
+                {
+                    "text": "Local derivatives are composed.",
+                    "evidence": [
+                        {
+                            "quote": "compose local derivatives",
+                            "segment_start_seconds": 22.0,
+                            "segment_end_seconds": 25.0,
+                        }
+                    ],
+                }
+            ],
+            "source_start_seconds": 20.0,
+            "source_end_seconds": 30.0,
+        },
+    )
+    assert supporting_response.status_code == 201
+    supporting_card = supporting_response.json()
+    document = client.post(
+        f"/cards/{card['id']}/learning-documents",
+        json={"title": "Atomic generation"},
+    ).json()
+    request = LearningDocumentGenerateRequest(
+        supporting_card_ids=[supporting_card["id"]],
+    )
+    initial_body = document["body_markdown"]
+    initial_version_count = len(document["versions"])
+    canceled_llm = CardOnlyStudyLLM()
+
+    class CanceledBeforePublish(RuntimeError):
+        pass
+
+    def cancel_before_publish() -> None:
+        raise CanceledBeforePublish()
+
+    with pytest.raises(CanceledBeforePublish):
+        learning_document_service.generate_learning_document(
+            document["id"],
+            request,
+            llm_client=canceled_llm,
+            checkpoint=cancel_before_publish,
+            operation_id="study-task-canceled",
+        )
+
+    after_cancel = client.get(
+        f"/learning-documents/{document['id']}"
+    ).json()
+    assert after_cancel["body_markdown"] == initial_body
+    assert len(after_cancel["versions"]) == initial_version_count
+    assert [link["role"] for link in after_cancel["card_links"]] == [
+        "primary_anchor"
+    ]
+
+    successful_llm = CardOnlyStudyLLM()
+    first = learning_document_service.generate_learning_document(
+        document["id"],
+        request,
+        llm_client=successful_llm,
+        checkpoint=lambda: None,
+        operation_id="study-task-stable",
+    )
+
+    class MustNotRunLLM:
+        settings = SimpleNamespace(provider="ollama", model="qwen-test")
+
+        def create_chat_completion(self, messages, **kwargs) -> str:
+            raise AssertionError("An applied operation must replay without LLM.")
+
+    replay = learning_document_service.generate_learning_document(
+        document["id"],
+        request,
+        llm_client=MustNotRunLLM(),
+        checkpoint=lambda: None,
+        operation_id="study-task-stable",
+    )
+
+    assert successful_llm.calls == 1
+    assert replay.document.body_markdown == first.document.body_markdown
+    assert {link.card_id for link in replay.document.card_links} == {
+        card["id"],
+        supporting_card["id"],
+    }
+    assert len(replay.document.versions) == initial_version_count + 1
+    assert {
+        version.id
+        for version in replay.document.versions
+        if version.id == "study-task-stable"
+    } == {"study-task-stable"}
 
 
 def test_course_map_reports_learning_coverage(tmp_path):

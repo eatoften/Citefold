@@ -19,6 +19,7 @@ class VideoJobStatus(str, Enum):
     transcribing = "transcribing"
     completed = "completed"
     failed = "failed"
+    canceled = "canceled"
 
 
 class VideoJob(BaseModel):

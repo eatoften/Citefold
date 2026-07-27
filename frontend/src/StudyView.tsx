@@ -26,7 +26,37 @@ import type {
   StudyCard,
   StudyCourse,
 } from './studyTypes'
+import {
+  announceTrashCreated,
+  cancelReliableTask,
+  enqueueLearningDocumentGeneration,
+  retryReliableTask,
+  SaveStatus,
+  useAutosavedDraft,
+  waitForReliableTask,
+  type ReliableTask,
+} from './features/reliability'
 
+
+type StudyEditorDraft = {
+  title: string
+  summary: string
+  body_markdown: string
+  status: LearningDocument['status']
+  focus: string
+  selected_asset_ids: string[]
+  supporting_card_ids: string[]
+}
+
+type LearningDocumentGenerationTaskResult = {
+  generation: LearningDocumentGenerationResult
+}
+
+type FailedGenerationTask = {
+  taskId: string
+  documentId: string
+  courseId: string
+}
 
 type StudyViewProps = {
   apiBaseUrl: string
@@ -122,6 +152,12 @@ export function StudyView({
   const [isLoading, setIsLoading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isGenerating, setIsGenerating] = useState(false)
+  const [generationTask, setGenerationTask] =
+    useState<ReliableTask<LearningDocumentGenerationTaskResult> | null>(
+      null,
+    )
+  const [failedGenerationTask, setFailedGenerationTask] =
+    useState<FailedGenerationTask | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const activeCourseIdRef = useRef(selectedCourseId)
@@ -131,6 +167,10 @@ export function StudyView({
   const documentRequestEpochRef = useRef(0)
   const documentRequestControllerRef =
     useRef<AbortController | null>(null)
+  const generationRequestControllerRef =
+    useRef<AbortController | null>(null)
+  const generationSequenceRef = useRef(0)
+  const activeDocumentIdRef = useRef(selectedDocumentId)
   const onDocumentRouteChangeRef =
     useRef(onDocumentRouteChange)
 
@@ -139,9 +179,88 @@ export function StudyView({
   }, [selectedCourseId])
 
   useEffect(() => {
+    activeDocumentIdRef.current = selectedDocumentId
+  }, [selectedDocumentId])
+
+  useEffect(() => {
     onDocumentRouteChangeRef.current =
       onDocumentRouteChange
   }, [onDocumentRouteChange])
+
+  useEffect(() => {
+    generationSequenceRef.current += 1
+    generationRequestControllerRef.current?.abort()
+    generationRequestControllerRef.current = null
+    setGenerationTask(null)
+    setFailedGenerationTask(null)
+    setIsGenerating(false)
+  }, [selectedCourseId, selectedDocumentId])
+
+  const studyDraftValue = useMemo<StudyEditorDraft>(
+    () => ({
+      title,
+      summary,
+      body_markdown: body,
+      status,
+      focus,
+      selected_asset_ids: [...selectedAssetIds].sort(),
+      supporting_card_ids: [...supportingCardIds].sort(),
+    }),
+    [
+      body,
+      focus,
+      selectedAssetIds,
+      status,
+      summary,
+      supportingCardIds,
+      title,
+    ],
+  )
+  const studyDraftInitialValue = useMemo<StudyEditorDraft>(
+    () => ({
+      title: document?.title ?? '',
+      summary: document?.summary ?? '',
+      body_markdown: document?.body_markdown ?? '',
+      status: document?.status ?? 'draft',
+      focus: '',
+      selected_asset_ids: [],
+      supporting_card_ids: (
+        document?.card_links
+          .filter((link) => link.role !== 'primary_anchor')
+          .map((link) => link.card_id) ?? []
+      ).sort(),
+    }),
+    [document],
+  )
+  const restoreStudyDraft = useCallback(
+    (payload: StudyEditorDraft) => {
+      setTitle(payload.title)
+      setSummary(payload.summary)
+      setBody(payload.body_markdown)
+      setStatus(payload.status)
+      setFocus(payload.focus)
+      setSelectedAssetIds(new Set(payload.selected_asset_ids))
+      setSupportingCardIds(new Set(payload.supporting_card_ids))
+      setMode('edit')
+      setMessage('Recovered an automatically saved draft.')
+    },
+    [],
+  )
+  const studyDraft = useAutosavedDraft({
+    apiBaseUrl,
+    draftId: `study-document:${selectedDocumentId || 'none'}`,
+    courseId: document?.course_id ?? null,
+    draftType: 'study_document',
+    entityId: document?.id ?? null,
+    baseUpdatedAt: document?.updated_at ?? null,
+    enabled:
+      Boolean(document) &&
+      document?.id === selectedDocumentId &&
+      document?.course_id === selectedCourseId,
+    value: studyDraftValue,
+    initialValue: studyDraftInitialValue,
+    onRestore: restoreStudyDraft,
+  })
 
   const loadLibrary = useCallback(async () => {
     const courseId = selectedCourseId
@@ -263,6 +382,9 @@ export function StudyView({
     documentRequestControllerRef.current?.abort()
     documentRequestControllerRef.current = null
     documentRequestEpochRef.current += 1
+    generationSequenceRef.current += 1
+    generationRequestControllerRef.current?.abort()
+    generationRequestControllerRef.current = null
 
     setCards([])
     setDocuments([])
@@ -284,6 +406,8 @@ export function StudyView({
     setIsLoading(Boolean(selectedCourseId))
     setIsSaving(false)
     setIsGenerating(false)
+    setGenerationTask(null)
+    setFailedGenerationTask(null)
 
     void loadLibrary()
 
@@ -294,6 +418,9 @@ export function StudyView({
       documentRequestEpochRef.current += 1
       documentRequestControllerRef.current?.abort()
       documentRequestControllerRef.current = null
+      generationSequenceRef.current += 1
+      generationRequestControllerRef.current?.abort()
+      generationRequestControllerRef.current = null
     }
   }, [loadLibrary, selectedCourseId])
 
@@ -476,6 +603,7 @@ export function StudyView({
         return
       }
       setDocument(updated)
+      await studyDraft.clearDraft()
       setMessage(`Saved version ${updated.versions[0]?.version_number ?? ''}.`)
       await loadLibrary()
       if (activeCourseIdRef.current === courseId) {
@@ -492,57 +620,260 @@ export function StudyView({
     }
   }
 
+  function isCurrentGeneration(
+    sequence: number,
+    courseId: string,
+    documentId: string,
+  ): boolean {
+    return (
+      sequence === generationSequenceRef.current &&
+      activeCourseIdRef.current === courseId &&
+      activeDocumentIdRef.current === documentId
+    )
+  }
+
+  async function applyGenerationResult(
+    result: LearningDocumentGenerationResult,
+    sequence: number,
+    courseId: string,
+    documentId: string,
+  ): Promise<void> {
+    if (
+      !isCurrentGeneration(sequence, courseId, documentId) ||
+      result.document.course_id !== courseId ||
+      result.document.id !== documentId
+    ) {
+      return
+    }
+    setDocument(result.document)
+    setTitle(result.document.title)
+    setSummary(result.document.summary)
+    setBody(result.document.body_markdown)
+    setStatus(result.document.status)
+    setMode('preview')
+    await studyDraft.clearDraft()
+    if (!isCurrentGeneration(sequence, courseId, documentId)) return
+    setMessage(
+      `${result.selected_cards} cards and ${result.selected_source_units} source units used.${result.warning ? ` ${result.warning}` : ''}`,
+    )
+    await loadLibrary()
+    if (isCurrentGeneration(sequence, courseId, documentId)) {
+      setSelectedDocumentId(result.document.id)
+      setGenerationTask(null)
+      setFailedGenerationTask(null)
+    }
+  }
+
+  async function waitForGenerationTask(
+    taskId: string,
+    sequence: number,
+    courseId: string,
+    documentId: string,
+    controller: AbortController,
+  ): Promise<void> {
+    const completed =
+      await waitForReliableTask<LearningDocumentGenerationTaskResult>(
+        apiBaseUrl,
+        taskId,
+        {
+          signal: controller.signal,
+          onProgress: (task) => {
+            if (
+              isCurrentGeneration(sequence, courseId, documentId)
+            ) {
+              setGenerationTask(task)
+            }
+          },
+        },
+      )
+    const result = completed.result?.generation
+    if (!result) {
+      throw new Error(
+        'Document generation completed without a result.',
+      )
+    }
+    await applyGenerationResult(
+      result,
+      sequence,
+      courseId,
+      documentId,
+    )
+  }
+
   async function generateDocument() {
     if (!document) return
     const courseId = document.course_id
-    if (activeCourseIdRef.current !== courseId) return
+    const documentId = document.id
+    if (
+      activeCourseIdRef.current !== courseId ||
+      activeDocumentIdRef.current !== documentId
+    ) {
+      return
+    }
+    generationRequestControllerRef.current?.abort()
+    const controller = new AbortController()
+    generationRequestControllerRef.current = controller
+    const sequence = ++generationSequenceRef.current
     setIsGenerating(true)
+    setGenerationTask(null)
+    setFailedGenerationTask(null)
     setError(null)
     setMessage(null)
+    let taskId: string | null = null
     try {
-      const result = await fetchJson<LearningDocumentGenerationResult>(
+      const task = await enqueueLearningDocumentGeneration(
         apiBaseUrl,
-        `/learning-documents/${document.id}/generate`,
+        documentId,
         {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            source_asset_ids: [...selectedAssetIds],
-            supporting_card_ids: [...supportingCardIds],
-            focus: focus.trim() || null,
-            model: selectedModel || null,
-          }),
+          source_asset_ids: [...selectedAssetIds],
+          supporting_card_ids: [...supportingCardIds],
+          focus: focus.trim() || null,
+          model: selectedModel || null,
         },
+        controller.signal,
+      ) as ReliableTask<LearningDocumentGenerationTaskResult>
+      taskId = task.id
+      if (!isCurrentGeneration(sequence, courseId, documentId)) {
+        return
+      }
+      setGenerationTask(task)
+      await waitForGenerationTask(
+        task.id,
+        sequence,
+        courseId,
+        documentId,
+        controller,
       )
+    } catch (generationError) {
       if (
-        activeCourseIdRef.current !== courseId ||
-        result.document.course_id !== courseId
+        controller.signal.aborted ||
+        !isCurrentGeneration(sequence, courseId, documentId)
       ) {
         return
       }
-      setDocument(result.document)
-      setTitle(result.document.title)
-      setSummary(result.document.summary)
-      setBody(result.document.body_markdown)
-      setStatus(result.document.status)
-      setMode('preview')
-      setMessage(
-        `${result.selected_cards} cards and ${result.selected_source_units} source units used.${result.warning ? ` ${result.warning}` : ''}`,
+      setError(
+        generationError instanceof Error
+          ? generationError.message
+          : 'Generation failed.',
       )
-      await loadLibrary()
-      if (activeCourseIdRef.current === courseId) {
-        setSelectedDocumentId(result.document.id)
-      }
-    } catch (generationError) {
-      if (activeCourseIdRef.current === courseId) {
-        setError(
-          generationError instanceof Error ? generationError.message : 'Generation failed.',
-        )
+      if (taskId) {
+        setFailedGenerationTask({ taskId, documentId, courseId })
       }
     } finally {
-      if (activeCourseIdRef.current === courseId) {
+      if (isCurrentGeneration(sequence, courseId, documentId)) {
         setIsGenerating(false)
       }
+      if (generationRequestControllerRef.current === controller) {
+        generationRequestControllerRef.current = null
+      }
+    }
+  }
+
+  async function retryGeneration() {
+    const failed = failedGenerationTask
+    if (
+      !failed ||
+      activeCourseIdRef.current !== failed.courseId ||
+      activeDocumentIdRef.current !== failed.documentId
+    ) {
+      return
+    }
+    generationRequestControllerRef.current?.abort()
+    const controller = new AbortController()
+    generationRequestControllerRef.current = controller
+    const sequence = ++generationSequenceRef.current
+    setIsGenerating(true)
+    setFailedGenerationTask(null)
+    setError(null)
+    setMessage(null)
+    try {
+      const task = await retryReliableTask(
+        apiBaseUrl,
+        failed.taskId,
+      ) as ReliableTask<LearningDocumentGenerationTaskResult>
+      if (
+        !isCurrentGeneration(
+          sequence,
+          failed.courseId,
+          failed.documentId,
+        )
+      ) {
+        return
+      }
+      setGenerationTask(task)
+      await waitForGenerationTask(
+        task.id,
+        sequence,
+        failed.courseId,
+        failed.documentId,
+        controller,
+      )
+    } catch (generationError) {
+      if (
+        controller.signal.aborted ||
+        !isCurrentGeneration(
+          sequence,
+          failed.courseId,
+          failed.documentId,
+        )
+      ) {
+        return
+      }
+      setError(
+        generationError instanceof Error
+          ? generationError.message
+          : 'Generation retry failed.',
+      )
+      setFailedGenerationTask(failed)
+    } finally {
+      if (
+        isCurrentGeneration(
+          sequence,
+          failed.courseId,
+          failed.documentId,
+        )
+      ) {
+        setIsGenerating(false)
+      }
+      if (generationRequestControllerRef.current === controller) {
+        generationRequestControllerRef.current = null
+      }
+    }
+  }
+
+  async function cancelGeneration() {
+    const task = generationTask
+    const sequence = generationSequenceRef.current
+    const courseId = activeCourseIdRef.current
+    const documentId = activeDocumentIdRef.current
+    if (
+      !task ||
+      !courseId ||
+      !documentId ||
+      !['queued', 'running', 'canceling'].includes(task.status)
+    ) {
+      return
+    }
+    try {
+      const canceled = await cancelReliableTask(apiBaseUrl, task.id)
+      if (
+        !isCurrentGeneration(sequence, courseId, documentId) ||
+        canceled.id !== task.id
+      ) {
+        return
+      }
+      setGenerationTask(
+        canceled as ReliableTask<LearningDocumentGenerationTaskResult>,
+      )
+    } catch (cancelError) {
+      if (!isCurrentGeneration(sequence, courseId, documentId)) {
+        return
+      }
+      setError(
+        cancelError instanceof Error
+          ? cancelError.message
+          : 'Generation cancellation failed.',
+      )
     }
   }
 
@@ -554,9 +885,14 @@ export function StudyView({
       await fetchJson<void>(apiBaseUrl, `/learning-documents/${document.id}`, {
         method: 'DELETE',
       })
+      announceTrashCreated({
+        entity_type: 'learning_document',
+        entity_id: document.id,
+      })
       if (activeCourseIdRef.current !== courseId) return
       setSelectedDocumentId('')
       setDocument(null)
+      await studyDraft.clearDraft()
       setMessage('Study document deleted.')
       onDocumentRouteChangeRef.current?.(
         null,
@@ -650,7 +986,15 @@ export function StudyView({
           className={error ? 'study-notice error' : 'study-notice success'}
           role={error ? 'alert' : 'status'}
         >
-          {error ?? message}
+          <span>{error ?? message}</span>
+          {error && failedGenerationTask && (
+            <button
+              type="button"
+              onClick={() => void retryGeneration()}
+            >
+              Retry generation
+            </button>
+          )}
         </div>
       )}
 
@@ -707,6 +1051,10 @@ export function StudyView({
                   <option value="reviewed">reviewed</option>
                   <option value="needs_fix">needs fix</option>
                 </select>
+                <SaveStatus
+                  state={studyDraft.state}
+                  message={studyDraft.message}
+                />
                 <button type="button" disabled={isSaving} onClick={() => void saveDocument()}>
                   <Save size={15} /> Save
                 </button>
@@ -797,6 +1145,26 @@ export function StudyView({
                 <button className="study-generate-button" type="button" disabled={isGenerating} onClick={() => void generateDocument()}>
                   <Sparkles size={16} /> {isGenerating ? 'Generating locally' : 'Generate grounded draft'}
                 </button>
+                {generationTask &&
+                  ['queued', 'running', 'canceling'].includes(
+                    generationTask.status,
+                  ) && (
+                    <div className="study-empty-small" role="status">
+                      <span>
+                        {generationTask.progress.message ??
+                          'Generating grounded study material…'}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={generationTask.status === 'canceling'}
+                        onClick={() => void cancelGeneration()}
+                      >
+                        {generationTask.status === 'canceling'
+                          ? 'Canceling'
+                          : 'Cancel'}
+                      </button>
+                    </div>
+                  )}
               </section>
 
               <section>

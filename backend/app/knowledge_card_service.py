@@ -18,6 +18,8 @@ from .knowledge_card_store import (
     delete_cards_for_job,
     get_card,
     list_cards_for_job,
+    purge_card,
+    restore_card,
     update_card,
 )
 
@@ -53,6 +55,21 @@ def save_job_card(
     job_id: str,
     request: KnowledgeCardCreate,
 ) -> KnowledgeCardDetail:
+    card = build_job_card(job_id, request)
+    create_card(card)
+    save_initial_review_items(card.id, request.review_items)
+
+    return _to_detail(card)
+
+
+def build_job_card(
+    job_id: str,
+    request: KnowledgeCardCreate,
+    *,
+    card_id: str | None = None,
+) -> KnowledgeCard:
+    """Build a validated card record for a caller-owned transaction."""
+
     get_video_job(job_id)
     _validate_time_range(
         request.source_start_seconds,
@@ -61,7 +78,7 @@ def save_job_card(
 
     now = utc_now()
     card = KnowledgeCard(
-        id=uuid4().hex,
+        id=card_id or uuid4().hex,
         job_id=job_id,
         card_kind=request.card_kind,
         title=request.title.strip(),
@@ -78,11 +95,7 @@ def save_job_card(
         created_at=now,
         updated_at=now,
     )
-
-    create_card(card)
-    save_initial_review_items(card.id, request.review_items)
-
-    return _to_detail(card)
+    return card
 
 
 def update_saved_card(
@@ -166,6 +179,19 @@ def delete_saved_card(card_id: str) -> None:
         raise KnowledgeCardNotFoundError("Knowledge card not found.")
 
     delete_card(card_id)
+
+
+def restore_saved_card(card_id: str) -> KnowledgeCardDetail:
+    if not restore_card(card_id):
+        raise KnowledgeCardNotFoundError(
+            "Deleted knowledge card not found or its parent is still in trash."
+        )
+    return get_saved_card(card_id)
+
+
+def purge_saved_card(card_id: str) -> None:
+    if not purge_card(card_id):
+        raise KnowledgeCardNotFoundError("Deleted knowledge card not found.")
 
 
 def delete_all_job_cards(job_id: str) -> None:

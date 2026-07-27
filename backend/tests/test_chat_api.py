@@ -5,12 +5,15 @@ from pathlib import Path
 from threading import Event, Thread
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
+import app.chat_service as chat_service
+import app.chat_store as chat_store
 import app.main as main
 import app.rag_service as rag_service
 import app.source_search_service as source_search_service
-import app.chat_store as chat_store
+from app.chat import ChatMessageCreate
 from app.chat_grounding import INSUFFICIENT_EVIDENCE_MESSAGE
 from app.chat_service import (
     SAFE_GENERATION_MESSAGE,
@@ -34,6 +37,8 @@ from app.course_source_store import (
 )
 from app.llm_client import LLMTimeoutError
 from app.rag import RagRetrieveResponse
+from app.source_asset import SourceAsset
+from app.source_asset_store import create_source_asset
 
 
 class RecordingLLM:
@@ -103,6 +108,19 @@ def _project_pdf_source(
     texts: list[str],
     enabled: bool = True,
 ) -> tuple[CourseSource, list[CourseSourceChunk], list[SourceSearchResult]]:
+    create_source_asset(
+        SourceAsset(
+            id=asset_id,
+            course_id=course_id,
+            asset_type="pdf",
+            original_filename=f"{asset_id}.pdf",
+            stored_path=str(Path("test-sources") / f"{asset_id}.pdf"),
+            mime_type="application/pdf",
+            size_bytes=0,
+            sha256=f"test-{asset_id}",
+            extraction_status="ready",
+        )
+    )
     source = CourseSource(
         id=f"asset:{asset_id}",
         course_id=course_id,
@@ -764,6 +782,72 @@ def test_client_request_replay_does_not_repeat_search_or_generation(
     )
     assert len(search.calls) == 1
     assert len(llm.calls) == 1
+
+
+def test_canceled_generation_is_not_published_and_retries_same_turn(
+    monkeypatch,
+) -> None:
+    course = _create_course()
+    source, _, results = _project_pdf_source(
+        course_id=course.id,
+        asset_id="cancel-retry",
+        texts=["Cancellation must happen before answer publication."],
+    )
+    first_llm = RecordingLLM(
+        [_answered_output([("This answer must not be published.", ["E1"])])]
+    )
+    search = RecordingSearch(results)
+    _patch_chat_dependencies(monkeypatch, llm=first_llm, search=search)
+    client = TestClient(main.app)
+    conversation = _create_conversation(
+        client,
+        course.id,
+        source_ids=[source.id],
+    )
+    request = ChatMessageCreate(
+        content="Can cancellation prevent publication?",
+        client_request_id="stable-cancel-request",
+    )
+
+    def cancel_before_publication() -> None:
+        raise chat_service.ChatGenerationCancellationRequested()
+
+    with pytest.raises(chat_service.ChatGenerationCancellationRequested):
+        chat_service.send_chat_message(
+            str(conversation["id"]),
+            request,
+            llm_client=first_llm,
+            checkpoint=cancel_before_publication,
+        )
+
+    canceled_detail = client.get(
+        f"/chat/conversations/{conversation['id']}"
+    ).json()
+    assert len(canceled_detail["messages"]) == 2
+    assert canceled_detail["messages"][-1]["status"] == "failed"
+    assert canceled_detail["messages"][-1]["content"] == ""
+
+    retry_llm = RecordingLLM(
+        [_answered_output([("The retried answer is grounded.", ["E1"])])]
+    )
+    retried = chat_service.send_chat_message(
+        str(conversation["id"]),
+        request,
+        llm_client=retry_llm,
+        checkpoint=lambda: None,
+        retry_failed=True,
+    )
+
+    assert retried.status == "completed"
+    assert retried.client_request_id == request.client_request_id
+    assert retried.turn_id == canceled_detail["messages"][0]["turn_id"]
+    retried_detail = client.get(
+        f"/chat/conversations/{conversation['id']}"
+    ).json()
+    assert len(retried_detail["messages"]) == 2
+    assert retried_detail["messages"][-1]["status"] == "complete"
+    assert len(first_llm.calls) == 1
+    assert len(retry_llm.calls) == 1
 
 
 def test_same_conversation_rejects_concurrent_turn_with_409(

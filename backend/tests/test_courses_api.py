@@ -217,7 +217,9 @@ def test_list_course_card_index_includes_note_counts(tmp_path):
     assert item["updated_at"]
 
 
-def test_delete_course_moves_jobs_to_default(tmp_path):
+def test_delete_course_hides_children_and_restore_keeps_original_scope(
+    tmp_path,
+):
     course = create_course()
     job = create_uploaded_job(
         tmp_path,
@@ -231,10 +233,30 @@ def test_delete_course_moves_jobs_to_default(tmp_path):
     response = client.delete(f"/courses/{course['id']}")
 
     assert response.status_code == 204
-    assert get_job(job.id).course_id == DEFAULT_COURSE_ID
-    source = get_source(f"job:{job.id}")
-    assert source is not None
-    assert source.course_id == DEFAULT_COURSE_ID
+    assert get_job(job.id) is None
+    deleted_job = get_job(job.id, include_deleted=True)
+    assert deleted_job is not None
+    assert deleted_job.course_id == course["id"]
+    preserved_source = get_source(f"job:{job.id}")
+    assert preserved_source is not None
+    assert preserved_source.course_id == course["id"]
+    assert client.get(f"/sources/job:{job.id}").status_code == 404
+
+    trash_item = next(
+        item
+        for item in client.get("/trash").json()
+        if item["entity_type"] == "course"
+        and item["entity_id"] == course["id"]
+    )
+    assert client.post(
+        f"/trash/{trash_item['id']}/restore"
+    ).status_code == 200
+    restored_job = get_job(job.id)
+    assert restored_job is not None
+    assert restored_job.course_id == course["id"]
+    restored_source = get_source(f"job:{job.id}")
+    assert restored_source is not None
+    assert restored_source.course_id == course["id"]
 
 
 def test_delete_default_course_is_rejected():

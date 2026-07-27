@@ -173,7 +173,7 @@ def test_save_card_note_rejects_blank_body(tmp_path):
     }
 
 
-def test_delete_card_removes_notes(tmp_path):
+def test_delete_card_preserves_notes_for_restore(tmp_path):
     card = create_saved_card(tmp_path)
     created_note = client.post(
         f"/cards/{card.id}/notes",
@@ -183,4 +183,15 @@ def test_delete_card_removes_notes(tmp_path):
     response = client.delete(f"/cards/{card.id}")
 
     assert response.status_code == 204
-    assert get_note(created_note["id"]) is None
+    assert get_note(created_note["id"]) is not None
+    trash_item = next(
+        item
+        for item in client.get("/trash").json()
+        if item["entity_type"] == "knowledge_card"
+        and item["entity_id"] == card.id
+    )
+    assert client.post(
+        f"/trash/{trash_item['id']}/restore"
+    ).status_code == 200
+    notes = client.get(f"/cards/{card.id}/notes").json()
+    assert [item["id"] for item in notes] == [created_note["id"]]

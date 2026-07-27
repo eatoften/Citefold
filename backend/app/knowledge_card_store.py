@@ -8,6 +8,8 @@ from .knowledge_card import (
     KnowledgeCardClaim,
     KnowledgeCardIndexItem,
 )
+from .job import utc_now
+from .trash_store import put_trash_item, remove_trash_item_for_entity
 
 
 def _datetime_to_text(value: datetime) -> str:
@@ -181,14 +183,28 @@ def create_card(card: KnowledgeCard) -> None:
         )
 
 
-def get_card(card_id: str) -> KnowledgeCard | None:
+def get_card(
+    card_id: str,
+    *,
+    include_deleted: bool = False,
+) -> KnowledgeCard | None:
     ensure_db()
+    if include_deleted:
+        select = "SELECT * FROM knowledge_cards WHERE id = ?"
+    else:
+        select = """
+            SELECT knowledge_cards.*
+            FROM knowledge_cards
+            INNER JOIN jobs ON jobs.id = knowledge_cards.job_id
+            INNER JOIN courses ON courses.id = jobs.course_id
+            WHERE knowledge_cards.id = ?
+              AND knowledge_cards.deleted_at IS NULL
+              AND jobs.deleted_at IS NULL
+              AND courses.deleted_at IS NULL
+        """
 
     with connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM knowledge_cards WHERE id = ?",
-            (card_id,),
-        ).fetchone()
+        row = conn.execute(select, (card_id,)).fetchone()
 
     if row is None:
         return None
@@ -204,6 +220,15 @@ def list_cards_for_job(job_id: str) -> list[KnowledgeCard]:
             """
             SELECT * FROM knowledge_cards
             WHERE job_id = ?
+              AND deleted_at IS NULL
+              AND EXISTS (
+                    SELECT 1
+                    FROM jobs
+                    INNER JOIN courses ON courses.id = jobs.course_id
+                    WHERE jobs.id = knowledge_cards.job_id
+                      AND jobs.deleted_at IS NULL
+                      AND courses.deleted_at IS NULL
+              )
             ORDER BY source_start_seconds ASC, created_at ASC
             """,
             (job_id,),
@@ -221,7 +246,11 @@ def list_cards_for_course(course_id: str) -> list[KnowledgeCard]:
             SELECT knowledge_cards.*
             FROM knowledge_cards
             INNER JOIN jobs ON jobs.id = knowledge_cards.job_id
+            INNER JOIN courses ON courses.id = jobs.course_id
             WHERE jobs.course_id = ?
+              AND knowledge_cards.deleted_at IS NULL
+              AND jobs.deleted_at IS NULL
+              AND courses.deleted_at IS NULL
             ORDER BY
                 knowledge_cards.source_start_seconds ASC,
                 knowledge_cards.created_at ASC
@@ -241,6 +270,10 @@ def list_cards() -> list[KnowledgeCard]:
             SELECT knowledge_cards.*
             FROM knowledge_cards
             INNER JOIN jobs ON jobs.id = knowledge_cards.job_id
+            INNER JOIN courses ON courses.id = jobs.course_id
+            WHERE knowledge_cards.deleted_at IS NULL
+              AND jobs.deleted_at IS NULL
+              AND courses.deleted_at IS NULL
             ORDER BY
                 jobs.course_id ASC,
                 jobs.created_at ASC,
@@ -283,6 +316,7 @@ def list_card_index_for_course(
                     AS learning_document_count
             FROM knowledge_cards
             INNER JOIN jobs ON jobs.id = knowledge_cards.job_id
+            INNER JOIN courses ON courses.id = jobs.course_id
             LEFT JOIN knowledge_card_notes
                 ON knowledge_card_notes.card_id = knowledge_cards.id
             LEFT JOIN review_items
@@ -290,6 +324,9 @@ def list_card_index_for_course(
             LEFT JOIN learning_document_cards
                 ON learning_document_cards.card_id = knowledge_cards.id
             WHERE jobs.course_id = ?
+              AND knowledge_cards.deleted_at IS NULL
+              AND jobs.deleted_at IS NULL
+              AND courses.deleted_at IS NULL
             GROUP BY knowledge_cards.id
             ORDER BY
                 knowledge_cards.updated_at DESC,
@@ -321,7 +358,7 @@ def update_card(card: KnowledgeCard) -> None:
                 provider = ?,
                 model = ?,
                 updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND deleted_at IS NULL
             """,
             (
                 card.title,
@@ -342,6 +379,154 @@ def update_card(card: KnowledgeCard) -> None:
         )
 
 
+def delete_card(card_id: str) -> bool:
+    ensure_db()
+    deleted_at = utc_now()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT knowledge_cards.title, jobs.course_id
+            FROM knowledge_cards
+            INNER JOIN jobs ON jobs.id = knowledge_cards.job_id
+            WHERE knowledge_cards.id = ?
+              AND knowledge_cards.deleted_at IS NULL
+            """,
+            (card_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        cursor = conn.execute(
+            """
+            UPDATE knowledge_cards SET deleted_at = ?, updated_at = ?
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (
+                _datetime_to_text(deleted_at),
+                _datetime_to_text(deleted_at),
+                card_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            return False
+        put_trash_item(
+            conn,
+            entity_type="knowledge_card",
+            entity_id=card_id,
+            course_id=row["course_id"],
+            display_name=str(row["title"]),
+            deleted_at=deleted_at,
+        )
+    return True
+
+
+def delete_cards_for_job(job_id: str) -> None:
+    ensure_db()
+    deleted_at = utc_now()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT knowledge_cards.id, knowledge_cards.title, jobs.course_id
+            FROM knowledge_cards
+            INNER JOIN jobs ON jobs.id = knowledge_cards.job_id
+            WHERE knowledge_cards.job_id = ?
+              AND knowledge_cards.deleted_at IS NULL
+            """,
+            (job_id,),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                """
+                UPDATE knowledge_cards SET deleted_at = ?, updated_at = ?
+                WHERE id = ? AND deleted_at IS NULL
+                """,
+                (
+                    _datetime_to_text(deleted_at),
+                    _datetime_to_text(deleted_at),
+                    row["id"],
+                ),
+            )
+            put_trash_item(
+                conn,
+                entity_type="knowledge_card",
+                entity_id=str(row["id"]),
+                course_id=row["course_id"],
+                display_name=str(row["title"]),
+                deleted_at=deleted_at,
+            )
+
+
+def delete_cards_for_course(course_id: str) -> None:
+    ensure_db()
+    deleted_at = utc_now()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT knowledge_cards.id, knowledge_cards.title
+            FROM knowledge_cards
+            INNER JOIN jobs ON jobs.id = knowledge_cards.job_id
+            WHERE jobs.course_id = ?
+              AND knowledge_cards.deleted_at IS NULL
+            """,
+            (course_id,),
+        ).fetchall()
+        for row in rows:
+            conn.execute(
+                """
+                UPDATE knowledge_cards SET deleted_at = ?, updated_at = ?
+                WHERE id = ? AND deleted_at IS NULL
+                """,
+                (
+                    _datetime_to_text(deleted_at),
+                    _datetime_to_text(deleted_at),
+                    row["id"],
+                ),
+            )
+            put_trash_item(
+                conn,
+                entity_type="knowledge_card",
+                entity_id=str(row["id"]),
+                course_id=course_id,
+                display_name=str(row["title"]),
+                deleted_at=deleted_at,
+            )
+
+
+def restore_card(card_id: str) -> bool:
+    ensure_db()
+    now = utc_now()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM knowledge_cards
+            INNER JOIN jobs ON jobs.id = knowledge_cards.job_id
+            INNER JOIN courses ON courses.id = jobs.course_id
+            WHERE knowledge_cards.id = ?
+              AND knowledge_cards.deleted_at IS NOT NULL
+              AND jobs.deleted_at IS NULL
+              AND courses.deleted_at IS NULL
+            """,
+            (card_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        cursor = conn.execute(
+            """
+            UPDATE knowledge_cards SET deleted_at = NULL, updated_at = ?
+            WHERE id = ? AND deleted_at IS NOT NULL
+            """,
+            (_datetime_to_text(now), card_id),
+        )
+        if cursor.rowcount != 1:
+            return False
+        remove_trash_item_for_entity(
+            conn,
+            entity_type="knowledge_card",
+            entity_id=card_id,
+        )
+    return True
+
+
 def _delete_learning_documents_for_cards(
     conn,
     card_selector: str,
@@ -357,6 +542,14 @@ def _delete_learning_documents_for_cards(
             params,
         )
     conn.execute(
+        f"""
+        DELETE FROM trash_items
+        WHERE entity_type = 'learning_document'
+          AND entity_id IN ({primary_documents})
+        """,
+        params,
+    )
+    conn.execute(
         f"DELETE FROM learning_documents WHERE id IN ({primary_documents})",
         params,
     )
@@ -370,10 +563,19 @@ def _delete_learning_documents_for_cards(
     )
 
 
-def delete_card(card_id: str) -> None:
+def purge_card(card_id: str) -> bool:
     ensure_db()
 
     with connect() as conn:
+        deleted = conn.execute(
+            """
+            SELECT 1 FROM knowledge_cards
+            WHERE id = ? AND deleted_at IS NOT NULL
+            """,
+            (card_id,),
+        ).fetchone()
+        if deleted is None:
+            return False
         _delete_learning_documents_for_cards(
             conn,
             "SELECT id FROM knowledge_cards WHERE id = ?",
@@ -409,13 +611,19 @@ def delete_card(card_id: str) -> None:
             "DELETE FROM topic_card_memberships WHERE card_id = ?",
             (card_id,),
         )
-        conn.execute(
+        cursor = conn.execute(
             "DELETE FROM knowledge_cards WHERE id = ?",
             (card_id,),
         )
+        remove_trash_item_for_entity(
+            conn,
+            entity_type="knowledge_card",
+            entity_id=card_id,
+        )
+    return cursor.rowcount == 1
 
 
-def delete_cards_for_job(job_id: str) -> None:
+def purge_cards_for_job(job_id: str) -> None:
     ensure_db()
 
     with connect() as conn:
@@ -487,12 +695,22 @@ def delete_cards_for_job(job_id: str) -> None:
             (job_id,),
         )
         conn.execute(
+            """
+            DELETE FROM trash_items
+            WHERE entity_type = 'knowledge_card'
+              AND entity_id IN (
+                    SELECT id FROM knowledge_cards WHERE job_id = ?
+              )
+            """,
+            (job_id,),
+        )
+        conn.execute(
             "DELETE FROM knowledge_cards WHERE job_id = ?",
             (job_id,),
         )
 
 
-def delete_cards_for_course(course_id: str) -> None:
+def purge_cards_for_course(course_id: str) -> None:
     ensure_db()
 
     with connect() as conn:
@@ -590,6 +808,19 @@ def delete_cards_for_course(course_id: str) -> None:
         )
         conn.execute(
             """
+            DELETE FROM trash_items
+            WHERE entity_type = 'knowledge_card'
+              AND entity_id IN (
+                    SELECT knowledge_cards.id
+                    FROM knowledge_cards
+                    INNER JOIN jobs ON jobs.id = knowledge_cards.job_id
+                    WHERE jobs.course_id = ?
+              )
+            """,
+            (course_id,),
+        )
+        conn.execute(
+            """
             DELETE FROM knowledge_cards
             WHERE job_id IN (
                 SELECT id FROM jobs WHERE course_id = ?
@@ -603,6 +834,12 @@ def clear_cards() -> None:
     ensure_db()
 
     with connect() as conn:
+        conn.execute(
+            """
+            DELETE FROM trash_items
+            WHERE entity_type IN ('knowledge_card', 'learning_document')
+            """
+        )
         conn.execute("DELETE FROM learning_document_sources")
         conn.execute("DELETE FROM learning_document_versions")
         conn.execute("DELETE FROM learning_document_cards")

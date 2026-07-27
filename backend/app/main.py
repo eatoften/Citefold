@@ -1,9 +1,14 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from functools import cache
 from ipaddress import ip_address
+import os
+from pathlib import Path
+import secrets
+from typing import TypeVar
+from uuid import uuid4
 
 from fastapi import (
-    BackgroundTasks,
     FastAPI,
     Form,
     HTTPException,
@@ -14,7 +19,9 @@ from fastapi import (
 from fastapi import status
 from fastapi import Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from . import auto_card_generation_service
 from . import card_embedding_service
@@ -33,12 +40,17 @@ from . import rag_service
 from . import review_item_service
 from . import review_service
 from . import runtime_service
+from . import reliable_task_store
 from . import source_asset_service
 from . import source_index_service
 from . import source_search_service
 from . import transcript_chunk_service
 from . import topic_service
 from . import topic_suggestion_service
+from . import trash_service
+from . import trash_store
+from . import workspace_draft_service
+from . import workspace_backup
 from .course import Course, CourseCreate, CourseUpdate
 from .course_source import (
     CourseSource,
@@ -72,7 +84,7 @@ from .card_relation import (
     CardRelationUpdate,
     CourseCardRelationsGraph,
 )
-from .db import init_db
+from .db import get_db_path, init_db
 from .job import VideoJob, VideoJobStatus
 from .job_service import TranscriptContext
 from .knowledge_card import (
@@ -102,6 +114,31 @@ from .learning_document import (
 from .llm_client import LLMModelList, LLMStatus, LocalLLMClient
 from .rag import RagRetrieveRequest, RagRetrieveResponse
 from .runtime_status import RuntimeStatus
+from .reliable_task import (
+    ACTIVE_TASK_STATUSES,
+    TERMINAL_TASK_STATUSES,
+    ReliableTask,
+    ReliableTaskStatus,
+    TaskEvent,
+)
+from .reliable_task_manager import ReliableTaskManager
+from .reliable_task_store import (
+    ReliableTaskActiveConflictError,
+    ReliableTaskIdempotencyConflictError,
+    ReliableTaskNotFoundError,
+    ReliableTaskReservation,
+    ReliableTaskRetryError,
+    ReliableTaskStateConflictError,
+)
+from .reliable_workflows import (
+    AUTO_CARD_GENERATION_TASK,
+    CHAT_GENERATION_TASK,
+    LEARNING_DOCUMENT_GENERATION_TASK,
+    SOURCE_INDEX_TASK,
+    SOURCE_IMPORT_TASK,
+    VIDEO_PROCESSING_TASK,
+    register_reliable_workflows,
+)
 from .source_asset import SourceAssetDetail, SourceAssetImportResult, SourceUnit
 from .settings import get_app_path_settings
 from .transcription import FasterWhisperTranscriber, TranscriptionResult
@@ -120,7 +157,10 @@ from .topic import (
     TopicSuggestionResult,
     TopicUpdate,
 )
+from .trash import TrashItem
 from .video_pipeline import VideoPipeline
+from .workspace_draft import WorkspaceDraft, WorkspaceDraftPut
+from .workspace_lifecycle import workspace_lifecycle_lock
 
 
 APP_PATHS = get_app_path_settings()
@@ -132,6 +172,10 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 SOURCE_DIR.mkdir(parents=True, exist_ok=True)
 
 
+ModelT = TypeVar("ModelT", bound=BaseModel)
+SYNC_TASK_TIMEOUT_SECONDS = 3600.0
+
+
 class VideoUploadResponse(BaseModel):
     id: str
     course_id: str
@@ -139,6 +183,212 @@ class VideoUploadResponse(BaseModel):
     stored_name: str
     size_bytes: int
     status: VideoJobStatus
+
+
+class SourceAssetTaskResponse(BaseModel):
+    asset: SourceAssetDetail
+    task: ReliableTask
+
+
+class WorkspaceBackupRecord(BaseModel):
+    id: str
+    valid: bool
+    archive_size_bytes: int
+    modified_at: str
+    archive_sha256: str | None = None
+    created_at: str | None = None
+    app_version: str | None = None
+    backup_kind: str | None = None
+    schema_version: int | None = None
+    entry_count: int | None = None
+    managed_file_count: int | None = None
+    total_uncompressed_bytes: int | None = None
+    error: str | None = None
+
+
+class PendingWorkspaceRestoreResponse(BaseModel):
+    restore_id: str
+    backup_id: str
+    backup_sha256: str
+    queued_at: str
+    schema_version: int
+    phase: str
+    workspace_generation: int
+
+
+class WorkspaceRestoreResultResponse(BaseModel):
+    restore_id: str
+    backup_id: str
+    status: str
+    applied_at: str | None = None
+    pre_restore_backup_id: str | None = None
+    error: str | None = None
+    workspace_generation: int
+
+
+class WorkspaceRestoreStatusResponse(BaseModel):
+    workspace_generation: int
+    pending: PendingWorkspaceRestoreResponse | None = None
+    last_result: WorkspaceRestoreResultResponse | None = None
+
+
+def _runtime_workspace_data_dir() -> Path:
+    """Keep test/custom database workspaces isolated from the app data root."""
+
+    if DATA_DIR.resolve() != APP_PATHS.data_dir.resolve():
+        return DATA_DIR.resolve()
+    database_path = get_db_path().resolve()
+    configured_path = APP_PATHS.db_path.resolve()
+    if database_path == configured_path:
+        return DATA_DIR.resolve()
+    if database_path.parent.name == "data":
+        return database_path.parent.parent
+    return database_path.parent
+
+
+def _backup_record(
+    item: (
+        workspace_backup.WorkspaceBackupSummary
+        | workspace_backup.ValidatedWorkspaceBackup
+    ),
+) -> WorkspaceBackupRecord:
+    if isinstance(item, workspace_backup.ValidatedWorkspaceBackup):
+        modified_at = (
+            item.path.stat().st_mtime
+            if item.path.exists()
+            else 0.0
+        )
+        return WorkspaceBackupRecord(
+            id=item.path.name,
+            valid=True,
+            archive_size_bytes=item.archive_size_bytes,
+            modified_at=datetime.fromtimestamp(
+                modified_at,
+                tz=timezone.utc,
+            ).isoformat(),
+            archive_sha256=item.archive_sha256,
+            created_at=item.created_at,
+            app_version=item.app_version,
+            backup_kind=item.backup_kind,
+            schema_version=item.schema_version,
+            entry_count=item.entry_count,
+            managed_file_count=item.managed_file_count,
+            total_uncompressed_bytes=item.total_uncompressed_bytes,
+        )
+    return WorkspaceBackupRecord(
+        id=item.path.name,
+        valid=item.valid,
+        archive_size_bytes=item.archive_size_bytes,
+        modified_at=item.modified_at,
+        archive_sha256=item.archive_sha256,
+        created_at=item.created_at,
+        app_version=item.app_version,
+        backup_kind=item.backup_kind,
+        schema_version=item.schema_version,
+        entry_count=item.entry_count,
+        error=item.error,
+    )
+
+
+def _workspace_backup_path(backup_id: str) -> Path:
+    if (
+        not backup_id
+        or Path(backup_id).name != backup_id
+        or not backup_id.endswith(workspace_backup.BACKUP_EXTENSION)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid workspace backup id.",
+        )
+    backup_dir = _runtime_workspace_data_dir() / "backups"
+    candidate = (backup_dir / backup_id).resolve()
+    if candidate.parent != backup_dir.resolve():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid workspace backup id.",
+        )
+    if not candidate.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Workspace backup not found.",
+        )
+    return candidate
+
+
+def _restore_response(
+    item: workspace_backup.PendingWorkspaceRestore,
+) -> PendingWorkspaceRestoreResponse:
+    return PendingWorkspaceRestoreResponse(
+        restore_id=item.restore_id,
+        backup_id=item.backup_id,
+        backup_sha256=item.backup_sha256,
+        queued_at=item.queued_at,
+        schema_version=item.schema_version,
+        phase=item.phase,
+        workspace_generation=item.workspace_generation,
+    )
+
+
+def _restore_result_payload(
+    result: workspace_backup.WorkspaceRestoreResult | None,
+) -> WorkspaceRestoreResultResponse | None:
+    if result is None:
+        return None
+    return WorkspaceRestoreResultResponse(
+        restore_id=result.restore_id,
+        backup_id=result.backup_id,
+        status=result.status,
+        applied_at=result.applied_at,
+        pre_restore_backup_id=(
+            result.pre_restore_backup_path.name
+            if result.pre_restore_backup_path is not None
+            else None
+        ),
+        error=result.error,
+        workspace_generation=result.workspace_generation,
+    )
+
+
+def raise_workspace_backup_http_error(exc: Exception) -> None:
+    if isinstance(exc, workspace_backup.BackupValidationError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    if isinstance(
+        exc,
+        (
+            workspace_backup.RestoreQueueError,
+            workspace_backup.WorkspaceBackupError,
+        ),
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Workspace backup operation failed.",
+    ) from exc
+
+
+def raise_trash_http_error(
+    exc: trash_service.TrashServiceError,
+) -> None:
+    if isinstance(exc, trash_service.TrashItemNotFoundError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    if isinstance(exc, trash_service.TrashOperationError):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=str(exc),
+    ) from exc
 
 
 def raise_http_error(exc: job_service.JobServiceError) -> None:
@@ -195,6 +445,225 @@ def raise_http_error(exc: job_service.JobServiceError) -> None:
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         detail="Unexpected job service error.",
     ) from exc
+
+
+def raise_workspace_draft_http_error(
+    exc: workspace_draft_service.WorkspaceDraftServiceError,
+) -> None:
+    if isinstance(
+        exc,
+        workspace_draft_service.WorkspaceDraftNotFoundError,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    if isinstance(
+        exc,
+        workspace_draft_service.WorkspaceDraftConflictError,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": str(exc),
+                "current": (
+                    exc.current.model_dump(mode="json")
+                    if exc.current is not None
+                    else None
+                ),
+            },
+        ) from exc
+    if isinstance(
+        exc,
+        workspace_draft_service.WorkspaceDraftTooLargeError,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=str(exc),
+        ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=str(exc),
+    ) from exc
+
+
+def raise_reliable_task_http_error(exc: Exception) -> None:
+    if isinstance(exc, (ReliableTaskNotFoundError,)):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found.",
+        ) from exc
+    if isinstance(
+        exc,
+        (
+            ReliableTaskActiveConflictError,
+            ReliableTaskIdempotencyConflictError,
+            ReliableTaskRetryError,
+            ReliableTaskStateConflictError,
+        ),
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Task operation failed.",
+    ) from exc
+
+
+def wait_for_legacy_task_result(
+    task: ReliableTask,
+    *,
+    result_key: str,
+    response_model: type[ModelT],
+) -> ModelT:
+    """Keep legacy blocking responses while using the durable task path."""
+
+    try:
+        completed = get_reliable_task_manager().wait_for_task(
+            task.id,
+            TERMINAL_TASK_STATUSES,
+            timeout_seconds=SYNC_TASK_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=(
+                "The operation is still running in Activity. "
+                "You can safely leave this page and return later."
+            ),
+            headers={"X-Task-ID": task.id},
+        ) from exc
+
+    if completed.status == ReliableTaskStatus.canceled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The operation was canceled.",
+            headers={"X-Task-ID": completed.id},
+        )
+    if completed.status == ReliableTaskStatus.failed:
+        status_code, detail = _legacy_task_failure_response(completed)
+        raise HTTPException(
+            status_code=status_code,
+            detail=detail,
+            headers={"X-Task-ID": completed.id},
+        )
+
+    payload = completed.result.get(result_key)
+    try:
+        return response_model.model_validate(payload)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The completed task returned an invalid result.",
+            headers={"X-Task-ID": completed.id},
+        ) from exc
+
+
+def _legacy_task_failure_response(task: ReliableTask) -> tuple[int, str]:
+    code = task.error_code or ""
+    if code == "source_index_conflict":
+        return (
+            status.HTTP_409_CONFLICT,
+            "Sources changed while indexing. Please retry.",
+        )
+    if code == "source_index_failed":
+        return (
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Source indexing failed. Check the local model settings and retry.",
+        )
+
+    status_codes = {
+        "source_asset_not_found": status.HTTP_404_NOT_FOUND,
+        "invalid_source_asset": status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        "source_asset_extraction_failed": (
+            status.HTTP_422_UNPROCESSABLE_CONTENT
+        ),
+        "chat_conversation_not_found": status.HTTP_404_NOT_FOUND,
+        "chat_course_not_found": status.HTTP_404_NOT_FOUND,
+        "chat_source_not_found": status.HTTP_404_NOT_FOUND,
+        "chat_source_scope": status.HTTP_400_BAD_REQUEST,
+        "chat_source_unavailable": status.HTTP_409_CONFLICT,
+        "chat_conflict": status.HTTP_409_CONFLICT,
+        "chat_retrieval_failed": status.HTTP_503_SERVICE_UNAVAILABLE,
+        "chat_generation_timeout": status.HTTP_504_GATEWAY_TIMEOUT,
+        "chat_generation_failed": status.HTTP_502_BAD_GATEWAY,
+        "learning_document_not_found": status.HTTP_404_NOT_FOUND,
+        "invalid_learning_document": status.HTTP_400_BAD_REQUEST,
+        "learning_document_generation_failed": status.HTTP_502_BAD_GATEWAY,
+    }
+    status_code = status_codes.get(
+        code,
+        status.HTTP_500_INTERNAL_SERVER_ERROR,
+    )
+    safe_defaults = {
+        "source_import_failed": "Unexpected source asset service error.",
+        "chat_failed": "Unexpected chat service error.",
+        "chat_source_failed": "Unexpected source service error.",
+        "learning_document_failed": (
+            "Unexpected learning document service error."
+        ),
+    }
+    detail = safe_defaults.get(
+        code,
+        task.error_message or "The background operation failed.",
+    )
+    return status_code, detail
+
+
+def require_no_active_tasks(
+    *,
+    course_id: str | None = None,
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+    conflict_detail: str | None = None,
+) -> None:
+    active = reliable_task_store.list_tasks(
+        course_id=course_id,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        statuses=ACTIVE_TASK_STATUSES,
+        limit=1,
+    )
+    if not active:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=conflict_detail
+        or (
+            "This item has an active background task. Cancel it in "
+            "Activity before moving the item to Trash."
+        ),
+        headers={"X-Task-ID": active[0].id},
+    )
+
+
+def reserve_source_import_task(
+    asset: SourceAssetDetail,
+    *,
+    idempotency_key: str | None = None,
+) -> ReliableTaskReservation:
+    """Pair a staged source with a durable task or publish queue failure."""
+
+    try:
+        return get_reliable_task_manager().enqueue(
+            kind=SOURCE_IMPORT_TASK,
+            course_id=asset.course_id,
+            resource_type="source_asset",
+            resource_id=asset.id,
+            payload={"asset_id": asset.id},
+            idempotency_key=(
+                idempotency_key or f"source-import:{asset.id}"
+            ),
+            active_key=f"source-import:{asset.id}",
+        )
+    except Exception:
+        # ReliableTaskManager.enqueue only raises before a durable reservation
+        # exists. Persist a visible domain failure so an uploaded source can
+        # never remain indefinitely "pending" without a task.
+        source_asset_service.mark_source_asset_enqueue_failed(asset.id)
+        raise
 
 
 def raise_card_http_error(exc: card_service.CardServiceError) -> None:
@@ -751,17 +1220,91 @@ def archive_response(archive: export_service.MarkdownArchive) -> Response:
     )
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+def _initialize_workspace_before_task_dispatch(app: FastAPI) -> None:
+    """Validate and reconcile the selected workspace before workers run."""
+
     init_db()
+    app.state.trash_recovery_report = (
+        trash_store.recover_interrupted_trash_operations()
+    )
+    app.state.reliable_task_recovery_report = (
+        reliable_task_store.recover_interrupted_tasks()
+    )
     app.state.legacy_video_fingerprint_backfill_report = (
         citation_target_service.backfill_legacy_video_fingerprints()
     )
     chat_service.recover_interrupted_chat_turns()
+    job_service.recover_interrupted_video_jobs()
+    auto_card_generation_service.recover_interrupted_card_generation_runs()
+    course_source_service.recover_interrupted_source_indexes()
     for course in course_service.list_video_courses():
         course_source_service.reconcile_course_sources(course.id)
 
-    yield
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    staged_restore = workspace_backup.apply_pending_workspace_restore(
+        db_path=get_db_path(),
+        data_dir=_runtime_workspace_data_dir(),
+    )
+    app.state.workspace_restore_result = staged_restore
+    try:
+        _initialize_workspace_before_task_dispatch(app)
+    except Exception as initialization_error:
+        if (
+            staged_restore is None
+            or staged_restore.status != "staged"
+        ):
+            raise
+        try:
+            app.state.workspace_restore_result = (
+                workspace_backup.rollback_pending_workspace_restore(
+                    staged_restore.restore_id,
+                    db_path=get_db_path(),
+                    data_dir=_runtime_workspace_data_dir(),
+                    error=(
+                        "Restored workspace failed startup validation: "
+                        f"{initialization_error}"
+                    ),
+                )
+            )
+        except Exception as rollback_error:
+            raise RuntimeError(
+                "Restored workspace failed startup validation. Its restore "
+                "transaction was retained for manual recovery because "
+                "automatic rollback could not complete."
+            ) from rollback_error
+        # A successful rollback returns the original workspace. It must pass
+        # the same initialization gate before this process can serve requests.
+        _initialize_workspace_before_task_dispatch(app)
+    else:
+        if (
+            staged_restore is not None
+            and staged_restore.status == "staged"
+        ):
+            try:
+                app.state.workspace_restore_result = (
+                    workspace_backup.finalize_pending_workspace_restore(
+                        staged_restore.restore_id,
+                        db_path=get_db_path(),
+                        data_dir=_runtime_workspace_data_dir(),
+                    )
+                )
+            except Exception as finalization_error:
+                raise RuntimeError(
+                    "Restored workspace passed startup validation, but its "
+                    "receipt could not be finalized. The restore transaction "
+                    "was retained and will be retried on the next startup."
+                ) from finalization_error
+
+    manager = get_reliable_task_manager()
+    manager.start(recover=False)
+    app.state.reliable_task_manager = manager
+    try:
+        yield
+    finally:
+        manager.shutdown(wait=False, cancel_futures=True)
+        get_reliable_task_manager.cache_clear()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -801,9 +1344,400 @@ def get_llm_client() -> LocalLLMClient:
     return LocalLLMClient()
 
 
+@cache
+def get_reliable_task_manager() -> ReliableTaskManager:
+    manager = ReliableTaskManager(
+        max_workers=2,
+        max_queue_size=12,
+        poll_interval_seconds=0.25,
+        worker_id_prefix="desktop",
+    )
+    register_reliable_workflows(
+        manager,
+        video_pipeline_factory=lambda: get_video_pipeline(),
+        llm_client_factory=lambda: get_llm_client(),
+        artifact_root=DATA_DIR,
+    )
+    return manager
+
+
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "application_id": "video-course-cards",
+        "api_version": 1,
+        "instance_token": os.environ.get(
+            "VCC_BACKEND_INSTANCE_TOKEN"
+        ),
+    }
+
+
+@app.get(
+    "/workspace/drafts",
+    response_model=list[WorkspaceDraft],
+)
+def list_workspace_drafts(
+    course_id: str | None = Query(default=None),
+    draft_type: str | None = Query(default=None),
+) -> list[WorkspaceDraft]:
+    try:
+        return workspace_draft_service.list_workspace_drafts(
+            course_id=course_id,
+            draft_type=draft_type,
+        )
+    except (
+        course_service.CourseServiceError,
+        workspace_draft_service.WorkspaceDraftServiceError,
+    ) as exc:
+        if isinstance(exc, course_service.CourseServiceError):
+            raise_course_http_error(exc)
+        raise_workspace_draft_http_error(exc)
+
+
+@app.get(
+    "/workspace/drafts/{draft_id}",
+    response_model=WorkspaceDraft,
+)
+def get_workspace_draft(draft_id: str) -> WorkspaceDraft:
+    try:
+        return workspace_draft_service.get_workspace_draft(draft_id)
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except workspace_draft_service.WorkspaceDraftServiceError as exc:
+        raise_workspace_draft_http_error(exc)
+
+
+@app.put(
+    "/workspace/drafts/{draft_id}",
+    response_model=WorkspaceDraft,
+)
+def put_workspace_draft(
+    draft_id: str,
+    request: WorkspaceDraftPut,
+) -> WorkspaceDraft:
+    try:
+        return workspace_draft_service.save_workspace_draft(
+            draft_id,
+            request,
+        )
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except workspace_draft_service.WorkspaceDraftServiceError as exc:
+        raise_workspace_draft_http_error(exc)
+
+
+@app.delete(
+    "/workspace/drafts/{draft_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_workspace_draft(
+    draft_id: str,
+    expected_revision: int | None = Query(default=None, ge=1),
+) -> Response:
+    try:
+        workspace_draft_service.remove_workspace_draft(
+            draft_id,
+            expected_revision=expected_revision,
+        )
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except workspace_draft_service.WorkspaceDraftServiceError as exc:
+        raise_workspace_draft_http_error(exc)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/trash", response_model=list[TrashItem])
+def list_workspace_trash(
+    course_id: str | None = Query(default=None),
+) -> list[TrashItem]:
+    return trash_service.list_workspace_trash(course_id=course_id)
+
+
+@app.post(
+    "/trash/{item_id}/restore",
+    response_model=TrashItem,
+)
+def restore_workspace_trash(item_id: str) -> TrashItem:
+    try:
+        return trash_service.restore_workspace_trash_item(item_id)
+    except trash_service.TrashServiceError as exc:
+        raise_trash_http_error(exc)
+
+
+@app.delete(
+    "/trash/{item_id}",
+    response_model=TrashItem,
+)
+def purge_workspace_trash(item_id: str) -> TrashItem:
+    try:
+        return trash_service.purge_workspace_trash_item(
+            item_id,
+            artifact_root=_runtime_workspace_data_dir(),
+        )
+    except trash_service.TrashServiceError as exc:
+        raise_trash_http_error(exc)
+
+
+@app.get(
+    "/workspace/backups",
+    response_model=list[WorkspaceBackupRecord],
+)
+def list_workspace_backup_records() -> list[WorkspaceBackupRecord]:
+    try:
+        return [
+            _backup_record(item)
+            for item in workspace_backup.list_workspace_backups(
+                data_dir=_runtime_workspace_data_dir(),
+            )
+        ]
+    except Exception as exc:
+        raise_workspace_backup_http_error(exc)
+
+
+@app.post(
+    "/workspace/backups",
+    response_model=WorkspaceBackupRecord,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_workspace_backup_record() -> WorkspaceBackupRecord:
+    try:
+        with workspace_lifecycle_lock():
+            require_no_active_tasks(
+                conflict_detail=(
+                    "Wait for background activity to finish or cancel it "
+                    "before creating a workspace backup."
+                ),
+            )
+            created = workspace_backup.create_workspace_backup(
+                db_path=get_db_path(),
+                data_dir=_runtime_workspace_data_dir(),
+        )
+        return _backup_record(created)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise_workspace_backup_http_error(exc)
+
+
+@app.post(
+    "/workspace/backups/import",
+    response_model=WorkspaceBackupRecord,
+    status_code=status.HTTP_201_CREATED,
+)
+def import_workspace_backup(
+    backup: UploadFile,
+) -> WorkspaceBackupRecord:
+    filename = (backup.filename or "").strip()
+    if not filename.lower().endswith(workspace_backup.BACKUP_EXTENSION):
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=(
+                "Choose a Video Course Cards .vcc-backup archive."
+            ),
+        )
+
+    backup_dir = _runtime_workspace_data_dir() / "backups"
+    backup_id = (
+        f"vcc-imported-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-"
+        f"{uuid4().hex[:8]}{workspace_backup.BACKUP_EXTENSION}"
+    )
+    final_path = backup_dir / backup_id
+    temporary_path = backup_dir / f".{backup_id}.tmp"
+    size_bytes = 0
+    limit = workspace_backup.BackupLimits().max_archive_bytes
+    try:
+        with workspace_lifecycle_lock():
+            require_no_active_tasks(
+                conflict_detail=(
+                    "Wait for background activity to finish or cancel it "
+                    "before importing a workspace backup."
+                ),
+            )
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            with temporary_path.open("xb") as destination:
+                while chunk := backup.file.read(1024 * 1024):
+                    size_bytes += len(chunk)
+                    if size_bytes > limit:
+                        raise workspace_backup.BackupValidationError(
+                            "Backup archive is too large."
+                        )
+                    destination.write(chunk)
+            workspace_backup.validate_workspace_backup(
+                temporary_path,
+            )
+            temporary_path.replace(final_path)
+            validated = workspace_backup.validate_workspace_backup(
+                final_path
+            )
+            return _backup_record(validated)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        temporary_path.unlink(missing_ok=True)
+        final_path.unlink(missing_ok=True)
+        raise_workspace_backup_http_error(exc)
+
+
+@app.get(
+    "/workspace/backups/{backup_id}/validate",
+    response_model=WorkspaceBackupRecord,
+)
+def validate_workspace_backup_record(
+    backup_id: str,
+) -> WorkspaceBackupRecord:
+    try:
+        return _backup_record(
+            workspace_backup.validate_workspace_backup(
+                _workspace_backup_path(backup_id),
+            )
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise_workspace_backup_http_error(exc)
+
+
+@app.get("/workspace/backups/{backup_id}/download")
+def download_workspace_backup(backup_id: str) -> FileResponse:
+    path = _workspace_backup_path(backup_id)
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=path.name,
+    )
+
+
+@app.post(
+    "/workspace/backups/{backup_id}/restore",
+    response_model=PendingWorkspaceRestoreResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def queue_workspace_backup_restore(
+    backup_id: str,
+) -> PendingWorkspaceRestoreResponse:
+    try:
+        with workspace_lifecycle_lock():
+            require_no_active_tasks(
+                conflict_detail=(
+                    "Wait for background activity to finish or cancel it "
+                    "before scheduling a workspace restore."
+                ),
+            )
+            pending = workspace_backup.queue_workspace_restore(
+                _workspace_backup_path(backup_id),
+                data_dir=_runtime_workspace_data_dir(),
+            )
+        return _restore_response(pending)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise_workspace_backup_http_error(exc)
+
+
+@app.get(
+    "/workspace/restore-status",
+    response_model=WorkspaceRestoreStatusResponse,
+)
+def get_workspace_restore_status(
+) -> WorkspaceRestoreStatusResponse:
+    try:
+        restore_state = workspace_backup.get_workspace_restore_state(
+            data_dir=_runtime_workspace_data_dir(),
+        )
+    except Exception as exc:
+        raise_workspace_backup_http_error(exc)
+    return WorkspaceRestoreStatusResponse(
+        workspace_generation=restore_state.workspace_generation,
+        pending=(
+            _restore_response(restore_state.pending)
+            if restore_state.pending is not None
+            else None
+        ),
+        last_result=_restore_result_payload(
+            restore_state.last_result
+        ),
+    )
+
+
+@app.delete(
+    "/workspace/restore-pending/{restore_id}",
+    response_model=WorkspaceRestoreResultResponse,
+)
+def cancel_workspace_backup_restore(
+    restore_id: str,
+) -> WorkspaceRestoreResultResponse:
+    try:
+        canceled = workspace_backup.cancel_pending_workspace_restore(
+            restore_id,
+            data_dir=_runtime_workspace_data_dir(),
+        )
+        response = _restore_result_payload(canceled)
+        if response is None:
+            raise RuntimeError("Canceled restore did not produce a result.")
+        return response
+    except Exception as exc:
+        raise_workspace_backup_http_error(exc)
+
+
+@app.get("/tasks", response_model=list[ReliableTask])
+def list_reliable_tasks(
+    course_id: str | None = Query(default=None),
+    task_status: list[ReliableTaskStatus] | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[ReliableTask]:
+    return reliable_task_store.list_tasks(
+        course_id=course_id,
+        statuses=task_status,
+        limit=limit,
+    )
+
+
+@app.get("/tasks/{task_id}", response_model=ReliableTask)
+def get_reliable_task(task_id: str) -> ReliableTask:
+    task = reliable_task_store.get_task(task_id)
+    if task is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found.",
+        )
+    return task
+
+
+@app.get(
+    "/tasks/{task_id}/events",
+    response_model=list[TaskEvent],
+)
+def list_reliable_task_events(task_id: str) -> list[TaskEvent]:
+    if reliable_task_store.get_task(task_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found.",
+        )
+    return reliable_task_store.list_task_events(task_id)
+
+
+@app.post(
+    "/tasks/{task_id}/cancel",
+    response_model=ReliableTask,
+)
+def cancel_reliable_task(task_id: str) -> ReliableTask:
+    try:
+        return get_reliable_task_manager().request_cancel(task_id)
+    except Exception as exc:
+        raise_reliable_task_http_error(exc)
+
+
+@app.post(
+    "/tasks/{task_id}/retry",
+    response_model=ReliableTask,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def retry_reliable_task(task_id: str) -> ReliableTask:
+    try:
+        return get_reliable_task_manager().retry(task_id)
+    except Exception as exc:
+        raise_reliable_task_http_error(exc)
 
 
 @app.get(
@@ -820,6 +1754,51 @@ def get_runtime_status() -> RuntimeStatus:
 )
 def check_runtime_status() -> RuntimeStatus:
     return runtime_service.get_runtime_status()
+
+
+@app.post("/runtime/quiesce")
+def quiesce_runtime(
+    request: Request,
+    response: Response,
+) -> dict[str, str]:
+    """Stop accepting task work before the desktop owner restarts/exits."""
+
+    instance_token = os.environ.get(
+        "VCC_BACKEND_INSTANCE_TOKEN",
+        "",
+    )
+    presented_token = request.headers.get(
+        "X-VCC-Instance-Token",
+        "",
+    )
+    if instance_token and not secrets.compare_digest(
+        presented_token,
+        instance_token,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Backend instance identity did not match.",
+        )
+
+    request.app.state.runtime_quiescing = True
+    safely_quiesced = get_reliable_task_manager().quiesce(
+        timeout_seconds=4.0,
+    )
+    if not safely_quiesced:
+        response.status_code = status.HTTP_409_CONFLICT
+        return {
+            "status": "timeout",
+            "instance_token": instance_token,
+            "message": (
+                "Background work did not reach a safe checkpoint before "
+                "the shutdown deadline."
+            ),
+        }
+    return {
+        "status": "quiesced",
+        "instance_token": instance_token,
+        "message": "Background work reached a safe recovery checkpoint.",
+    }
 
 
 @app.get(
@@ -916,10 +1895,12 @@ def update_course(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def delete_course(course_id: str) -> Response:
-    try:
-        course_service.delete_video_course(course_id)
-    except course_service.CourseServiceError as exc:
-        raise_course_http_error(exc)
+    with workspace_lifecycle_lock():
+        require_no_active_tasks(course_id=course_id)
+        try:
+            course_service.delete_video_course(course_id)
+        except course_service.CourseServiceError as exc:
+            raise_course_http_error(exc)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -967,16 +1948,124 @@ async def import_course_source_asset(
     file: UploadFile,
 ) -> SourceAssetImportResult:
     try:
-        return source_asset_service.import_course_source_asset(
+        asset = source_asset_service.stage_course_source_asset(
             course_id,
             filename=file.filename,
             content_type=file.content_type,
             content=await file.read(),
         )
+        reservation = reserve_source_import_task(asset)
+        return await run_in_threadpool(
+            wait_for_legacy_task_result,
+            reservation.task,
+            result_key="import",
+            response_model=SourceAssetImportResult,
+        )
+    except HTTPException:
+        raise
     except course_service.CourseServiceError as exc:
         raise_course_http_error(exc)
     except source_asset_service.SourceAssetServiceError as exc:
         raise_source_asset_http_error(exc)
+    except Exception as exc:
+        raise_reliable_task_http_error(exc)
+
+
+@app.post(
+    "/courses/{course_id}/source-asset-tasks",
+    response_model=SourceAssetTaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def enqueue_course_source_asset(
+    course_id: str,
+    file: UploadFile,
+) -> SourceAssetTaskResponse:
+    try:
+        asset = source_asset_service.stage_course_source_asset(
+            course_id,
+            filename=file.filename,
+            content_type=file.content_type,
+            content=await file.read(),
+        )
+        reservation = reserve_source_import_task(asset)
+        return SourceAssetTaskResponse(
+            asset=asset,
+            task=reservation.task,
+        )
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except source_asset_service.SourceAssetServiceError as exc:
+        raise_source_asset_http_error(exc)
+    except Exception as exc:
+        raise_reliable_task_http_error(exc)
+
+
+@app.post(
+    "/source-assets/{asset_id}/processing-tasks",
+    response_model=SourceAssetTaskResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def requeue_source_asset_processing(
+    asset_id: str,
+) -> SourceAssetTaskResponse:
+    """Create or retry the durable parser task for an existing source."""
+
+    try:
+        with workspace_lifecycle_lock():
+            asset = source_asset_service.prepare_source_asset_retry(
+                asset_id
+            )
+            existing = reliable_task_store.list_tasks(
+                resource_type="source_asset",
+                resource_id=asset.id,
+                limit=1,
+            )
+            latest = existing[0] if existing else None
+            if (
+                latest is not None
+                and latest.status in ACTIVE_TASK_STATUSES
+            ):
+                task = latest
+            elif (
+                latest is not None
+                and latest.status
+                in {
+                    ReliableTaskStatus.failed,
+                    ReliableTaskStatus.canceled,
+                }
+            ):
+                try:
+                    task = get_reliable_task_manager().retry(latest.id)
+                except ReliableTaskRetryError:
+                    # Preserve the exhausted task as audit history and start a
+                    # fresh attempt. Otherwise a source can become permanently
+                    # unretryable after the task-level attempt budget is used.
+                    task = reserve_source_import_task(
+                        asset,
+                        idempotency_key=(
+                            f"source-import:{asset.id}:"
+                            f"{asset.updated_at.isoformat()}"
+                        ),
+                    ).task
+                except Exception:
+                    source_asset_service.mark_source_asset_enqueue_failed(
+                        asset.id
+                    )
+                    raise
+            else:
+                reservation = reserve_source_import_task(
+                    asset,
+                    idempotency_key=(
+                        f"source-import:{asset.id}:"
+                        f"{asset.updated_at.isoformat()}"
+                    ),
+                )
+                task = reservation.task
+        return SourceAssetTaskResponse(asset=asset, task=task)
+    except source_asset_service.SourceAssetServiceError as exc:
+        raise_source_asset_http_error(exc)
+    except Exception as exc:
+        raise_reliable_task_http_error(exc)
 
 
 @app.get(
@@ -995,10 +2084,15 @@ def list_source_asset_units(asset_id: str) -> list[SourceUnit]:
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def delete_source_asset(asset_id: str) -> Response:
-    try:
-        source_asset_service.remove_source_asset(asset_id)
-    except source_asset_service.SourceAssetServiceError as exc:
-        raise_source_asset_http_error(exc)
+    with workspace_lifecycle_lock():
+        require_no_active_tasks(
+            resource_type="source_asset",
+            resource_id=asset_id,
+        )
+        try:
+            source_asset_service.remove_source_asset(asset_id)
+        except source_asset_service.SourceAssetServiceError as exc:
+            raise_source_asset_http_error(exc)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -1077,16 +2171,67 @@ def index_course_sources(
     request: SourceIndexRequest | None = None,
 ) -> SourceIndexResult:
     try:
-        return source_index_service.index_course_sources(
-            course_id,
-            request,
+        course = course_service.get_video_course(course_id)
+        index_request = request or SourceIndexRequest()
+        course_source_service.resolve_course_sources(
+            course.id,
+            index_request.source_ids,
         )
+        reservation = get_reliable_task_manager().enqueue(
+            kind=SOURCE_INDEX_TASK,
+            course_id=course.id,
+            resource_type="course",
+            resource_id=course.id,
+            payload={
+                "course_id": course.id,
+                "request": index_request.model_dump(mode="json"),
+            },
+            active_key=f"source-index:{course.id}",
+        )
+        return wait_for_legacy_task_result(
+            reservation.task,
+            result_key="index",
+            response_model=SourceIndexResult,
+        )
+    except HTTPException:
+        raise
     except course_service.CourseServiceError as exc:
         raise_course_http_error(exc)
     except course_source_service.CourseSourceServiceError as exc:
         raise_course_source_http_error(exc)
-    except source_index_service.SourceIndexServiceError as exc:
-        raise_source_index_http_error(exc)
+    except Exception as exc:
+        raise_reliable_task_http_error(exc)
+
+
+@app.post(
+    "/courses/{course_id}/source-index-tasks",
+    response_model=ReliableTask,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def enqueue_course_source_index(
+    course_id: str,
+    request: SourceIndexRequest | None = None,
+) -> ReliableTask:
+    try:
+        course = course_service.get_video_course(course_id)
+        reservation = get_reliable_task_manager().enqueue(
+            kind=SOURCE_INDEX_TASK,
+            course_id=course.id,
+            resource_type="course",
+            resource_id=course.id,
+            payload={
+                "course_id": course.id,
+                "request": (
+                    request or SourceIndexRequest()
+                ).model_dump(mode="json"),
+            },
+            active_key=f"source-index:{course.id}",
+        )
+        return reservation.task
+    except course_service.CourseServiceError as exc:
+        raise_course_http_error(exc)
+    except Exception as exc:
+        raise_reliable_task_http_error(exc)
 
 
 @app.post(
@@ -1181,10 +2326,15 @@ def update_chat_conversation(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def delete_chat_conversation(conversation_id: str) -> Response:
-    try:
-        chat_service.delete_chat_conversation(conversation_id)
-    except chat_service.ChatServiceError as exc:
-        raise_chat_http_error(exc)
+    with workspace_lifecycle_lock():
+        require_no_active_tasks(
+            resource_type="chat_conversation",
+            resource_id=conversation_id,
+        )
+        try:
+            chat_service.delete_chat_conversation(conversation_id)
+        except chat_service.ChatServiceError as exc:
+            raise_chat_http_error(exc)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -1197,17 +2347,67 @@ def send_chat_message(
     request: ChatMessageCreate,
 ) -> ChatTurnResponse:
     try:
-        return chat_service.send_chat_message(
-            conversation_id,
-            request,
-            llm_client=get_llm_client(),
+        conversation = chat_service.get_chat_conversation(conversation_id)
+        reservation = get_reliable_task_manager().enqueue(
+            kind=CHAT_GENERATION_TASK,
+            course_id=conversation.course_id,
+            resource_type="chat_conversation",
+            resource_id=conversation.id,
+            payload={
+                "conversation_id": conversation.id,
+                "request": request.model_dump(mode="json"),
+            },
+            idempotency_key=(
+                f"{conversation.id}:{request.client_request_id}"
+            ),
+            active_key=f"chat:{conversation.id}",
         )
-    except course_service.CourseServiceError as exc:
-        raise_course_http_error(exc)
-    except course_source_service.CourseSourceServiceError as exc:
-        raise_course_source_http_error(exc)
+        result = wait_for_legacy_task_result(
+            reservation.task,
+            result_key="turn",
+            response_model=ChatTurnResponse,
+        )
+        if reservation.replayed:
+            return result.model_copy(update={"replayed": True})
+        return result
+    except HTTPException:
+        raise
     except chat_service.ChatServiceError as exc:
         raise_chat_http_error(exc)
+    except Exception as exc:
+        raise_reliable_task_http_error(exc)
+
+
+@app.post(
+    "/chat/conversations/{conversation_id}/message-tasks",
+    response_model=ReliableTask,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def enqueue_chat_message(
+    conversation_id: str,
+    request: ChatMessageCreate,
+) -> ReliableTask:
+    try:
+        conversation = chat_service.get_chat_conversation(conversation_id)
+        reservation = get_reliable_task_manager().enqueue(
+            kind=CHAT_GENERATION_TASK,
+            course_id=conversation.course_id,
+            resource_type="chat_conversation",
+            resource_id=conversation.id,
+            payload={
+                "conversation_id": conversation.id,
+                "request": request.model_dump(mode="json"),
+            },
+            idempotency_key=(
+                f"{conversation.id}:{request.client_request_id}"
+            ),
+            active_key=f"chat:{conversation.id}",
+        )
+        return reservation.task
+    except chat_service.ChatServiceError as exc:
+        raise_chat_http_error(exc)
+    except Exception as exc:
+        raise_reliable_task_http_error(exc)
 
 
 @app.get(
@@ -1571,10 +2771,12 @@ def get_course_card_relations(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def delete_course_cards(course_id: str) -> Response:
-    try:
-        course_service.delete_all_course_cards(course_id)
-    except course_service.CourseServiceError as exc:
-        raise_course_http_error(exc)
+    with workspace_lifecycle_lock():
+        require_no_active_tasks(course_id=course_id)
+        try:
+            course_service.delete_all_course_cards(course_id)
+        except course_service.CourseServiceError as exc:
+            raise_course_http_error(exc)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -1607,19 +2809,33 @@ def get_job(job_id: str) -> VideoJob:
 )
 def run_job(
     job_id: str,
-    background_tasks: BackgroundTasks,
+    response: Response,
 ) -> VideoJob:
     try:
         job = job_service.start_job(job_id)
     except job_service.JobServiceError as exc:
         raise_http_error(exc)
 
-    background_tasks.add_task(
-        job_service.run_job_pipeline,
-        job.id,
-        get_video_pipeline,
-        DATA_DIR,
-    )
+    try:
+        reservation = get_reliable_task_manager().enqueue(
+            kind=VIDEO_PROCESSING_TASK,
+            course_id=job.course_id,
+            resource_type="video_job",
+            resource_id=job.id,
+            payload={"job_id": job.id},
+            idempotency_key=(
+                f"video:{job.id}:{job.started_at.isoformat()}"
+                if job.started_at is not None
+                else f"video:{job.id}:initial"
+            ),
+            active_key=f"video:{job.id}",
+        )
+    except Exception as exc:
+        job.status = VideoJobStatus.failed
+        job.error_message = "Video task could not be queued."
+        job_service.save_job_progress(job)
+        raise_reliable_task_http_error(exc)
+    response.headers["X-Task-ID"] = reservation.task.id
     return job
 
 
@@ -1630,19 +2846,33 @@ def run_job(
 )
 def retry_job(
     job_id: str,
-    background_tasks: BackgroundTasks,
+    response: Response,
 ) -> VideoJob:
     try:
         job = job_service.retry_job(job_id)
     except job_service.JobServiceError as exc:
         raise_http_error(exc)
 
-    background_tasks.add_task(
-        job_service.run_job_pipeline,
-        job.id,
-        get_video_pipeline,
-        DATA_DIR,
-    )
+    try:
+        reservation = get_reliable_task_manager().enqueue(
+            kind=VIDEO_PROCESSING_TASK,
+            course_id=job.course_id,
+            resource_type="video_job",
+            resource_id=job.id,
+            payload={"job_id": job.id},
+            idempotency_key=(
+                f"video:{job.id}:{job.started_at.isoformat()}"
+                if job.started_at is not None
+                else f"video:{job.id}:retry"
+            ),
+            active_key=f"video:{job.id}",
+        )
+    except Exception as exc:
+        job.status = VideoJobStatus.failed
+        job.error_message = "Video retry could not be queued."
+        job_service.save_job_progress(job)
+        raise_reliable_task_http_error(exc)
+    response.headers["X-Task-ID"] = reservation.task.id
     return job
 
 
@@ -1651,10 +2881,18 @@ def retry_job(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def delete_job(job_id: str) -> Response:
-    try:
-        job_service.delete_video_job(job_id, DATA_DIR)
-    except job_service.JobServiceError as exc:
-        raise_http_error(exc)
+    with workspace_lifecycle_lock():
+        require_no_active_tasks(
+            resource_type="video_job",
+            resource_id=job_id,
+        )
+        try:
+            job_service.delete_video_job(
+                job_id,
+                _runtime_workspace_data_dir(),
+            )
+        except job_service.JobServiceError as exc:
+            raise_http_error(exc)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -1770,7 +3008,7 @@ def draft_cards(
 )
 def start_auto_card_generation(
     job_id: str,
-    background_tasks: BackgroundTasks,
+    response: Response,
     request: AutoCardGenerationRequest | None = None,
 ) -> CardGenerationRun:
     try:
@@ -1783,11 +3021,22 @@ def start_auto_card_generation(
     except auto_card_generation_service.AutoCardGenerationServiceError as exc:
         raise_auto_generation_http_error(exc)
 
-    background_tasks.add_task(
-        auto_card_generation_service.run_auto_card_generation,
-        run.id,
-        get_llm_client,
-    )
+    try:
+        reservation = get_reliable_task_manager().enqueue(
+            kind=AUTO_CARD_GENERATION_TASK,
+            course_id=job_service.get_video_job(job_id).course_id,
+            resource_type="video_job",
+            resource_id=job_id,
+            payload={"run_id": run.id},
+            idempotency_key=f"auto-cards:{run.id}",
+            active_key=f"auto-cards:{job_id}",
+        )
+    except Exception as exc:
+        auto_card_generation_service.mark_card_generation_enqueue_failed(
+            run.id
+        )
+        raise_reliable_task_http_error(exc)
+    response.headers["X-Task-ID"] = reservation.task.id
 
     return run
 
@@ -1901,10 +3150,15 @@ def save_job_card(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def delete_job_cards(job_id: str) -> Response:
-    try:
-        knowledge_card_service.delete_all_job_cards(job_id)
-    except job_service.JobServiceError as exc:
-        raise_http_error(exc)
+    with workspace_lifecycle_lock():
+        require_no_active_tasks(
+            resource_type="video_job",
+            resource_id=job_id,
+        )
+        try:
+            knowledge_card_service.delete_all_job_cards(job_id)
+        except job_service.JobServiceError as exc:
+            raise_http_error(exc)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -2039,10 +3293,17 @@ def update_learning_document(
     status_code=status.HTTP_204_NO_CONTENT,
 )
 def delete_learning_document(document_id: str) -> Response:
-    try:
-        learning_document_service.delete_saved_learning_document(document_id)
-    except learning_document_service.LearningDocumentServiceError as exc:
-        raise_learning_document_http_error(exc)
+    with workspace_lifecycle_lock():
+        require_no_active_tasks(
+            resource_type="learning_document",
+            resource_id=document_id,
+        )
+        try:
+            learning_document_service.delete_saved_learning_document(
+                document_id
+            )
+        except learning_document_service.LearningDocumentServiceError as exc:
+            raise_learning_document_http_error(exc)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -2087,13 +3348,62 @@ def generate_learning_document(
     request: LearningDocumentGenerateRequest,
 ) -> LearningDocumentGenerationResult:
     try:
-        return learning_document_service.generate_learning_document(
-            document_id,
-            request,
-            llm_client=get_llm_client(),
+        document = learning_document_service.get_saved_learning_document(
+            document_id
         )
+        reservation = get_reliable_task_manager().enqueue(
+            kind=LEARNING_DOCUMENT_GENERATION_TASK,
+            course_id=document.course_id,
+            resource_type="learning_document",
+            resource_id=document.id,
+            payload={
+                "document_id": document.id,
+                "request": request.model_dump(mode="json"),
+            },
+            active_key=f"learning-document:{document.id}",
+        )
+        return wait_for_legacy_task_result(
+            reservation.task,
+            result_key="generation",
+            response_model=LearningDocumentGenerationResult,
+        )
+    except HTTPException:
+        raise
     except learning_document_service.LearningDocumentServiceError as exc:
         raise_learning_document_http_error(exc)
+    except Exception as exc:
+        raise_reliable_task_http_error(exc)
+
+
+@app.post(
+    "/learning-documents/{document_id}/generation-tasks",
+    response_model=ReliableTask,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def enqueue_learning_document_generation(
+    document_id: str,
+    request: LearningDocumentGenerateRequest,
+) -> ReliableTask:
+    try:
+        document = learning_document_service.get_saved_learning_document(
+            document_id
+        )
+        reservation = get_reliable_task_manager().enqueue(
+            kind=LEARNING_DOCUMENT_GENERATION_TASK,
+            course_id=document.course_id,
+            resource_type="learning_document",
+            resource_id=document.id,
+            payload={
+                "document_id": document.id,
+                "request": request.model_dump(mode="json"),
+            },
+            active_key=f"learning-document:{document.id}",
+        )
+        return reservation.task
+    except learning_document_service.LearningDocumentServiceError as exc:
+        raise_learning_document_http_error(exc)
+    except Exception as exc:
+        raise_reliable_task_http_error(exc)
 
 
 @app.post(

@@ -4,13 +4,17 @@ import app.main as main
 from app.job import VideoJob, VideoJobStatus
 from app.job_store import create_job, get_job
 from app.knowledge_card import KnowledgeCard
-from app.knowledge_card_store import create_card, list_cards_for_job
+from app.knowledge_card_store import (
+    create_card,
+    get_card,
+    list_cards_for_job,
+)
 
 
 client = TestClient(main.app)
 
 
-def test_delete_job_removes_job_cards_and_artifacts(
+def test_delete_job_preserves_cards_and_artifacts_until_purge(
     monkeypatch,
     tmp_path,
 ):
@@ -66,6 +70,22 @@ def test_delete_job_removes_job_cards_and_artifacts(
     assert response.status_code == 204
     assert get_job(job.id) is None
     assert list_cards_for_job(job.id) == []
+    assert get_job(job.id, include_deleted=True) is not None
+    assert get_card("card-123", include_deleted=True) is not None
+    assert video_path.exists()
+    assert transcript_path.exists()
+    assert audio_path.exists()
+
+    trash_item = next(
+        item
+        for item in client.get("/trash").json()
+        if item["entity_type"] == "video_job"
+        and item["entity_id"] == job.id
+    )
+    purge_response = client.delete(f"/trash/{trash_item['id']}")
+    assert purge_response.status_code == 200
+    assert get_job(job.id, include_deleted=True) is None
+    assert get_card("card-123", include_deleted=True) is None
     assert not video_path.exists()
     assert not transcript_path.exists()
     assert not audio_path.exists()

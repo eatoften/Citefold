@@ -1,6 +1,8 @@
 import {
+  Activity,
   Database,
   MessageSquareText,
+  ShieldCheck,
   Shapes,
 } from 'lucide-react'
 import type { MouseEvent } from 'react'
@@ -10,6 +12,8 @@ type AppSidebarProps = {
   activeView: PrimaryView
   getViewHref: (view: PrimaryView) => string
   onChange: (view: PrimaryView) => void
+  onOpenActivity: () => void
+  onOpenRecovery: () => void
 }
 
 const NAV_ITEMS: Array<{
@@ -38,6 +42,8 @@ export function AppSidebar({
   activeView,
   getViewHref,
   onChange,
+  onOpenActivity,
+  onOpenRecovery,
 }: AppSidebarProps) {
   return (
     <nav className="app-sidebar" aria-label="Primary navigation">
@@ -71,6 +77,27 @@ export function AppSidebar({
             </a>
           )
         })}
+      </div>
+      <div
+        className="app-sidebar-utility"
+        aria-label="Workspace utilities"
+      >
+        <button
+          type="button"
+          title="Activity"
+          onClick={onOpenActivity}
+        >
+          <Activity aria-hidden="true" size={18} strokeWidth={1.8} />
+          <span>Activity</span>
+        </button>
+        <button
+          type="button"
+          title="Data & recovery"
+          onClick={onOpenRecovery}
+        >
+          <ShieldCheck aria-hidden="true" size={18} strokeWidth={1.8} />
+          <span>Recovery</span>
+        </button>
       </div>
     </nav>
   )

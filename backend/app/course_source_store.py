@@ -370,12 +370,40 @@ def delete_source_projection(source_id: str) -> None:
         _delete_sources(conn, {source_id})
 
 
+def delete_source_projections_for_course(course_id: str) -> None:
+    ensure_db()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id FROM sources WHERE course_id = ?",
+            (course_id,),
+        ).fetchall()
+        _delete_sources(conn, {str(row["id"]) for row in rows})
+
+
 def clear_course_sources() -> None:
     ensure_db()
     with connect() as conn:
         conn.execute("DELETE FROM source_chunk_embeddings")
         conn.execute("DELETE FROM source_chunks")
         conn.execute("DELETE FROM sources")
+
+
+def recover_active_source_indexes(*, error_message: str) -> int:
+    ensure_db()
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE sources
+            SET index_status = 'failed',
+                index_generation = NULL,
+                index_error = ?,
+                updated_at = ?
+            WHERE index_status = 'indexing'
+               OR index_generation IS NOT NULL
+            """,
+            (error_message, datetime.now().astimezone().isoformat()),
+        )
+    return cursor.rowcount
 
 
 def _upsert_source(conn, source: CourseSource) -> None:

@@ -245,7 +245,7 @@ def test_suggest_topics_from_unsorted_embeddings_and_accept(tmp_path):
     assert accept_response.json()["status"] == "accepted"
 
 
-def test_delete_course_preserves_cards_and_removes_course_topics(tmp_path):
+def test_delete_course_hides_and_restores_topic_subtree(tmp_path):
     course = client.post(
         "/courses",
         json={"title": "Temporary course"},
@@ -291,15 +291,32 @@ def test_delete_course_preserves_cards_and_removes_course_topics(tmp_path):
 
     assert response.status_code == 204
     assert client.get(f"/courses/{course['id']}/map").status_code == 404
-    moved_job = client.get(f"/jobs/{job.id}").json()
-    assert moved_job["course_id"] == DEFAULT_COURSE_ID
+    assert client.get(f"/jobs/{job.id}").status_code == 404
     default_map = client.get(f"/courses/{DEFAULT_COURSE_ID}/map").json()
     assert topic["id"] not in {item["id"] for item in default_map["topics"]}
-    unsorted = next(item for item in default_map["topics"] if item["is_system"])
-    membership = next(
-        item for item in default_map["memberships"] if item["card_id"] == card["id"]
+    assert card["id"] not in {
+        item["card_id"] for item in default_map["memberships"]
+    }
+
+    trash_item = next(
+        item
+        for item in client.get("/trash").json()
+        if item["entity_type"] == "course"
+        and item["entity_id"] == course["id"]
     )
-    assert membership["topic_id"] == unsorted["id"]
+    assert client.post(
+        f"/trash/{trash_item['id']}/restore"
+    ).status_code == 200
+    restored_map = client.get(f"/courses/{course['id']}/map").json()
+    assert topic["id"] in {
+        item["id"] for item in restored_map["topics"]
+    }
+    membership = next(
+        item
+        for item in restored_map["memberships"]
+        if item["card_id"] == card["id"]
+    )
+    assert membership["topic_id"] == topic["id"]
 
 
 def test_split_and_merge_topics(tmp_path):

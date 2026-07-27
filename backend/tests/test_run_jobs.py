@@ -1,7 +1,9 @@
 from pathlib import Path
+from threading import Event
 
 from fastapi.testclient import TestClient
 
+import app.job_service as job_service
 import app.main as main
 from app.job import (
     VideoJob,
@@ -10,9 +12,23 @@ from app.job import (
 from app.job_store import create_job as save_job
 from app.job_store import get_job
 from app.media_metadata import VideoMetadata
+from app.reliable_task import ReliableTaskStatus
 
 
 client = TestClient(main.app)
+
+
+def wait_for_response_task(response):
+    task_id = response.headers["X-Task-ID"]
+    return main.get_reliable_task_manager().wait_for_task(
+        task_id,
+        {
+            ReliableTaskStatus.succeeded,
+            ReliableTaskStatus.failed,
+            ReliableTaskStatus.canceled,
+        },
+        timeout_seconds=5.0,
+    )
 
 
 def create_job(
@@ -95,6 +111,9 @@ def test_run_job_completes_uploaded_job(
     assert data["transcript_path"] is None
     assert data["error_message"] is None
 
+    assert wait_for_response_task(response).status == (
+        ReliableTaskStatus.succeeded
+    )
     assert calls == ["process"]
 
     stored_job = get_job(job.id)
@@ -106,6 +125,127 @@ def test_run_job_completes_uploaded_job(
     assert stored_job.started_at is not None
     assert stored_job.completed_at is not None
     assert stored_job.updated_at >= stored_job.started_at
+
+
+def test_cancel_after_video_completion_keeps_task_and_job_completed(
+    monkeypatch,
+    tmp_path,
+):
+    job = create_job(tmp_path)
+    domain_committed = Event()
+    return_from_commit = Event()
+    original_save_job_progress = job_service.save_job_progress
+
+    def block_after_completed_commit(updated_job):
+        original_save_job_progress(updated_job)
+        if updated_job.status == VideoJobStatus.completed:
+            domain_committed.set()
+            assert return_from_commit.wait(5)
+
+    class PublishingPipeline:
+        def process(
+            self,
+            video_path,
+            artifact_root,
+            job,
+            on_job_update=None,
+        ):
+            job.transcript_path = tmp_path / "transcript.json"
+            job.status = VideoJobStatus.completed
+            assert on_job_update is not None
+            on_job_update(job)
+
+    monkeypatch.setattr(
+        job_service,
+        "save_job_progress",
+        block_after_completed_commit,
+    )
+    monkeypatch.setattr(
+        main,
+        "get_video_pipeline",
+        lambda: PublishingPipeline(),
+    )
+
+    response = client.post(f"/jobs/{job.id}/run")
+    manager = main.get_reliable_task_manager()
+    task_id = response.headers["X-Task-ID"]
+    try:
+        assert domain_committed.wait(5)
+        canceling = manager.request_cancel(task_id)
+        assert canceling.status == ReliableTaskStatus.canceling
+        return_from_commit.set()
+        completed = manager.wait_for_task(
+            task_id,
+            {ReliableTaskStatus.succeeded},
+            timeout_seconds=5,
+        )
+    finally:
+        return_from_commit.set()
+
+    stored_job = get_job(job.id)
+    assert completed.cancel_requested_at is not None
+    assert stored_job is not None
+    assert stored_job.status == VideoJobStatus.completed
+
+
+def test_cancel_before_video_completion_still_cancels_task_and_job(
+    monkeypatch,
+    tmp_path,
+):
+    job = create_job(tmp_path)
+    interim_progress_committed = Event()
+    return_from_progress = Event()
+    original_save_job_progress = job_service.save_job_progress
+
+    def block_during_transcription(updated_job):
+        original_save_job_progress(updated_job)
+        if updated_job.status == VideoJobStatus.transcribing:
+            interim_progress_committed.set()
+            assert return_from_progress.wait(5)
+
+    class InProgressPipeline:
+        def process(
+            self,
+            video_path,
+            artifact_root,
+            job,
+            on_job_update=None,
+        ):
+            job.status = VideoJobStatus.transcribing
+            assert on_job_update is not None
+            on_job_update(job)
+            raise AssertionError("Cancellation must stop before publication.")
+
+    monkeypatch.setattr(
+        job_service,
+        "save_job_progress",
+        block_during_transcription,
+    )
+    monkeypatch.setattr(
+        main,
+        "get_video_pipeline",
+        lambda: InProgressPipeline(),
+    )
+
+    response = client.post(f"/jobs/{job.id}/run")
+    manager = main.get_reliable_task_manager()
+    task_id = response.headers["X-Task-ID"]
+    try:
+        assert interim_progress_committed.wait(5)
+        manager.request_cancel(task_id)
+        return_from_progress.set()
+        canceled = manager.wait_for_task(
+            task_id,
+            {ReliableTaskStatus.canceled},
+            timeout_seconds=5,
+        )
+    finally:
+        return_from_progress.set()
+
+    stored_job = get_job(job.id)
+    assert canceled.cancel_requested_at is not None
+    assert stored_job is not None
+    assert stored_job.status == VideoJobStatus.canceled
 
 
 def test_run_job_returns_404_for_missing_job():
@@ -185,6 +325,9 @@ def test_run_job_marks_job_failed_when_pipeline_fails(
 
     assert response.status_code == 202
 
+    assert wait_for_response_task(response).status == (
+        ReliableTaskStatus.failed
+    )
     stored_job = get_job(job.id)
 
     assert stored_job is not None
@@ -239,6 +382,9 @@ def test_retry_job_completes_failed_job(
     assert response.status_code == 202
     assert response.json()["status"] == "probing"
 
+    assert wait_for_response_task(response).status == (
+        ReliableTaskStatus.succeeded
+    )
     stored_job = get_job(job.id)
 
     assert stored_job is not None

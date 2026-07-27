@@ -278,7 +278,7 @@ def test_card_embedding_status_detects_stale_card(monkeypatch, tmp_path):
     }
 
 
-def test_delete_card_removes_embedding(monkeypatch, tmp_path):
+def test_delete_card_preserves_embedding_for_restore(monkeypatch, tmp_path):
     job = create_uploaded_job(tmp_path)
     created_card = save_card(job.id)
     fake_embedder = FakeEmbedder([[1.0, 0.0]])
@@ -295,7 +295,23 @@ def test_delete_card_removes_embedding(monkeypatch, tmp_path):
     delete_response = client.delete(f"/cards/{created_card['id']}")
 
     assert delete_response.status_code == 204
-    assert get_card_embedding(created_card["id"]) is None
+    assert get_card_embedding(created_card["id"]) is not None
+    assert client.get(
+        f"/cards/{created_card['id']}/embedding/status"
+    ).status_code == 404
+
+    trash_item = next(
+        item
+        for item in client.get("/trash").json()
+        if item["entity_type"] == "knowledge_card"
+        and item["entity_id"] == created_card["id"]
+    )
+    assert client.post(
+        f"/trash/{trash_item['id']}/restore"
+    ).status_code == 200
+    assert client.get(
+        f"/cards/{created_card['id']}/embedding/status"
+    ).status_code == 200
 
 
 def test_card_embedding_status_returns_404_for_missing_card():

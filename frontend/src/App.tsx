@@ -9,8 +9,12 @@ import {
   type ChangeEvent,
   type MouseEvent,
 } from 'react'
-import { invoke } from '@tauri-apps/api/core'
 import { AppSidebar } from './AppSidebar'
+import {
+  ensureBackendReady,
+  isTauriRuntime,
+  type BackendBootState,
+} from './backendBootstrap'
 import { CourseMapView } from './CourseMapView'
 import { restoreCitationFocus } from './features/citations/citationFormat'
 import { type ChatCitation } from './features/chat'
@@ -24,6 +28,12 @@ import {
   type StudioTool,
 } from './features/navigation/appRoute'
 import { SourcesLibrary } from './features/sources/SourcesLibrary'
+import {
+  announceTrashCreated,
+  ReliabilityCenter,
+  SaveStatus,
+  useAutosavedDraft,
+} from './features/reliability'
 import { CardsWorkspace } from './features/studio/CardsWorkspace'
 import { StudioWorkspace } from './features/studio/StudioWorkspace'
 import { GraphView } from './GraphView'
@@ -41,18 +51,8 @@ const CitationInspector = lazy(() =>
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8001'
-const BACKEND_HEALTH_TIMEOUT_MS = 1000
-const BACKEND_STARTUP_TIMEOUT_MS = 45000
-const BACKEND_POLL_INTERVAL_MS = 500
 
 const DEFAULT_COURSE_ID = 'uncategorized'
-const TAURI_INTERNALS_KEY = '__TAURI_INTERNALS__'
-
-declare global {
-  interface Window {
-    [TAURI_INTERNALS_KEY]?: unknown
-  }
-}
 
 type JobStatus =
   | 'uploaded'
@@ -61,6 +61,7 @@ type JobStatus =
   | 'transcribing'
   | 'completed'
   | 'failed'
+  | 'canceled'
 
 type VideoMetadata = {
   duration_seconds: number
@@ -359,124 +360,11 @@ type SegmentRange = {
   endIndex: number
 }
 
-type BackendProcessStatus = {
-  ready: boolean
-  mode: string
-  message: string
-}
-
-type BackendBootPhase = 'checking' | 'starting' | 'ready' | 'failed'
-
-type BackendBootState = {
-  phase: BackendBootPhase
-  message: string
-  mode: string
-}
-
 const runningStatuses: JobStatus[] = [
   'probing',
   'extracting_audio',
   'transcribing',
 ]
-
-function isTauriRuntime(): boolean {
-  return Boolean(window[TAURI_INTERNALS_KEY])
-}
-
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, milliseconds))
-}
-
-async function checkBackendHealth(
-  timeoutMs = BACKEND_HEALTH_TIMEOUT_MS,
-): Promise<boolean> {
-  const controller = new AbortController()
-  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
-
-  try {
-    const response = await fetch(`${API_BASE_URL}/health`, {
-      cache: 'no-store',
-      signal: controller.signal,
-    })
-
-    return response.ok
-  } catch {
-    return false
-  } finally {
-    window.clearTimeout(timeoutId)
-  }
-}
-
-async function waitForBackendHealth(
-  timeoutMs = BACKEND_STARTUP_TIMEOUT_MS,
-): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-
-  while (Date.now() < deadline) {
-    if (await checkBackendHealth()) {
-      return true
-    }
-
-    await sleep(BACKEND_POLL_INTERVAL_MS)
-  }
-
-  return false
-}
-
-async function ensureBackendReady(): Promise<BackendBootState> {
-  if (await checkBackendHealth()) {
-    return {
-      phase: 'ready',
-      mode: 'external',
-      message: `Backend ready at ${API_BASE_URL}.`,
-    }
-  }
-
-  if (isTauriRuntime()) {
-    try {
-      const status = await invoke<BackendProcessStatus>('ensure_backend')
-
-      if (status.ready || (await waitForBackendHealth())) {
-        return {
-          phase: 'ready',
-          mode: status.mode || 'sidecar',
-          message: status.message || `Backend ready at ${API_BASE_URL}.`,
-        }
-      }
-
-      return {
-        phase: 'failed',
-        mode: status.mode || 'sidecar',
-        message:
-          status.message || 'Local backend did not become ready in time.',
-      }
-    } catch (error) {
-      return {
-        phase: 'failed',
-        mode: 'sidecar',
-        message:
-          error instanceof Error
-            ? error.message
-            : 'Failed to start local backend sidecar.',
-      }
-    }
-  }
-
-  if (await waitForBackendHealth(5000)) {
-    return {
-      phase: 'ready',
-      mode: 'external',
-      message: `Backend ready at ${API_BASE_URL}.`,
-    }
-  }
-
-  return {
-    phase: 'failed',
-    mode: 'manual',
-    message:
-      'Backend is not running. Start FastAPI manually, then retry.',
-  }
-}
 
 function createDefaultNoteForm(): NoteForm {
   return {
@@ -699,6 +587,10 @@ function ClaimsBlock({
 function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const cardGenerationAbortRef = useRef<AbortController | null>(null)
+  const cardGenerationSequenceRef = useRef(0)
+  const autoGenerationStartAbortRef =
+    useRef<AbortController | null>(null)
+  const autoGenerationStartSequenceRef = useRef(0)
   const citationTriggerRef = useRef<HTMLButtonElement | null>(null)
   const citationCourseIdRef = useRef<string | null>(null)
   const cardRailToggleRef = useRef<HTMLButtonElement | null>(null)
@@ -798,6 +690,11 @@ function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null)
   const [isRuntimePanelOpen, setIsRuntimePanelOpen] = useState(false)
+  const [reliabilityCenterTab, setReliabilityCenterTab] = useState<
+    'activity' | 'data' | null
+  >(null)
+  const [workspaceRecoveryRevision, setWorkspaceRecoveryRevision] =
+    useState(0)
   const [backendBoot, setBackendBoot] = useState<BackendBootState>({
     phase: 'checking',
     mode: isTauriRuntime() ? 'sidecar' : 'manual',
@@ -876,17 +773,203 @@ function App() {
     return new Set(savedCards.map((card) => cardSignature(card)))
   }, [savedCards])
 
+  const activeCardDraft = useMemo(() => {
+    if (
+      !job ||
+      job.course_id !== selectedCourseId ||
+      cardDraft?.job_id !== job.id
+    ) {
+      return null
+    }
+    return cardDraft
+  }, [cardDraft, job, selectedCourseId])
+
   const unsavedDraftCards = useMemo(() => {
-    if (!cardDraft) {
+    if (!activeCardDraft) {
       return []
     }
 
-    return cardDraft.cards.filter(
+    return activeCardDraft.cards.filter(
       (card) => !savedCardSignatures.has(cardSignature(card)),
     )
-  }, [cardDraft, savedCardSignatures])
+  }, [activeCardDraft, savedCardSignatures])
+
+  const railCardInitialForm = useMemo<CardEditForm | null>(() => {
+    if (!selectedRailCard) return null
+    return {
+      title: selectedRailCard.title,
+      summary: selectedRailCard.summary,
+      key_points: selectedRailCard.key_points.join('\n'),
+      tags: selectedRailCard.tags.join(', '),
+      card_kind: selectedRailCard.card_kind,
+      content_status: selectedRailCard.content_status,
+    }
+  }, [selectedRailCard])
+  const restoreRailCardDraft = useCallback(
+    (payload: { form: CardEditForm | null }) => {
+      if (payload.form) setRailCardEditForm(payload.form)
+    },
+    [],
+  )
+  const railCardDraft = useAutosavedDraft({
+    apiBaseUrl: API_BASE_URL,
+    draftId: `card-editor:${selectedRailCard?.id ?? 'none'}`,
+    courseId: selectedRailCard ? selectedCourseId : null,
+    draftType: 'card_editor',
+    entityId: selectedRailCard?.id ?? null,
+    baseUpdatedAt: selectedRailCard?.updated_at ?? null,
+    enabled: Boolean(selectedRailCard && railCardEditForm),
+    value: { form: railCardEditForm },
+    initialValue: { form: railCardInitialForm },
+    onRestore: restoreRailCardDraft,
+  })
+
+  const videoEditingCard = useMemo(
+    () =>
+      savedCards.find((card) => card.id === editingCardId) ?? null,
+    [editingCardId, savedCards],
+  )
+  const videoCardInitialForm = useMemo<CardEditForm | null>(() => {
+    if (!videoEditingCard) return null
+    return {
+      title: videoEditingCard.title,
+      summary: videoEditingCard.summary,
+      key_points: videoEditingCard.key_points.join('\n'),
+      tags: videoEditingCard.tags.join(', '),
+      card_kind: videoEditingCard.card_kind,
+      content_status: videoEditingCard.content_status,
+    }
+  }, [videoEditingCard])
+  const restoreVideoCardDraft = useCallback(
+    (payload: { form: CardEditForm | null }) => {
+      if (payload.form) setCardEditForm(payload.form)
+    },
+    [],
+  )
+  const videoCardDraft = useAutosavedDraft({
+    apiBaseUrl: API_BASE_URL,
+    draftId: `video-card-editor:${editingCardId ?? 'none'}`,
+    courseId: videoEditingCard ? selectedCourseId : null,
+    draftType: 'card_editor',
+    entityId: editingCardId,
+    baseUpdatedAt: videoEditingCard?.updated_at ?? null,
+    enabled: Boolean(videoEditingCard && cardEditForm),
+    value: { form: cardEditForm },
+    initialValue: { form: videoCardInitialForm },
+    onRestore: restoreVideoCardDraft,
+  })
+
+  const restoreNewNoteDrafts = useCallback(
+    (payload: { forms: Record<string, NoteForm> }) => {
+      setNoteForms(payload.forms)
+    },
+    [],
+  )
+  const newNoteDrafts = useAutosavedDraft({
+    apiBaseUrl: API_BASE_URL,
+    draftId: `new-card-notes:${job?.id ?? 'none'}`,
+    courseId: job?.course_id ?? null,
+    draftType: 'note_editor',
+    entityId: job?.id ?? null,
+    enabled: Boolean(job),
+    value: { forms: noteForms },
+    initialValue: { forms: {} as Record<string, NoteForm> },
+    onRestore: restoreNewNoteDrafts,
+  })
+
+  const editingNote = useMemo(
+    () =>
+      Object.values(cardNotes)
+        .flat()
+        .find((note) => note.id === editingNoteId) ?? null,
+    [cardNotes, editingNoteId],
+  )
+  const restoreNoteEditDraft = useCallback(
+    (payload: { form: NoteForm | null }) => {
+      if (payload.form) setNoteEditForm(payload.form)
+    },
+    [],
+  )
+  const noteEditDraft = useAutosavedDraft({
+    apiBaseUrl: API_BASE_URL,
+    draftId: `note-editor:${editingNoteId ?? 'none'}`,
+    courseId: editingNote ? selectedCourseId : null,
+    draftType: 'note_editor',
+    entityId: editingNoteId,
+    baseUpdatedAt: editingNote?.updated_at ?? null,
+    enabled: Boolean(editingNote && noteEditForm),
+    value: { form: noteEditForm },
+    initialValue: {
+      form: editingNote
+        ? {
+            note_type: editingNote.note_type,
+            title: editingNote.title ?? '',
+            body: editingNote.body,
+          }
+        : null,
+    },
+    onRestore: restoreNoteEditDraft,
+  })
+
+  const restoreReviewDrafts = useCallback(
+    (payload: { forms: Record<string, ReviewItemForm> }) => {
+      setReviewItemForms(payload.forms)
+    },
+    [],
+  )
+  const reviewDrafts = useAutosavedDraft({
+    apiBaseUrl: API_BASE_URL,
+    draftId: `review-item-drafts:${job?.id ?? 'none'}`,
+    courseId: job?.course_id ?? null,
+    draftType: 'review_editor',
+    entityId: job?.id ?? null,
+    enabled: Boolean(job),
+    value: { forms: reviewItemForms },
+    initialValue: {
+      forms: {} as Record<string, ReviewItemForm>,
+    },
+    onRestore: restoreReviewDrafts,
+  })
+
+  const restoreGeneratedCardDraft = useCallback(
+    (payload: { draft: CardDraftResponse | null }) => {
+      if (
+        payload.draft &&
+        payload.draft.job_id === activeJobIdRef.current
+      ) {
+        setCardDraft(payload.draft)
+        setGenerationStatus('Recovered unsaved generated cards.')
+      }
+    },
+    [],
+  )
+  const generatedCardDraft = useAutosavedDraft({
+    apiBaseUrl: API_BASE_URL,
+    draftId: `generated-cards:${job?.id ?? 'none'}`,
+    courseId: job?.course_id ?? null,
+    draftType: 'generated_cards',
+    entityId: job?.id ?? null,
+    enabled: Boolean(job),
+    value: { draft: activeCardDraft },
+    initialValue: {
+      draft: null as CardDraftResponse | null,
+    },
+    onRestore: restoreGeneratedCardDraft,
+  })
+
+  function resetCardGenerationRequests() {
+    cardGenerationSequenceRef.current += 1
+    cardGenerationAbortRef.current?.abort()
+    cardGenerationAbortRef.current = null
+    autoGenerationStartSequenceRef.current += 1
+    autoGenerationStartAbortRef.current?.abort()
+    autoGenerationStartAbortRef.current = null
+    setIsDraftingCards(false)
+    setIsStartingAutoGeneration(false)
+  }
 
   function clearTranscriptSelection() {
+    resetCardGenerationRequests()
     setSelectedRange(null)
     setTranscriptContext(null)
     setCardDraft(null)
@@ -1426,7 +1509,7 @@ function App() {
     }
 
     const confirmed = window.confirm(
-      `Delete course "${course.title}"? Its videos will move to Uncategorized.`,
+      `Move course "${course.title}" and its contents to Trash?`,
     )
 
     if (!confirmed) {
@@ -1443,6 +1526,10 @@ function App() {
           method: 'DELETE',
         },
       )
+      announceTrashCreated({
+        entity_type: 'course',
+        entity_id: course.id,
+      })
 
       if (selectedCourseId === course.id) {
         clearActiveJob()
@@ -1546,6 +1633,7 @@ function App() {
     setCardNotes({})
     setNoteForms({})
     clearTranscriptSelection()
+    setAutoGenerationRun(null)
     setErrorMessage(null)
 
     try {
@@ -1631,6 +1719,10 @@ function App() {
           method: 'DELETE',
         },
       )
+      announceTrashCreated({
+        entity_type: 'video_job',
+        entity_id: jobToDelete.id,
+      })
 
       setJobs((previousJobs) =>
         previousJobs.filter((item) => item.id !== jobToDelete.id),
@@ -1852,13 +1944,51 @@ function App() {
     void videoRef.current.play()
   }
 
+  function isCurrentCardGeneration(
+    sequence: number,
+    activeJob: VideoJob,
+    controller: AbortController,
+  ): boolean {
+    return (
+      sequence === cardGenerationSequenceRef.current &&
+      cardGenerationAbortRef.current === controller &&
+      !controller.signal.aborted &&
+      activeCourseIdRef.current === activeJob.course_id &&
+      activeJobIdRef.current === activeJob.id
+    )
+  }
+
+  function isCurrentAutoGenerationStart(
+    sequence: number,
+    activeJob: VideoJob,
+    controller: AbortController,
+  ): boolean {
+    return (
+      sequence === autoGenerationStartSequenceRef.current &&
+      autoGenerationStartAbortRef.current === controller &&
+      !controller.signal.aborted &&
+      activeCourseIdRef.current === activeJob.course_id &&
+      activeJobIdRef.current === activeJob.id
+    )
+  }
+
   async function generateCards() {
-    if (!job || selectedSegments.length === 0) {
+    const activeJob = job
+    if (
+      !activeJob ||
+      selectedSegments.length === 0 ||
+      activeCourseIdRef.current !== activeJob.course_id ||
+      activeJobIdRef.current !== activeJob.id
+    ) {
       return
     }
 
     const firstSegment = selectedSegments[0]
     const lastSegment = selectedSegments[selectedSegments.length - 1]
+    cardGenerationAbortRef.current?.abort()
+    const controller = new AbortController()
+    const sequence = ++cardGenerationSequenceRef.current
+    cardGenerationAbortRef.current = controller
 
     setIsDraftingCards(true)
     setErrorMessage(null)
@@ -1866,9 +1996,6 @@ function App() {
     setGenerationStatus(
       `Preparing ${selectedSegments.length} transcript segments`,
     )
-
-    const controller = new AbortController()
-    cardGenerationAbortRef.current = controller
 
     try {
       setGenerationStatus(
@@ -1882,7 +2009,7 @@ function App() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          job_id: job.id,
+          job_id: activeJob.id,
           start_seconds: firstSegment.start_seconds,
           end_seconds: lastSegment.end_seconds,
           card_count: 3,
@@ -1891,13 +2018,26 @@ function App() {
         }),
       })
 
+      if (
+        !isCurrentCardGeneration(sequence, activeJob, controller)
+      ) {
+        return
+      }
+      if (draft.job_id !== activeJob.id) {
+        throw new Error(
+          'Card generation returned a draft for a different video.',
+        )
+      }
       setCardDraft(draft)
       setGenerationStatus(
         `Grounded ${draft.generation_metadata.grounded_claim_count} claims in ${formatElapsed(draft.generation_metadata.elapsed_seconds)}`,
       )
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        setGenerationStatus('Generation canceled')
+      if (
+        controller.signal.aborted ||
+        (error instanceof DOMException && error.name === 'AbortError') ||
+        !isCurrentCardGeneration(sequence, activeJob, controller)
+      ) {
         return
       }
 
@@ -1908,19 +2048,34 @@ function App() {
       )
       setGenerationStatus(null)
     } finally {
+      const isCurrent = isCurrentCardGeneration(
+        sequence,
+        activeJob,
+        controller,
+      )
       if (cardGenerationAbortRef.current === controller) {
         cardGenerationAbortRef.current = null
       }
-
-      setIsDraftingCards(false)
+      if (isCurrent) {
+        setIsDraftingCards(false)
+      }
     }
   }
 
   async function startAutoGeneration() {
-    if (!job) {
+    const activeJob = job
+    if (
+      !activeJob ||
+      activeCourseIdRef.current !== activeJob.course_id ||
+      activeJobIdRef.current !== activeJob.id
+    ) {
       return
     }
 
+    autoGenerationStartAbortRef.current?.abort()
+    const controller = new AbortController()
+    const sequence = ++autoGenerationStartSequenceRef.current
+    autoGenerationStartAbortRef.current = controller
     setIsStartingAutoGeneration(true)
     setErrorMessage(null)
     setExportMessage(null)
@@ -1928,9 +2083,10 @@ function App() {
 
     try {
       const run = await fetchJson<CardGenerationRun>(
-        `/jobs/${job.id}/cards/auto-generate`,
+        `/jobs/${activeJob.id}/cards/auto-generate`,
         {
           method: 'POST',
+          signal: controller.signal,
           headers: {
             'Content-Type': 'application/json',
           },
@@ -1950,40 +2106,82 @@ function App() {
         },
       )
 
+      if (
+        !isCurrentAutoGenerationStart(
+          sequence,
+          activeJob,
+          controller,
+        ) ||
+        run.job_id !== activeJob.id
+      ) {
+        return
+      }
       setAutoGenerationRun(run)
 
       if (!isAutoGenerationActive(run)) {
-        await loadSavedCards(job.id)
-        await loadCourses(job.course_id)
-        await loadCourseCardIndex(job.course_id)
+        await loadSavedCards(activeJob.id)
+        await loadCourses(activeJob.course_id)
+        await loadCourseCardIndex(activeJob.course_id)
       }
     } catch (error) {
+      if (
+        controller.signal.aborted ||
+        (error instanceof DOMException && error.name === 'AbortError') ||
+        !isCurrentAutoGenerationStart(
+          sequence,
+          activeJob,
+          controller,
+        )
+      ) {
+        return
+      }
       setErrorMessage(
         error instanceof Error
           ? error.message
           : 'Auto generation failed.',
       )
     } finally {
-      setIsStartingAutoGeneration(false)
+      const isCurrent = isCurrentAutoGenerationStart(
+        sequence,
+        activeJob,
+        controller,
+      )
+      if (autoGenerationStartAbortRef.current === controller) {
+        autoGenerationStartAbortRef.current = null
+      }
+      if (isCurrent) {
+        setIsStartingAutoGeneration(false)
+      }
     }
   }
 
   function cancelCardGeneration() {
+    cardGenerationSequenceRef.current += 1
     cardGenerationAbortRef.current?.abort()
+    cardGenerationAbortRef.current = null
+    setIsDraftingCards(false)
     setGenerationStatus('Generation canceled')
   }
 
   async function createSavedCardFromDraft(
     card: KnowledgeCardDraft,
+    activeJob: VideoJob,
+    activeDraft: CardDraftResponse,
   ): Promise<KnowledgeCard> {
-    if (!job || !cardDraft) {
-      throw new Error('No active job or draft cards.')
+    if (
+      activeDraft.job_id !== activeJob.id ||
+      activeCourseIdRef.current !== activeJob.course_id ||
+      activeJobIdRef.current !== activeJob.id
+    ) {
+      throw new Error(
+        'The generated draft no longer belongs to the active video.',
+      )
     }
 
     const { question, answer, ...cardContent } = card
 
     return fetchJson<KnowledgeCard>(
-      `/jobs/${job.id}/cards`,
+      `/jobs/${activeJob.id}/cards`,
       {
         method: 'POST',
         headers: {
@@ -1993,8 +2191,8 @@ function App() {
           ...cardContent,
           card_kind: 'concept',
           content_status: 'draft',
-          provider: cardDraft.provider,
-          model: cardDraft.model,
+          provider: activeDraft.provider,
+          model: activeDraft.model,
           review_items: [
             {
               item_type: 'basic',
@@ -2011,8 +2209,9 @@ function App() {
 
   async function saveDraftCard(card: KnowledgeCardDraft) {
     const activeJob = job
+    const activeDraft = activeCardDraft
 
-    if (!activeJob) {
+    if (!activeJob || !activeDraft) {
       return
     }
 
@@ -2024,7 +2223,11 @@ function App() {
     setErrorMessage(null)
 
     try {
-      const savedCard = await createSavedCardFromDraft(card)
+      const savedCard = await createSavedCardFromDraft(
+        card,
+        activeJob,
+        activeDraft,
+      )
       if (
         activeCourseIdRef.current !== activeJob.course_id ||
         activeJobIdRef.current !== activeJob.id
@@ -2039,6 +2242,10 @@ function App() {
         ...previousNotes,
         [savedCard.id]: [],
       }))
+      if (unsavedDraftCards.length === 1) {
+        setCardDraft(null)
+        await generatedCardDraft.clearDraft()
+      }
       await loadCourses(activeJob.course_id)
       await loadCourseCardIndex(activeJob.course_id)
     } catch (error) {
@@ -2062,8 +2269,9 @@ function App() {
 
   async function saveAllDraftCards() {
     const activeJob = job
+    const activeDraft = activeCardDraft
 
-    if (!activeJob) {
+    if (!activeJob || !activeDraft) {
       return
     }
 
@@ -2084,7 +2292,13 @@ function App() {
         ) {
           return
         }
-        savedCardsBatch.push(await createSavedCardFromDraft(card))
+        savedCardsBatch.push(
+          await createSavedCardFromDraft(
+            card,
+            activeJob,
+            activeDraft,
+          ),
+        )
       }
       if (
         activeCourseIdRef.current !== activeJob.course_id ||
@@ -2105,6 +2319,8 @@ function App() {
 
         return nextNotes
       })
+      setCardDraft(null)
+      await generatedCardDraft.clearDraft()
       await loadCourses(activeJob.course_id)
       await loadCourseCardIndex(activeJob.course_id)
     } catch (error) {
@@ -2200,6 +2416,7 @@ function App() {
       )
       setEditingCardId(null)
       setCardEditForm(null)
+      await videoCardDraft.clearDraft()
       if (selectedRailCard?.id === updatedCard.id) {
         setSelectedRailCard(updatedCard)
       }
@@ -2279,6 +2496,7 @@ function App() {
           ),
         ),
       )
+      await railCardDraft.clearDraft()
       await loadCourseCardIndex(expectedCourseId)
     } catch (error) {
       if (
@@ -2310,6 +2528,10 @@ function App() {
           method: 'DELETE',
         },
       )
+      announceTrashCreated({
+        entity_type: 'knowledge_card',
+        entity_id: cardId,
+      })
       setSavedCards((previousCards) =>
         previousCards.filter((card) => card.id !== cardId),
       )
@@ -2358,11 +2580,18 @@ function App() {
     setErrorMessage(null)
 
     try {
+      const deletedCardIds = savedCards.map((card) => card.id)
       await fetchJson<void>(
         `/jobs/${job.id}/cards`,
         {
           method: 'DELETE',
         },
+      )
+      deletedCardIds.forEach((cardId) =>
+        announceTrashCreated({
+          entity_type: 'knowledge_card',
+          entity_id: cardId,
+        }),
       )
       setSavedCards([])
       setCardNotes({})
@@ -2400,11 +2629,21 @@ function App() {
     setErrorMessage(null)
 
     try {
+      const deletedCardIds =
+        cardIndexCourseId === selectedCourse.id
+          ? courseCardIndex.map((card) => card.id)
+          : []
       await fetchJson<void>(
         `/courses/${selectedCourse.id}/cards`,
         {
           method: 'DELETE',
         },
+      )
+      deletedCardIds.forEach((cardId) =>
+        announceTrashCreated({
+          entity_type: 'knowledge_card',
+          entity_id: cardId,
+        }),
       )
 
       if (job?.course_id === selectedCourse.id) {
@@ -2529,10 +2768,11 @@ function App() {
         ...previousNotes,
         [cardId]: [...(previousNotes[cardId] ?? []), savedNote],
       }))
-      setNoteForms((previousForms) => ({
-        ...previousForms,
-        [cardId]: createDefaultNoteForm(),
-      }))
+      setNoteForms((previousForms) => {
+        const nextForms = { ...previousForms }
+        delete nextForms[cardId]
+        return nextForms
+      })
       await loadCourseCardIndex(selectedCourseId)
     } catch (error) {
       setErrorMessage(
@@ -2587,6 +2827,7 @@ function App() {
       }))
       setEditingNoteId(null)
       setNoteEditForm(null)
+      await noteEditDraft.clearDraft()
       await loadCourseCardIndex(selectedCourseId)
     } catch (error) {
       setErrorMessage(
@@ -2675,10 +2916,11 @@ function App() {
         },
       )
       replaceCardReviewItems(card.id, [...card.review_items, item])
-      setReviewItemForms((previousForms) => ({
-        ...previousForms,
-        [card.id]: createDefaultReviewItemForm(),
-      }))
+      setReviewItemForms((previousForms) => {
+        const nextForms = { ...previousForms }
+        delete nextForms[card.id]
+        return nextForms
+      })
       await loadCourseCardIndex(selectedCourseId)
     } catch (error) {
       setErrorMessage(
@@ -2736,6 +2978,10 @@ function App() {
           ))}
         </div>
         <div className="review-item-form">
+          <SaveStatus
+            state={reviewDrafts.state}
+            message={reviewDrafts.message}
+          />
           <select
             value={form.item_type}
             onChange={(event) =>
@@ -2839,6 +3085,10 @@ function App() {
                         }
                       />
                       <div className="card-actions">
+                        <SaveStatus
+                          state={noteEditDraft.state}
+                          message={noteEditDraft.message}
+                        />
                         <button
                           type="button"
                           disabled={
@@ -2932,6 +3182,10 @@ function App() {
             placeholder="Add a note"
           />
           <div className="card-actions">
+            <SaveStatus
+              state={newNoteDrafts.state}
+              message={newNoteDrafts.message}
+            />
             <button
               type="button"
               disabled={isSavingNote || !form.body.trim()}
@@ -3101,6 +3355,10 @@ function App() {
                     <option value="needs_fix">needs fix</option>
                   </select>
                   <div className="card-actions">
+                    <SaveStatus
+                      state={railCardDraft.state}
+                      message={railCardDraft.message}
+                    />
                     <button
                       type="button"
                       disabled={isSavingCard}
@@ -3183,7 +3441,7 @@ function App() {
           : 'Checking local backend.',
       })
 
-      const nextBootState = await ensureBackendReady()
+      const nextBootState = await ensureBackendReady(API_BASE_URL)
 
       if (!cancelled) {
         setBackendBoot(nextBootState)
@@ -3584,7 +3842,9 @@ function App() {
 
   const canUpload = selectedFile && !isUploading
   const canRun = job?.status === 'uploaded' && !isStarting
-  const canRetry = job?.status === 'failed' && !isStarting
+  const canRetry =
+    (job?.status === 'failed' || job?.status === 'canceled') &&
+    !isStarting
   const canGenerateCards =
     selectedSegments.length > 0 && !isDraftingCards && !isLoadingContext
   const canCancelCards = isDraftingCards
@@ -3621,7 +3881,7 @@ function App() {
                   mode: isTauriRuntime() ? 'sidecar' : 'manual',
                   message: 'Retrying local backend.',
                 })
-                void ensureBackendReady().then(setBackendBoot)
+                void ensureBackendReady(API_BASE_URL).then(setBackendBoot)
               }}
             >
               Retry
@@ -3641,6 +3901,8 @@ function App() {
         activeView={appRoute.view}
         getViewHref={primaryViewHref}
         onChange={changeAppView}
+        onOpenActivity={() => setReliabilityCenterTab('activity')}
+        onOpenRecovery={() => setReliabilityCenterTab('data')}
       />
       {appRoute.view === 'sources' ? (
     <main id="main-content" className="app-shell">
@@ -3651,6 +3913,7 @@ function App() {
         initialSourceId={appRoute.sourceId}
         refreshKey={jobs
           .map((item) => `${item.id}:${item.status}:${item.updated_at}`)
+          .concat(String(workspaceRecoveryRevision))
           .join('|')}
         onSelectCourse={selectCourse}
         onSelectSource={(sourceId, mode) => {
@@ -3987,18 +4250,22 @@ function App() {
             </div>
           )}
 
-          {cardDraft && (
+          {activeCardDraft && (
             <section className="cards-panel">
               <div className="card-panel-heading">
                 <div>
                   <div className="panel-title">
-                    Draft cards - {cardDraft.model}
+                    Draft cards - {activeCardDraft.model}
                   </div>
                   <div className="panel-subtitle">
                     {unsavedDraftCards.length} unsaved /{' '}
-                    {cardDraft.cards.length} total
+                    {activeCardDraft.cards.length} total
                   </div>
                 </div>
+                <SaveStatus
+                  state={generatedCardDraft.state}
+                  message={generatedCardDraft.message}
+                />
                 <button
                   type="button"
                   disabled={
@@ -4014,17 +4281,18 @@ function App() {
                   <span>Elapsed</span>
                   <strong>
                     {formatElapsed(
-                      cardDraft.generation_metadata.elapsed_seconds,
+                      activeCardDraft.generation_metadata.elapsed_seconds,
                     )}
                   </strong>
                 </div>
                 <div>
                   <span>Context</span>
                   <strong>
-                    {cardDraft.generation_metadata.selected_segments_count}{' '}
+                    {activeCardDraft.generation_metadata
+                      .selected_segments_count}{' '}
                     segments /{' '}
                     {
-                      cardDraft.generation_metadata
+                      activeCardDraft.generation_metadata
                         .selected_context_characters
                     }{' '}
                     chars
@@ -4033,26 +4301,28 @@ function App() {
                 <div>
                   <span>Cards</span>
                   <strong>
-                    {cardDraft.generation_metadata.returned_card_count} /{' '}
-                    {cardDraft.generation_metadata.requested_card_count}
+                    {activeCardDraft.generation_metadata.returned_card_count}{' '}
+                    /{' '}
+                    {activeCardDraft.generation_metadata.requested_card_count}
                   </strong>
                 </div>
                 <div>
                   <span>Claims</span>
                   <strong>
-                    {cardDraft.generation_metadata.grounded_claim_count}{' '}
+                    {activeCardDraft.generation_metadata
+                      .grounded_claim_count}{' '}
                     grounded
                   </strong>
                 </div>
                 <div>
                   <span>Dropped</span>
                   <strong>
-                    {cardDraft.generation_metadata.dropped_claim_count}
+                    {activeCardDraft.generation_metadata.dropped_claim_count}
                   </strong>
                 </div>
               </div>
               <div className="card-list">
-                {cardDraft.cards.map((card, index) => {
+                {activeCardDraft.cards.map((card, index) => {
                   const isSaved = savedCardSignatures.has(
                     cardSignature(card),
                   )
@@ -4217,6 +4487,10 @@ function App() {
                             <option value="needs_fix">needs fix</option>
                           </select>
                           <div className="card-actions">
+                            <SaveStatus
+                              state={videoCardDraft.state}
+                              message={videoCardDraft.message}
+                            />
                             <button
                               type="button"
                               onClick={() => openStudyCard(card.id)}
@@ -4577,6 +4851,7 @@ function App() {
       ) : appRoute.view === 'chat' ? (
         <main id="main-content" className="chat-route-shell">
           <ChatWorkspace
+            key={`chat-${workspaceRecoveryRevision}`}
             apiBaseUrl={API_BASE_URL}
             courses={courses}
             selectedCourseId={selectedCourseId}
@@ -4611,6 +4886,7 @@ function App() {
       ) : (
         <main id="main-content" className="studio-route-shell">
           <StudioWorkspace
+            key={`studio-${workspaceRecoveryRevision}`}
             activeTool={appRoute.tool ?? 'cards'}
             courses={courses}
             selectedCourseId={selectedCourseId}
@@ -4742,6 +5018,20 @@ function App() {
             renderCourseCardRail()}
         </main>
       )}
+      <ReliabilityCenter
+        apiBaseUrl={API_BASE_URL}
+        isOpen={reliabilityCenterTab !== null}
+        initialTab={reliabilityCenterTab ?? 'activity'}
+        onClose={() => setReliabilityCenterTab(null)}
+        onWorkspaceChanged={() => {
+          setWorkspaceRecoveryRevision((current) => current + 1)
+          void loadCourses(selectedCourseId ?? undefined).then(() => {
+            const courseId = activeCourseIdRef.current
+            void loadJobs(courseId)
+            void loadCourseCardIndex(courseId)
+          })
+        }}
+      />
       {activeCitation && (
         <Suspense fallback={null}>
           <CitationInspector

@@ -28,6 +28,7 @@ from app.chat_store import (
     recover_active_turns,
     refuse_turn,
     reserve_turn,
+    restore_conversation,
     transition_turn,
     update_conversation,
 )
@@ -563,7 +564,7 @@ def test_startup_recovery_fails_orphaned_active_turn_and_allows_next(
     assert second.assistant_message.sequence == 4
 
 
-def test_delete_conversation_explicitly_cleans_all_chat_tables(
+def test_delete_conversation_preserves_chat_tables_for_restore(
     chat_evidence,
 ) -> None:
     create_conversation(_conversation())
@@ -579,17 +580,25 @@ def test_delete_conversation_explicitly_cleans_all_chat_tables(
 
     assert delete_conversation("conversation-1") is True
     assert delete_conversation("conversation-1") is False
+    assert get_conversation("conversation-1") is None
     with connect() as conn:
-        for table in (
-            "chat_citation_spans",
-            "chat_citations",
-            "chat_messages",
-            "chat_turns",
-            "chat_conversations",
-        ):
-            assert conn.execute(
-                f"SELECT COUNT(*) FROM {table}"
-            ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM chat_conversations"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM chat_messages"
+        ).fetchone()[0] == 2
+        assert conn.execute(
+            "SELECT COUNT(*) FROM chat_turns"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM chat_citations"
+        ).fetchone()[0] == 1
+
+    assert restore_conversation("conversation-1") is True
+    restored = get_conversation_detail("conversation-1")
+    assert restored is not None
+    assert restored.message_count == 2
 
 
 def test_clear_chat_explicitly_cleans_all_conversations(chat_evidence) -> None:

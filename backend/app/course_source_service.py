@@ -17,15 +17,18 @@ from .course_source import (
     source_id_for_job,
 )
 from .course_source_store import (
+    delete_source_projections_for_course,
     delete_source_projection,
     get_source,
     list_source_chunks as list_projected_source_chunks,
     list_sources_for_course,
     replace_course_source_projection,
     replace_source_projection,
+    recover_active_source_indexes,
     set_source_enabled,
 )
 from .job import VideoJob, VideoJobStatus
+from .job_store import get_job, list_jobs_for_course
 from .source_asset import SourceAssetDetail, SourceUnit
 from .source_asset_store import (
     get_source_asset,
@@ -58,8 +61,13 @@ class CourseSourceUnavailableError(CourseSourceServiceError):
 def reconcile_course_sources(course_id: str) -> list[CourseSource]:
     with _reconciliation_lock:
         course = course_service.get_video_course(course_id)
-        jobs = course_service.list_course_jobs(course.id)
-        assets = list_source_assets_for_course(course.id)
+        # Tombstoned roots remain part of the derived projection so restore
+        # keeps chunk identity, embeddings, and historical citations intact.
+        jobs = list_jobs_for_course(course.id, include_deleted=True)
+        assets = list_source_assets_for_course(
+            course.id,
+            include_deleted=True,
+        )
         sources: list[CourseSource] = []
         chunks: list[CourseSourceChunk] = []
 
@@ -80,17 +88,17 @@ def reconcile_course_sources(course_id: str) -> list[CourseSource]:
             )
 
         replace_course_source_projection(course.id, sources, chunks)
-        return list_sources_for_course(course.id)
+        return _active_sources(list_sources_for_course(course.id))
 
 
 def list_course_sources(course_id: str) -> list[CourseSource]:
     course = course_service.get_video_course(course_id)
-    return list_sources_for_course(course.id)
+    return _active_sources(list_sources_for_course(course.id))
 
 
 def get_course_source(source_id: str) -> CourseSource:
     source = get_source(source_id)
-    if source is None:
+    if source is None or not _source_root_is_active(source):
         raise CourseSourceNotFoundError("Source not found.")
     return source
 
@@ -162,8 +170,6 @@ def resolve_course_sources(
 
 
 def sync_video_source(job_id: str) -> CourseSource:
-    from .job_store import get_job
-
     with _reconciliation_lock:
         job = get_job(job_id)
         source_id = source_id_for_job(job_id)
@@ -211,6 +217,41 @@ def remove_asset_source(asset_id: str) -> None:
         delete_source_projection(source_id_for_asset(asset_id))
 
 
+def remove_course_sources(course_id: str) -> None:
+    with _reconciliation_lock:
+        delete_source_projections_for_course(course_id)
+
+
+def recover_interrupted_source_indexes() -> int:
+    return recover_active_source_indexes(
+        error_message=(
+            "The app stopped before indexing finished. Retry indexing."
+        )
+    )
+
+
+def _active_sources(
+    sources: list[CourseSource],
+) -> list[CourseSource]:
+    return [
+        source
+        for source in sources
+        if _source_root_is_active(source)
+    ]
+
+
+def _source_root_is_active(source: CourseSource) -> bool:
+    try:
+        course_service.get_video_course(source.course_id)
+    except course_service.CourseServiceError:
+        return False
+    if source.origin_type == "video_job":
+        return get_job(source.origin_id) is not None
+    if source.origin_type == "source_asset":
+        return get_source_asset(source.origin_id) is not None
+    return False
+
+
 def move_course_sources(
     source_course_id: str,
     target_course_id: str,
@@ -234,6 +275,7 @@ def _source_from_job(job: VideoJob) -> CourseSource:
         VideoJobStatus.transcribing: "processing",
         VideoJobStatus.completed: "ready",
         VideoJobStatus.failed: "failed",
+        VideoJobStatus.canceled: "failed",
     }[job.status]
     return CourseSource(
         id=source_id_for_job(job.id),

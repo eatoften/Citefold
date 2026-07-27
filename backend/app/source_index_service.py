@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from uuid import uuid4
 
 from . import course_source_service
@@ -34,6 +35,10 @@ class SourceIndexConflictError(SourceIndexServiceError):
     pass
 
 
+class SourceIndexCancellationRequested(Exception):
+    pass
+
+
 LOGGER = logging.getLogger(__name__)
 SAFE_MODEL_FAILURE = (
     "The local embedding model failed. Check its settings and retry."
@@ -46,6 +51,10 @@ def index_course_sources(
     *,
     embedder: TextEmbedder | None = None,
     expected_dimension: int | None = None,
+    checkpoint: Callable[[], None] | None = None,
+    progress: (
+        Callable[[float, float | None, str, str], object] | None
+    ) = None,
 ) -> SourceIndexResult:
     index_request = request or SourceIndexRequest()
     active_embedder = embedder or SentenceTransformerEmbedder()
@@ -53,6 +62,14 @@ def index_course_sources(
     selected = course_source_service.resolve_course_sources(
         course_id,
         index_request.source_ids,
+    )
+    _checkpoint(checkpoint)
+    _progress(
+        progress,
+        0,
+        3,
+        "preparing",
+        "Preparing source excerpts",
     )
 
     try:
@@ -76,6 +93,14 @@ def index_course_sources(
     selected = course_source_service.resolve_course_sources(
         course_id,
         [source.id for source in selected],
+    )
+    _checkpoint(checkpoint)
+    _progress(
+        progress,
+        1,
+        3,
+        "embedding",
+        "Embedding changed source excerpts",
     )
     selected_ids = [source.id for source in selected]
     chunks = list_chunks_for_sources(selected_ids)
@@ -129,6 +154,7 @@ def index_course_sources(
             "Sources changed before indexing; retry the request."
         )
     try:
+        _checkpoint(checkpoint)
         existing_infos = {
             info.chunk_id: info
             for info in list_source_chunk_embedding_infos(
@@ -180,11 +206,13 @@ def index_course_sources(
             for chunk in pending
             if chunk.id not in vector_by_chunk_id
         ]
+        _checkpoint(checkpoint)
         for chunk, vector in zip(
             remaining,
             _embed_chunks(active_embedder, remaining),
         ):
             vector_by_chunk_id[chunk.id] = vector
+        _checkpoint(checkpoint)
 
         vectors = [
             vector_by_chunk_id[chunk.id]
@@ -236,6 +264,29 @@ def index_course_sources(
             vectors.extend(mismatch_vectors)
 
         now = utc_now()
+        _progress(
+            progress,
+            2,
+            3,
+            "publishing",
+            "Publishing the validated source index",
+        )
+        _checkpoint(checkpoint)
+        try:
+            current_sources = (
+                course_source_service.resolve_course_sources(
+                    course_id,
+                    available_ids,
+                )
+            )
+        except Exception as exc:
+            raise SourceIndexConflictError(
+                "Sources changed while indexing; retry the request."
+            ) from exc
+        if [source.id for source in current_sources] != available_ids:
+            raise SourceIndexConflictError(
+                "Sources changed while indexing; retry the request."
+            )
         commit_result = commit_source_index(
             available_ids,
             expected_course_id=course_id,
@@ -261,7 +312,24 @@ def index_course_sources(
             raise SourceIndexConflictError(
                 "Sources changed while indexing; retry the request."
             )
+        # commit_source_index is the publication boundary. Calling the
+        # cancel-aware progress callback after it commits could turn a ready
+        # index into a canceled reliable task, so return directly from here.
+    except SourceIndexCancellationRequested:
+        fail_source_index(
+            available_ids,
+            generation=generation,
+            model=model_name,
+            error="Canceled by the user.",
+        )
+        raise
     except SourceIndexConflictError:
+        fail_source_index(
+            available_ids,
+            generation=generation,
+            model=model_name,
+            error="Sources changed while indexing; retry the request.",
+        )
         raise
     except SourceIndexGenerationError as exc:
         fail_source_index(
@@ -291,6 +359,22 @@ def index_course_sources(
         model=model_name,
         dimension=dimension,
     )
+
+
+def _checkpoint(checkpoint: Callable[[], None] | None) -> None:
+    if checkpoint is not None:
+        checkpoint()
+
+
+def _progress(
+    callback: Callable[[float, float | None, str, str], object] | None,
+    current: float,
+    total: float | None,
+    stage: str,
+    message: str,
+) -> None:
+    if callback is not None:
+        callback(current, total, stage, message)
 
 
 def _ensure_video_chunks(

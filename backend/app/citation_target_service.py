@@ -26,6 +26,7 @@ from .course_source import (
     TextSectionLocator,
     VideoTimeLocator,
 )
+from .course_store import get_course
 from .job import VideoJob
 from .job_store import (
     get_job,
@@ -236,6 +237,8 @@ def _resolve(
     *,
     keep_open: bool,
 ) -> CitationResolution:
+    if get_course(course_id) is None:
+        raise CitationTargetNotFoundError("Citation not found.")
     record = get_citation_snapshot_for_course(course_id, citation_id)
     if record is None:
         raise CitationTargetNotFoundError("Citation not found.")

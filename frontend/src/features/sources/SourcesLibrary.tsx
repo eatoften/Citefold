@@ -22,12 +22,22 @@ import {
 } from 'react'
 import { formatSourceLocator } from '../citations/citationFormat'
 import {
+  announceTrashCreated,
+  cancelReliableTask,
+  getReliableTask,
+  retryReliableTask,
+  waitForReliableTask,
+  type ReliableTask,
+} from '../reliability'
+import {
   deleteSourceAsset,
-  importCourseSource,
-  indexCourseSources,
   listCourseSources,
   listSourceChunks,
+  startCourseSourceImportTask,
+  startCourseSourceIndexTask,
   updateSourceEnabled,
+  type SourceImportTaskResult,
+  type SourceIndexTaskResult,
 } from './sourceApi'
 import type {
   CourseSource,
@@ -62,6 +72,14 @@ type SourceOperation =
   | `toggle:${string}`
   | `delete:${string}`
   | null
+
+type RecoverableSourceTask = {
+  taskId: string
+  operation: 'import' | 'index'
+  courseId: string
+  assetId?: string
+  filename?: string
+}
 
 const SOURCE_ACCEPT =
   '.pdf,.pptx,.docx,.txt,.md,.markdown,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown'
@@ -115,8 +133,11 @@ export function SourcesLibrary({
 }: SourcesLibraryProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const loadSequenceRef = useRef(0)
+  const chunkRequestEpochRef = useRef(0)
   const operationSequenceRef = useRef(0)
+  const taskControllerRef = useRef<AbortController | null>(null)
   const activeCourseIdRef = useRef(selectedCourseId)
+  const selectedSourceIdRef = useRef<string | null>(initialSourceId)
   const [sources, setSources] = useState<CourseSource[]>([])
   const [loadedCourseId, setLoadedCourseId] =
     useState<string | null>(null)
@@ -128,6 +149,10 @@ export function SourcesLibrary({
   const [operation, setOperation] = useState<SourceOperation>(null)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [activeTask, setActiveTask] =
+    useState<ReliableTask<object> | null>(null)
+  const [recoverableTask, setRecoverableTask] =
+    useState<RecoverableSourceTask | null>(null)
 
   const scopedSources = useMemo(
     () =>
@@ -234,17 +259,30 @@ export function SourcesLibrary({
   useEffect(() => {
     activeCourseIdRef.current = selectedCourseId
     loadSequenceRef.current += 1
+    chunkRequestEpochRef.current += 1
     operationSequenceRef.current += 1
+    taskControllerRef.current?.abort()
+    taskControllerRef.current = null
     setOperation(null)
+    setActiveTask(null)
+    setRecoverableTask(null)
     setSources([])
     setLoadedCourseId(null)
     setChunks([])
+    setIsLoadingChunks(false)
     setNotice(null)
     setError(null)
     setIsLoading(Boolean(selectedCourseId))
   }, [selectedCourseId])
 
+  useEffect(
+    () => () => taskControllerRef.current?.abort(),
+    [],
+  )
+
   useEffect(() => {
+    chunkRequestEpochRef.current += 1
+    selectedSourceIdRef.current = initialSourceId
     setSelectedSourceId(initialSourceId)
   }, [initialSourceId, selectedCourseId])
 
@@ -257,6 +295,7 @@ export function SourcesLibrary({
   useEffect(() => {
     if (!selectedSourceId) {
       setChunks([])
+      setIsLoadingChunks(false)
       return
     }
     if (isLoading || loadedCourseId !== selectedCourseId) {
@@ -267,22 +306,38 @@ export function SourcesLibrary({
         (source) => source.id === selectedSourceId,
       )
     ) {
+      chunkRequestEpochRef.current += 1
+      selectedSourceIdRef.current = null
       setSelectedSourceId(null)
       onSelectSource?.(null, 'replace')
       setChunks([])
+      setIsLoadingChunks(false)
       return
     }
 
+    const courseId = selectedCourseId
+    const sourceId = selectedSourceId
+    const requestEpoch = ++chunkRequestEpochRef.current
     const controller = new AbortController()
+    const isCurrentChunkRequest = () =>
+      !controller.signal.aborted &&
+      requestEpoch === chunkRequestEpochRef.current &&
+      activeCourseIdRef.current === courseId &&
+      selectedSourceIdRef.current === sourceId
+
     setIsLoadingChunks(true)
     setChunks([])
-    void listSourceChunks(apiBaseUrl, selectedSourceId, {
+    void listSourceChunks(apiBaseUrl, sourceId, {
       limit: 50,
       signal: controller.signal,
     })
-      .then(setChunks)
+      .then((nextChunks) => {
+        if (isCurrentChunkRequest()) {
+          setChunks(nextChunks)
+        }
+      })
       .catch((requestError: unknown) => {
-        if (!controller.signal.aborted) {
+        if (isCurrentChunkRequest()) {
           setError(
             requestError instanceof Error
               ? requestError.message
@@ -291,9 +346,14 @@ export function SourcesLibrary({
         }
       })
       .finally(() => {
-        if (!controller.signal.aborted) setIsLoadingChunks(false)
+        if (isCurrentChunkRequest()) setIsLoadingChunks(false)
       })
-    return () => controller.abort()
+    return () => {
+      controller.abort()
+      if (chunkRequestEpochRef.current === requestEpoch) {
+        chunkRequestEpochRef.current += 1
+      }
+    }
   }, [
     apiBaseUrl,
     isLoading,
@@ -305,6 +365,8 @@ export function SourcesLibrary({
   ])
 
   function selectSource(sourceId: string) {
+    chunkRequestEpochRef.current += 1
+    selectedSourceIdRef.current = sourceId
     setSelectedSourceId(sourceId)
     setError(null)
     onSelectSource?.(sourceId, 'push')
@@ -315,6 +377,66 @@ export function SourcesLibrary({
     await loadSources()
   }
 
+  function isCurrentOperation(
+    operationSequence: number,
+    courseId: string,
+  ): boolean {
+    return (
+      operationSequence === operationSequenceRef.current &&
+      activeCourseIdRef.current === courseId
+    )
+  }
+
+  async function applyImportResult(
+    result: SourceImportTaskResult['import'],
+    courseId: string,
+    operationSequence: number,
+  ): Promise<void> {
+    if (!isCurrentOperation(operationSequence, courseId)) return
+    setNotice(
+      `Added ${result.asset.original_filename} with ${result.asset.unit_count} extracted section${result.asset.unit_count === 1 ? '' : 's'}.`,
+    )
+    const nextSources = await loadSources()
+    if (!isCurrentOperation(operationSequence, courseId)) return
+    const imported = nextSources.find(
+      (source) =>
+        source.origin_type === 'source_asset' &&
+        source.origin_id === result.asset.id,
+    )
+    if (imported) selectSource(imported.id)
+  }
+
+  async function applyIndexResult(
+    result: SourceIndexTaskResult['index'],
+    courseId: string,
+    operationSequence: number,
+  ): Promise<void> {
+    if (!isCurrentOperation(operationSequence, courseId)) return
+    setNotice(
+      `Indexed ${result.total_sources} source${result.total_sources === 1 ? '' : 's'}: ${result.embedded_chunks} new or changed chunk${result.embedded_chunks === 1 ? '' : 's'}, ${result.skipped_chunks} unchanged.`,
+    )
+    await loadSources()
+  }
+
+  async function rememberRecoverableTask(
+    task: RecoverableSourceTask,
+    operationSequence: number,
+  ): Promise<void> {
+    try {
+      const latest = await getReliableTask(apiBaseUrl, task.taskId)
+      if (
+        isCurrentOperation(operationSequence, task.courseId) &&
+        latest.retryable &&
+        (latest.status === 'failed' || latest.status === 'canceled')
+      ) {
+        setRecoverableTask(task)
+        setActiveTask(latest)
+      }
+    } catch {
+      // The original task error remains the useful user-facing message.
+    }
+  }
+
   async function importSource(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     event.target.value = ''
@@ -322,35 +444,52 @@ export function SourcesLibrary({
     if (!file || !courseId) return
 
     const operationSequence = ++operationSequenceRef.current
+    taskControllerRef.current?.abort()
+    const controller = new AbortController()
+    taskControllerRef.current = controller
     setOperation('import')
+    setActiveTask(null)
+    setRecoverableTask(null)
     setError(null)
     setNotice(null)
+    let taskId: string | null = null
+    let assetId: string | undefined
     try {
-      const result = await importCourseSource(
+      const enqueued = await startCourseSourceImportTask(
         apiBaseUrl,
         courseId,
         file,
       )
-      if (
-        operationSequence !== operationSequenceRef.current ||
-        activeCourseIdRef.current !== courseId
-      ) {
-        return
+      taskId = enqueued.task.id
+      assetId = enqueued.asset.id
+      if (!isCurrentOperation(operationSequence, courseId)) return
+      setActiveTask(enqueued.task)
+      const completed =
+        await waitForReliableTask<SourceImportTaskResult>(
+          apiBaseUrl,
+          enqueued.task.id,
+          {
+            signal: controller.signal,
+            onProgress: (task) => {
+              if (isCurrentOperation(operationSequence, courseId)) {
+                setActiveTask(task)
+              }
+            },
+          },
+        )
+      const result = completed.result?.import
+      if (!result) {
+        throw new Error('Source import completed without a result.')
       }
-      setNotice(
-        `Added ${result.asset.original_filename} with ${result.asset.unit_count} extracted section${result.asset.unit_count === 1 ? '' : 's'}.`,
+      await applyImportResult(
+        result,
+        courseId,
+        operationSequence,
       )
-      const nextSources = await loadSources()
-      const imported = nextSources.find(
-        (source) =>
-          source.origin_type === 'source_asset' &&
-          source.origin_id === result.asset.id,
-      )
-      if (imported) selectSource(imported.id)
     } catch (requestError) {
       if (
-        operationSequence !== operationSequenceRef.current ||
-        activeCourseIdRef.current !== courseId
+        controller.signal.aborted ||
+        !isCurrentOperation(operationSequence, courseId)
       ) {
         return
       }
@@ -360,12 +499,24 @@ export function SourcesLibrary({
           : 'Source import failed.'
       await loadSources()
       setError(message)
+      if (taskId) {
+        await rememberRecoverableTask({
+          taskId,
+          operation: 'import',
+          courseId,
+          assetId,
+          filename: file.name,
+        }, operationSequence)
+      }
     } finally {
-      if (
-        operationSequence === operationSequenceRef.current &&
-        activeCourseIdRef.current === courseId
-      ) {
+      if (isCurrentOperation(operationSequence, courseId)) {
         setOperation(null)
+        setActiveTask((current) =>
+          current?.status === 'succeeded' ? null : current,
+        )
+      }
+      if (taskControllerRef.current === controller) {
+        taskControllerRef.current = null
       }
     }
   }
@@ -424,29 +575,50 @@ export function SourcesLibrary({
     if (!courseId || readySources.length === 0) return
 
     const operationSequence = ++operationSequenceRef.current
+    taskControllerRef.current?.abort()
+    const controller = new AbortController()
+    taskControllerRef.current = controller
     setOperation('index')
+    setActiveTask(null)
+    setRecoverableTask(null)
     setError(null)
     setNotice(null)
+    let taskId: string | null = null
     try {
-      const result = await indexCourseSources(
+      const enqueued = await startCourseSourceIndexTask(
         apiBaseUrl,
         courseId,
         readySources.map((source) => source.id),
       )
-      if (
-        operationSequence !== operationSequenceRef.current ||
-        activeCourseIdRef.current !== courseId
-      ) {
-        return
+      taskId = enqueued.id
+      if (!isCurrentOperation(operationSequence, courseId)) return
+      setActiveTask(enqueued)
+      const completed =
+        await waitForReliableTask<SourceIndexTaskResult>(
+          apiBaseUrl,
+          enqueued.id,
+          {
+            signal: controller.signal,
+            onProgress: (task) => {
+              if (isCurrentOperation(operationSequence, courseId)) {
+                setActiveTask(task)
+              }
+            },
+          },
+        )
+      const result = completed.result?.index
+      if (!result) {
+        throw new Error('Source indexing completed without a result.')
       }
-      setNotice(
-        `Indexed ${result.total_sources} source${result.total_sources === 1 ? '' : 's'}: ${result.embedded_chunks} new or changed chunk${result.embedded_chunks === 1 ? '' : 's'}, ${result.skipped_chunks} unchanged.`,
+      await applyIndexResult(
+        result,
+        courseId,
+        operationSequence,
       )
-      await loadSources()
     } catch (requestError) {
       if (
-        operationSequence !== operationSequenceRef.current ||
-        activeCourseIdRef.current !== courseId
+        controller.signal.aborted ||
+        !isCurrentOperation(operationSequence, courseId)
       ) {
         return
       }
@@ -456,20 +628,172 @@ export function SourcesLibrary({
           : 'Source indexing failed.'
       await loadSources()
       setError(message)
-    } finally {
-      if (
-        operationSequence === operationSequenceRef.current &&
-        activeCourseIdRef.current === courseId
-      ) {
-        setOperation(null)
+      if (taskId) {
+        await rememberRecoverableTask({
+          taskId,
+          operation: 'index',
+          courseId,
+        }, operationSequence)
       }
+    } finally {
+      if (isCurrentOperation(operationSequence, courseId)) {
+        setOperation(null)
+        setActiveTask((current) =>
+          current?.status === 'succeeded' ? null : current,
+        )
+      }
+      if (taskControllerRef.current === controller) {
+        taskControllerRef.current = null
+      }
+    }
+  }
+
+  async function retrySourceTask() {
+    const recovery = recoverableTask
+    if (
+      !recovery ||
+      recovery.courseId !== selectedCourseId ||
+      activeCourseIdRef.current !== recovery.courseId
+    ) {
+      return
+    }
+    const operationSequence = ++operationSequenceRef.current
+    taskControllerRef.current?.abort()
+    const controller = new AbortController()
+    taskControllerRef.current = controller
+    setOperation(recovery.operation)
+    setError(null)
+    setNotice(null)
+    setRecoverableTask(null)
+    try {
+      const retried = await retryReliableTask(
+        apiBaseUrl,
+        recovery.taskId,
+      )
+      if (!isCurrentOperation(operationSequence, recovery.courseId)) {
+        return
+      }
+      setActiveTask(retried)
+      if (recovery.operation === 'import') {
+        const completed =
+          await waitForReliableTask<SourceImportTaskResult>(
+            apiBaseUrl,
+            recovery.taskId,
+            {
+              signal: controller.signal,
+              onProgress: (task) => {
+                if (
+                  isCurrentOperation(
+                    operationSequence,
+                    recovery.courseId,
+                  )
+                ) {
+                  setActiveTask(task)
+                }
+              },
+            },
+          )
+        const result = completed.result?.import
+        if (!result) {
+          throw new Error('Source import completed without a result.')
+        }
+        await applyImportResult(
+          result,
+          recovery.courseId,
+          operationSequence,
+        )
+      } else {
+        const completed =
+          await waitForReliableTask<SourceIndexTaskResult>(
+            apiBaseUrl,
+            recovery.taskId,
+            {
+              signal: controller.signal,
+              onProgress: (task) => {
+                if (
+                  isCurrentOperation(
+                    operationSequence,
+                    recovery.courseId,
+                  )
+                ) {
+                  setActiveTask(task)
+                }
+              },
+            },
+          )
+        const result = completed.result?.index
+        if (!result) {
+          throw new Error('Source indexing completed without a result.')
+        }
+        await applyIndexResult(
+          result,
+          recovery.courseId,
+          operationSequence,
+        )
+      }
+    } catch (requestError) {
+      if (
+        controller.signal.aborted ||
+        !isCurrentOperation(operationSequence, recovery.courseId)
+      ) {
+        return
+      }
+      await loadSources()
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : 'Task retry failed.',
+      )
+      await rememberRecoverableTask(recovery, operationSequence)
+    } finally {
+      if (isCurrentOperation(operationSequence, recovery.courseId)) {
+        setOperation(null)
+        setActiveTask((current) =>
+          current?.status === 'succeeded' ? null : current,
+        )
+      }
+      if (taskControllerRef.current === controller) {
+        taskControllerRef.current = null
+      }
+    }
+  }
+
+  async function cancelActiveSourceTask() {
+    const task = activeTask
+    const courseId = selectedCourseId
+    const operationSequence = operationSequenceRef.current
+    if (
+      !task ||
+      !courseId ||
+      !['queued', 'running', 'canceling'].includes(task.status)
+    ) {
+      return
+    }
+    try {
+      const updated = await cancelReliableTask(apiBaseUrl, task.id)
+      if (
+        !isCurrentOperation(operationSequence, courseId) ||
+        updated.id !== task.id
+      ) {
+        return
+      }
+      setActiveTask((current) =>
+        current?.id === task.id ? updated : current,
+      )
+    } catch (requestError) {
+      if (!isCurrentOperation(operationSequence, courseId)) return
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : 'Task cancellation failed.',
+      )
     }
   }
 
   async function removeSource(source: CourseSource) {
     if (source.origin_type !== 'source_asset') return
     const confirmed = window.confirm(
-      `Remove "${source.title}" from this course? The imported file and its extracted text will be deleted.`,
+      `Move "${source.title}" and its extracted text to Trash?`,
     )
     if (!confirmed) return
 
@@ -480,6 +804,10 @@ export function SourcesLibrary({
     setNotice(null)
     try {
       await deleteSourceAsset(apiBaseUrl, source.origin_id)
+      announceTrashCreated({
+        entity_type: 'source_asset',
+        entity_id: source.origin_id,
+      })
       if (
         operationSequence !== operationSequenceRef.current ||
         activeCourseIdRef.current !== courseId
@@ -487,6 +815,8 @@ export function SourcesLibrary({
         return
       }
       if (selectedSourceId === source.id) {
+        chunkRequestEpochRef.current += 1
+        selectedSourceIdRef.current = null
         setSelectedSourceId(null)
         onSelectSource?.(null, 'replace')
       }
@@ -639,6 +969,38 @@ export function SourcesLibrary({
         </div>
       </div>
 
+      {activeTask &&
+        ['queued', 'running', 'canceling'].includes(activeTask.status) && (
+          <div className="sources-notice" role="status">
+            <LoaderCircle
+              aria-hidden="true"
+              className="sources-spin"
+              size={17}
+            />
+            <span>
+              {activeTask.progress.message ??
+                (operation === 'import'
+                  ? 'Preparing source content'
+                  : 'Updating the source index')}
+              {activeTask.progress.total
+                ? ` (${Math.round(
+                    (activeTask.progress.current /
+                      activeTask.progress.total) *
+                      100,
+                  )}%)`
+                : ''}
+            </span>
+            <button
+              type="button"
+              disabled={activeTask.status === 'canceling'}
+              onClick={() => void cancelActiveSourceTask()}
+            >
+              {activeTask.status === 'canceling'
+                ? 'Canceling'
+                : 'Cancel'}
+            </button>
+          </div>
+        )}
       {notice && (
         <div className="sources-notice success" role="status">
           <CheckCircle2 aria-hidden="true" size={17} />
@@ -649,8 +1011,17 @@ export function SourcesLibrary({
         <div className="sources-notice error" role="alert">
           <AlertCircle aria-hidden="true" size={17} />
           <span>{error}</span>
-          <button type="button" onClick={() => void refreshSources()}>
-            Retry
+          <button
+            type="button"
+            onClick={() =>
+              void (
+                recoverableTask
+                  ? retrySourceTask()
+                  : refreshSources()
+              )
+            }
+          >
+            {recoverableTask ? 'Retry task' : 'Retry'}
           </button>
         </div>
       )}

@@ -3,7 +3,9 @@ from datetime import datetime
 from sqlite3 import Row
 
 from .db import connect, ensure_db
+from .job import utc_now
 from .source_asset import SourceAsset, SourceAssetDetail, SourceUnit
+from .trash_store import put_trash_item, remove_trash_item_for_entity
 
 
 def _to_text(value: datetime) -> str:
@@ -78,7 +80,7 @@ def update_source_asset(asset: SourceAsset) -> None:
             UPDATE source_assets
             SET extraction_status = ?, metadata_json = ?, error_message = ?,
                 updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND deleted_at IS NULL
             """,
             (
                 asset.extraction_status,
@@ -90,15 +92,29 @@ def update_source_asset(asset: SourceAsset) -> None:
         )
 
 
-def get_source_asset(asset_id: str) -> SourceAssetDetail | None:
+def get_source_asset(
+    asset_id: str,
+    *,
+    include_deleted: bool = False,
+) -> SourceAssetDetail | None:
     ensure_db()
+    deleted_filter = (
+        ""
+        if include_deleted
+        else """
+            AND source_assets.deleted_at IS NULL
+            AND courses.deleted_at IS NULL
+        """
+    )
     with connect() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT source_assets.*, COUNT(source_units.id) AS unit_count
             FROM source_assets
+            INNER JOIN courses ON courses.id = source_assets.course_id
             LEFT JOIN source_units ON source_units.asset_id = source_assets.id
             WHERE source_assets.id = ?
+              {deleted_filter}
             GROUP BY source_assets.id
             """,
             (asset_id,),
@@ -106,15 +122,29 @@ def get_source_asset(asset_id: str) -> SourceAssetDetail | None:
     return _row_to_asset(row) if row is not None else None
 
 
-def list_source_assets_for_course(course_id: str) -> list[SourceAssetDetail]:
+def list_source_assets_for_course(
+    course_id: str,
+    *,
+    include_deleted: bool = False,
+) -> list[SourceAssetDetail]:
     ensure_db()
+    deleted_filter = (
+        ""
+        if include_deleted
+        else """
+            AND source_assets.deleted_at IS NULL
+            AND courses.deleted_at IS NULL
+        """
+    )
     with connect() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT source_assets.*, COUNT(source_units.id) AS unit_count
             FROM source_assets
+            INNER JOIN courses ON courses.id = source_assets.course_id
             LEFT JOIN source_units ON source_units.asset_id = source_assets.id
             WHERE source_assets.course_id = ?
+              {deleted_filter}
             GROUP BY source_assets.id
             ORDER BY source_assets.updated_at DESC
             """,
@@ -148,7 +178,17 @@ def list_source_units_for_asset(asset_id: str) -> list[SourceUnit]:
     ensure_db()
     with connect() as conn:
         rows = conn.execute(
-            "SELECT * FROM source_units WHERE asset_id = ? ORDER BY ordinal",
+            """
+            SELECT source_units.*
+            FROM source_units
+            INNER JOIN source_assets
+                ON source_assets.id = source_units.asset_id
+            INNER JOIN courses ON courses.id = source_assets.course_id
+            WHERE source_units.asset_id = ?
+              AND source_assets.deleted_at IS NULL
+              AND courses.deleted_at IS NULL
+            ORDER BY source_units.ordinal
+            """,
             (asset_id,),
         ).fetchall()
     return [_row_to_unit(row) for row in rows]
@@ -162,9 +202,15 @@ def list_source_units_for_assets(asset_ids: list[str]) -> list[SourceUnit]:
     with connect() as conn:
         rows = conn.execute(
             f"""
-            SELECT * FROM source_units
-            WHERE asset_id IN ({placeholders})
-            ORDER BY asset_id, ordinal
+            SELECT source_units.*
+            FROM source_units
+            INNER JOIN source_assets
+                ON source_assets.id = source_units.asset_id
+            INNER JOIN courses ON courses.id = source_assets.course_id
+            WHERE source_units.asset_id IN ({placeholders})
+              AND source_assets.deleted_at IS NULL
+              AND courses.deleted_at IS NULL
+            ORDER BY source_units.asset_id, source_units.ordinal
             """,
             asset_ids,
         ).fetchall()
@@ -173,9 +219,110 @@ def list_source_units_for_assets(asset_ids: list[str]) -> list[SourceUnit]:
 
 def delete_source_asset(asset_id: str) -> bool:
     ensure_db()
+    deleted_at = utc_now()
     with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT course_id, original_filename
+            FROM source_assets
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (asset_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        cursor = conn.execute(
+            """
+            UPDATE source_assets SET deleted_at = ?, updated_at = ?
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (_to_text(deleted_at), _to_text(deleted_at), asset_id),
+        )
+        if cursor.rowcount != 1:
+            return False
+        put_trash_item(
+            conn,
+            entity_type="source_asset",
+            entity_id=asset_id,
+            course_id=row["course_id"],
+            display_name=str(row["original_filename"]),
+            deleted_at=deleted_at,
+        )
+    return cursor.rowcount > 0
+
+
+def restore_source_asset(asset_id: str) -> bool:
+    ensure_db()
+    now = utc_now()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT source_assets.course_id
+            FROM source_assets
+            INNER JOIN courses ON courses.id = source_assets.course_id
+            WHERE source_assets.id = ?
+              AND source_assets.deleted_at IS NOT NULL
+              AND courses.deleted_at IS NULL
+            """,
+            (asset_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        cursor = conn.execute(
+            """
+            UPDATE source_assets
+            SET deleted_at = NULL, updated_at = ?
+            WHERE id = ? AND deleted_at IS NOT NULL
+            """,
+            (_to_text(now), asset_id),
+        )
+        if cursor.rowcount != 1:
+            return False
+        remove_trash_item_for_entity(
+            conn,
+            entity_type="source_asset",
+            entity_id=asset_id,
+        )
+    return True
+
+
+def purge_source_asset(
+    asset_id: str,
+    *,
+    allow_parent_deleted: bool = False,
+    preserve_trash_item: bool = False,
+) -> bool:
+    ensure_db()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT source_assets.deleted_at AS asset_deleted_at,
+                   courses.deleted_at AS course_deleted_at
+            FROM source_assets
+            INNER JOIN courses ON courses.id = source_assets.course_id
+            WHERE source_assets.id = ?
+            """,
+            (asset_id,),
+        ).fetchone()
+        if row is None or (
+            row["asset_deleted_at"] is None
+            and not (
+                allow_parent_deleted
+                and row["course_deleted_at"] is not None
+            )
+        ):
+            return False
         conn.execute("DELETE FROM source_units WHERE asset_id = ?", (asset_id,))
-        cursor = conn.execute("DELETE FROM source_assets WHERE id = ?", (asset_id,))
+        cursor = conn.execute(
+            "DELETE FROM source_assets WHERE id = ?",
+            (asset_id,),
+        )
+        if not preserve_trash_item:
+            remove_trash_item_for_entity(
+                conn,
+                entity_type="source_asset",
+                entity_id=asset_id,
+            )
     return cursor.rowcount > 0
 
 
@@ -194,5 +341,8 @@ def move_source_assets_to_course(
 def clear_source_assets() -> None:
     ensure_db()
     with connect() as conn:
+        conn.execute(
+            "DELETE FROM trash_items WHERE entity_type = 'source_asset'"
+        )
         conn.execute("DELETE FROM source_units")
         conn.execute("DELETE FROM source_assets")

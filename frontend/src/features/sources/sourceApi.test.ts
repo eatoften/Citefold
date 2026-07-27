@@ -4,6 +4,8 @@ import {
   indexCourseSources,
   listSourceChunks,
   SourceApiError,
+  startCourseSourceImportTask,
+  startCourseSourceIndexTask,
   updateSourceEnabled,
 } from './sourceApi'
 
@@ -93,6 +95,48 @@ describe('sourceApi', () => {
         'asset/one',
       ),
     ).resolves.toBeUndefined()
+  })
+
+  it('starts durable source import and indexing tasks', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ asset: { id: 'asset-1' }, task: { id: 'task-1' } }, 202),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ id: 'task-2' }, 202),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await startCourseSourceImportTask(
+      'http://127.0.0.1:8001',
+      'course one',
+      new File(['notes'], 'notes.md', { type: 'text/markdown' }),
+    )
+    await startCourseSourceIndexTask(
+      'http://127.0.0.1:8001',
+      'course one',
+      ['asset:one'],
+    )
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'http://127.0.0.1:8001/courses/course%20one/source-asset-tasks',
+    )
+    expect(fetchMock.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.any(FormData),
+      }),
+    )
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      'http://127.0.0.1:8001/courses/course%20one/source-index-tasks',
+    )
+    expect(fetchMock.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ source_ids: ['asset:one'] }),
+      }),
+    )
   })
 
   it('surfaces the backend detail without losing the status', async () => {

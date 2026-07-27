@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from uuid import uuid4
 
 from . import (
@@ -72,9 +72,14 @@ SAFE_GENERATION_MESSAGE = (
 SAFE_TIMEOUT_MESSAGE = (
     "The local language model timed out. Retry or choose a faster model."
 )
+SAFE_CANCELED_MESSAGE = "Answer generation was canceled before publication."
 
 
 class ChatServiceError(Exception):
+    pass
+
+
+class ChatGenerationCancellationRequested(ChatServiceError):
     pass
 
 
@@ -173,6 +178,28 @@ def delete_chat_conversation(conversation_id: str) -> None:
         raise ChatConversationNotFoundError("Chat conversation not found.")
 
 
+def restore_chat_conversation(conversation_id: str) -> ChatConversationDetail:
+    if not chat_store.restore_conversation(conversation_id):
+        raise ChatConversationNotFoundError(
+            "Deleted chat conversation not found or its course is still in trash."
+        )
+    return get_chat_conversation(conversation_id)
+
+
+def purge_chat_conversation(
+    conversation_id: str,
+    *,
+    allow_parent_deleted: bool = False,
+) -> None:
+    if not chat_store.purge_conversation(
+        conversation_id,
+        allow_parent_deleted=allow_parent_deleted,
+    ):
+        raise ChatConversationNotFoundError(
+            "Deleted chat conversation not found."
+        )
+
+
 def recover_interrupted_chat_turns() -> int:
     return chat_store.recover_active_turns(
         safe_error_message=SAFE_INTERRUPTED_MESSAGE,
@@ -196,6 +223,8 @@ def send_chat_message(
     *,
     llm_client: LocalLLMClient,
     embedder: TextEmbedder | None = None,
+    checkpoint: Callable[[], None] | None = None,
+    retry_failed: bool = False,
 ) -> ChatTurnResponse:
     conversation = _get_conversation(conversation_id)
     course_service.get_video_course(conversation.course_id)
@@ -239,6 +268,7 @@ def send_chat_message(
             model=response_model,
             replace_title_if=DEFAULT_CONVERSATION_TITLE,
             auto_title=_title_from_question(request.content),
+            retry_failed=retry_failed,
         )
     except chat_store.ChatSourceSnapshotConflictError as exc:
         raise ChatSourceChangedError(SAFE_SOURCE_CHANGED_MESSAGE) from exc
@@ -277,6 +307,7 @@ def send_chat_message(
         )
 
         if not source_ids:
+            _checkpoint(checkpoint)
             return _finish_abstention(
                 reservation,
                 insufficient_evidence_answer(),
@@ -343,6 +374,7 @@ def send_chat_message(
         selected_results = select_bounded_evidence(search_response.results)
         evidence = build_grounding_evidence(selected_results)
         if not evidence:
+            _checkpoint(checkpoint)
             return _finish_abstention(
                 reservation,
                 insufficient_evidence_answer(),
@@ -381,6 +413,7 @@ def send_chat_message(
                 error_code="invalid_grounded_output",
             )
             raise
+        _checkpoint(checkpoint)
         if answer.status == "insufficient_evidence":
             return _finish_abstention(
                 reservation,
@@ -407,6 +440,7 @@ def send_chat_message(
             "evidence_count": len(evidence),
             "history_message_count": len(history),
         }
+        _checkpoint(checkpoint)
         try:
             assistant_message = chat_store.complete_turn(
                 reservation.assistant_message.id,
@@ -437,6 +471,13 @@ def send_chat_message(
             assistant_message,
             status="completed",
         )
+    except ChatGenerationCancellationRequested:
+        _fail_turn(
+            reservation,
+            SAFE_CANCELED_MESSAGE,
+            error_code="canceled",
+        )
+        raise
     except ChatServiceError:
         raise
     except chat_store.ChatMessageStateConflictError as exc:
@@ -451,6 +492,11 @@ def send_chat_message(
             error_code="unexpected_error",
         )
         raise ChatGenerationError(SAFE_GENERATION_MESSAGE) from exc
+
+
+def _checkpoint(checkpoint: Callable[[], None] | None) -> None:
+    if checkpoint is not None:
+        checkpoint()
 
 
 def build_retrieval_query(

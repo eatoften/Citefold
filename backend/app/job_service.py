@@ -16,9 +16,12 @@ from .job_store import (
     delete_job,
     get_job,
     list_jobs,
+    purge_job,
+    recover_active_jobs,
+    restore_job,
     update_job,
 )
-from .knowledge_card_store import delete_cards_for_job
+from .knowledge_card_store import purge_cards_for_job
 from .media_probe import MediaProbeError, probe_video
 from .transcript_chunk_store import delete_chunks_for_job
 from .transcript_store import load_transcription
@@ -36,6 +39,7 @@ ALLOWED_VIDEO_EXTENSIONS = {
 TERMINAL_STATUSES = {
     VideoJobStatus.completed,
     VideoJobStatus.failed,
+    VideoJobStatus.canceled,
 }
 
 
@@ -77,6 +81,10 @@ class TranscriptNotReadyError(JobServiceError):
 
 class InvalidTranscriptContextError(JobServiceError):
     pass
+
+
+class JobPipelineCancellationRequested(Exception):
+    """Raised by a reliable worker at a safe video-stage boundary."""
 
 
 class TranscriptContext(BaseModel):
@@ -165,6 +173,17 @@ def list_video_jobs() -> list[VideoJob]:
     return list_jobs()
 
 
+def recover_interrupted_video_jobs() -> int:
+    job_ids = recover_active_jobs(
+        error_message=(
+            "The app stopped before video processing finished. Retry it."
+        )
+    )
+    for job_id in job_ids:
+        course_source_service.sync_video_source(job_id)
+    return len(job_ids)
+
+
 def get_video_job(job_id: str) -> VideoJob:
     job = get_job(job_id)
 
@@ -192,7 +211,10 @@ def start_job(job_id: str) -> VideoJob:
 def retry_job(job_id: str) -> VideoJob:
     job = get_video_job(job_id)
 
-    if job.status != VideoJobStatus.failed:
+    if job.status not in {
+        VideoJobStatus.failed,
+        VideoJobStatus.canceled,
+    }:
         raise InvalidJobStatusError(
             f"Job cannot retry from status: {job.status.value}"
         )
@@ -213,10 +235,34 @@ def delete_video_job(
 ) -> None:
     job = get_video_job(job_id)
 
-    delete_runs_for_job(job.id)
-    delete_cards_for_job(job.id)
-    delete_chunks_for_job(job.id)
+    # A normal delete is an undoable workspace operation. Its cards,
+    # transcript chunks, generation history, and managed files stay intact.
     delete_job(job.id)
+
+
+def restore_video_job(job_id: str) -> VideoJob:
+    if not restore_job(job_id):
+        raise JobNotFoundError(
+            "Deleted job not found or its course is still in trash."
+        )
+    course_source_service.sync_video_source(job_id)
+    return get_video_job(job_id)
+
+
+def purge_video_job(
+    job_id: str,
+    artifact_root: Path,
+    *,
+    allow_parent_deleted: bool = False,
+) -> None:
+    job = get_job(job_id, include_deleted=True)
+    if job is None:
+        raise JobNotFoundError("Deleted job not found.")
+
+    purge_video_job_records(
+        job.id,
+        allow_parent_deleted=allow_parent_deleted,
+    )
     course_source_service.remove_video_source(job.id)
 
     _unlink_artifact(job.video_path, artifact_root)
@@ -230,10 +276,42 @@ def delete_video_job(
     )
 
 
+def purge_video_job_records(
+    job_id: str,
+    *,
+    allow_parent_deleted: bool = False,
+    preserve_trash_item: bool = False,
+    allow_missing: bool = False,
+) -> None:
+    """Delete persisted job data without touching projections or files.
+
+    The trash lifecycle uses this idempotent boundary so its durable recovery
+    plan remains available until every managed artifact has also been removed.
+    """
+
+    job = get_job(job_id, include_deleted=True)
+    if job is None:
+        if allow_missing:
+            return
+        raise JobNotFoundError("Deleted job not found.")
+
+    delete_runs_for_job(job.id)
+    purge_cards_for_job(job.id)
+    delete_chunks_for_job(job.id)
+    if not purge_job(
+        job.id,
+        allow_parent_deleted=allow_parent_deleted,
+        preserve_trash_item=preserve_trash_item,
+    ):
+        raise InvalidJobStatusError("Only a deleted job can be purged.")
+
+
 def run_job_pipeline(
     job_id: str,
     get_pipeline: Callable[[], VideoPipeline],
     artifact_root: Path,
+    *,
+    on_progress: Callable[[VideoJob], None] | None = None,
 ) -> None:
     try:
         job = get_video_job(job_id)
@@ -243,15 +321,32 @@ def run_job_pipeline(
     try:
         pipeline = get_pipeline()
 
+        def persist_progress(updated_job: VideoJob) -> None:
+            save_job_progress(updated_job)
+            # A completed job has already crossed the domain publication
+            # boundary. Do not invoke the reliable workflow's cancel-aware
+            # progress callback after that commit, otherwise a concurrent
+            # cancel can incorrectly rewrite completed work as canceled.
+            if (
+                on_progress is not None
+                and updated_job.status != VideoJobStatus.completed
+            ):
+                on_progress(updated_job)
+
         pipeline.process(
             video_path=job.video_path,
             artifact_root=artifact_root,
             job=job,
-            on_job_update=save_job_progress,
+            on_job_update=persist_progress,
         )
 
         save_job_progress(job)
 
+    except JobPipelineCancellationRequested:
+        job.status = VideoJobStatus.canceled
+        job.error_message = "Canceled by the user."
+        save_job_progress(job)
+        raise
     except Exception as exc:
         job.status = VideoJobStatus.failed
         job.error_message = str(exc)

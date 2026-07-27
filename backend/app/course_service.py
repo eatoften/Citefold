@@ -12,19 +12,18 @@ from .course_store import (
     delete_course,
     get_course,
     list_courses,
+    purge_course,
+    restore_course,
     update_course,
 )
 from .job import VideoJob
-from .job_store import list_jobs_for_course, move_jobs_to_course
+from .job_store import list_jobs_for_course
 from .knowledge_card import KnowledgeCard, KnowledgeCardIndexItem
 from .knowledge_card_store import (
     delete_cards_for_course,
     list_card_index_for_course,
     list_cards_for_course,
 )
-from .topic_store import delete_topics_for_course
-from .learning_document_store import move_learning_documents_to_course
-from .source_asset_store import move_source_assets_to_course
 
 
 class CourseServiceError(Exception):
@@ -101,27 +100,37 @@ def update_video_course(
 
 
 def delete_video_course(course_id: str) -> None:
-    from . import chat_service
-    from . import course_source_service
-
     course = get_video_course(course_id)
 
     if course.id == DEFAULT_COURSE_ID:
         raise DefaultCourseDeleteError("Default course cannot be deleted.")
 
-    move_jobs_to_course(course.id, DEFAULT_COURSE_ID)
-    move_learning_documents_to_course(course.id, DEFAULT_COURSE_ID)
-    move_source_assets_to_course(course.id, DEFAULT_COURSE_ID)
-    course_source_service.move_course_sources(
-        course.id,
-        DEFAULT_COURSE_ID,
-    )
-    chat_service.move_course_conversations(
-        course.id,
-        DEFAULT_COURSE_ID,
-    )
-    delete_topics_for_course(course.id)
     delete_course(course.id)
+
+
+def restore_video_course(course_id: str) -> Course:
+    if not restore_course(course_id):
+        raise CourseNotFoundError("Deleted course not found.")
+    from . import course_source_service
+
+    course_source_service.reconcile_course_sources(course_id)
+    return get_video_course(course_id)
+
+
+def purge_deleted_video_course(
+    course_id: str,
+    *,
+    preserve_course_trash_item: bool = False,
+) -> None:
+    """Purge course metadata after its dependent records have been purged."""
+
+    if course_id == DEFAULT_COURSE_ID:
+        raise DefaultCourseDeleteError("Default course cannot be deleted.")
+    if not purge_course(
+        course_id,
+        preserve_course_trash_item=preserve_course_trash_item,
+    ):
+        raise CourseNotFoundError("Deleted course not found.")
 
 
 def list_course_jobs(course_id: str) -> list[VideoJob]:

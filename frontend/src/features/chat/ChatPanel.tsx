@@ -25,6 +25,10 @@ import { formatSourceLocator } from '../citations/citationFormat'
 import type { CourseSource } from '../sources/sourceTypes'
 import type { ChatCitation, ChatMessage } from './chatTypes'
 import { useChat } from './useChat'
+import {
+  SaveStatus,
+  useAutosavedDraft,
+} from '../reliability'
 import './ChatPanel.css'
 
 const DEFAULT_RECOMMENDED_QUESTIONS = [
@@ -314,6 +318,20 @@ export function ChatPanel({
     setIsSourcePickerOpen(!compact)
   }, [compact, courseId])
 
+  const chatDraft = useAutosavedDraft({
+    apiBaseUrl,
+    draftId: `chat-composer:${courseId ?? 'none'}:${
+      chat.activeConversationId ?? 'new'
+    }`,
+    courseId,
+    draftType: 'chat_composer',
+    entityId: chat.activeConversationId,
+    enabled: Boolean(courseId),
+    value: { content: draft },
+    initialValue: { content: '' },
+    onRestore: (payload) => setDraft(payload.content),
+  })
+
   const messages = chat.conversation?.messages ?? []
   const hasGeneratingMessage = messages.some(
     (message) =>
@@ -350,7 +368,11 @@ export function ChatPanel({
     if (!question) return
     setDraft('')
     const sent = await chat.sendMessage(question)
-    if (!sent) setDraft(question)
+    if (sent) {
+      await chatDraft.clearDraft()
+    } else {
+      setDraft(question)
+    }
   }
 
   if (!courseId) {
@@ -546,7 +568,8 @@ export function ChatPanel({
               type="button"
               onClick={() => {
                 const isSendRetry =
-                  chat.error?.retry.kind === 'send'
+                  chat.error?.retry.kind === 'send' ||
+                  chat.error?.retry.kind === 'message-task'
                 void chat.retryLastRequest().then((succeeded) => {
                   if (isSendRetry && succeeded) setDraft('')
                 })
@@ -641,7 +664,24 @@ export function ChatPanel({
                 </div>
                 <div className="chat-generating" role="status">
                   <LoaderCircle aria-hidden="true" size={16} />
-                  Retrieving and validating evidence…
+                  {chat.generationTask?.progress.message ??
+                    'Retrieving and validating evidence…'}
+                  {chat.generationTask &&
+                    ['queued', 'running', 'canceling'].includes(
+                      chat.generationTask.status,
+                    ) && (
+                      <button
+                        type="button"
+                        disabled={
+                          chat.generationTask.status === 'canceling'
+                        }
+                        onClick={() => void chat.cancelGeneration()}
+                      >
+                        {chat.generationTask.status === 'canceling'
+                          ? 'Canceling'
+                          : 'Cancel'}
+                      </button>
+                    )}
                 </div>
               </div>
             </>
@@ -650,6 +690,10 @@ export function ChatPanel({
         </div>
 
         <footer className="chat-composer">
+          <SaveStatus
+            state={chatDraft.state}
+            message={chatDraft.message}
+          />
           {chat.selectedReadySourceCount === 0 && (
             <div className="chat-source-warning">
               Select at least one ready source before asking a question.

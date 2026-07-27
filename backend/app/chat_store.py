@@ -20,6 +20,7 @@ from .chat import (
 from .course_source import clean_source_ids
 from .db import connect, ensure_db
 from .job import utc_now
+from .trash_store import put_trash_item, remove_trash_item_for_entity
 
 
 ACTIVE_TURN_STATUSES = (
@@ -110,10 +111,18 @@ def create_conversation(conversation: ChatConversation) -> None:
         )
 
 
-def get_conversation(conversation_id: str) -> ChatConversation | None:
+def get_conversation(
+    conversation_id: str,
+    *,
+    include_deleted: bool = False,
+) -> ChatConversation | None:
     ensure_db()
     with connect() as conn:
-        return _get_conversation(conn, conversation_id)
+        return _get_conversation(
+            conn,
+            conversation_id,
+            include_deleted=include_deleted,
+        )
 
 
 def get_conversation_detail(
@@ -133,13 +142,24 @@ def get_conversation_detail(
 
 def list_conversations_for_course(
     course_id: str,
+    *,
+    include_deleted: bool = False,
 ) -> list[ChatConversation]:
     ensure_db()
+    deleted_filter = (
+        ""
+        if include_deleted
+        else """
+            AND conversations.deleted_at IS NULL
+            AND courses.deleted_at IS NULL
+        """
+    )
     with connect() as conn:
         rows = conn.execute(
             _CONVERSATION_SELECT
-            + """
+            + f"""
             WHERE conversations.course_id = ?
+              {deleted_filter}
             GROUP BY conversations.id
             ORDER BY conversations.updated_at DESC, conversations.id
             """,
@@ -154,7 +174,10 @@ def update_conversation(conversation: ChatConversation) -> bool:
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT course_id FROM chat_conversations WHERE id = ?",
+            """
+            SELECT course_id FROM chat_conversations
+            WHERE id = ? AND deleted_at IS NULL
+            """,
             (conversation.id,),
         ).fetchone()
         if row is None:
@@ -169,7 +192,7 @@ def update_conversation(conversation: ChatConversation) -> bool:
             UPDATE chat_conversations
             SET title = ?, status = ?, selected_source_ids_json = ?,
                 updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND deleted_at IS NULL
             """,
             (
                 conversation.title,
@@ -202,7 +225,10 @@ def patch_conversation(
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT course_id FROM chat_conversations WHERE id = ?",
+            """
+            SELECT course_id FROM chat_conversations
+            WHERE id = ? AND deleted_at IS NULL
+            """,
             (conversation_id,),
         ).fetchone()
         if row is None:
@@ -231,7 +257,7 @@ def patch_conversation(
             f"""
             UPDATE chat_conversations
             SET {", ".join(assignments)}
-            WHERE id = ?
+            WHERE id = ? AND deleted_at IS NULL
             """,
             parameters,
         )
@@ -242,15 +268,116 @@ def patch_conversation(
 
 def delete_conversation(conversation_id: str) -> bool:
     ensure_db()
+    deleted_at = utc_now()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT course_id, title
+            FROM chat_conversations
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (conversation_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        _recover_active_turns(
+            conn,
+            safe_error_message=(
+                "This answer was interrupted because the chat was moved "
+                "to trash."
+            ),
+            conversation_ids=[conversation_id],
+        )
+        cursor = conn.execute(
+            """
+            UPDATE chat_conversations
+            SET deleted_at = ?, updated_at = ?
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (
+                _datetime_text(deleted_at),
+                _datetime_text(deleted_at),
+                conversation_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            return False
+        put_trash_item(
+            conn,
+            entity_type="chat_conversation",
+            entity_id=conversation_id,
+            course_id=row["course_id"],
+            display_name=str(row["title"]),
+            deleted_at=deleted_at,
+        )
+        return True
+
+
+def restore_conversation(conversation_id: str) -> bool:
+    ensure_db()
+    now = utc_now()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM chat_conversations
+            INNER JOIN courses
+                ON courses.id = chat_conversations.course_id
+            WHERE chat_conversations.id = ?
+              AND chat_conversations.deleted_at IS NOT NULL
+              AND courses.deleted_at IS NULL
+            """,
+            (conversation_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        cursor = conn.execute(
+            """
+            UPDATE chat_conversations
+            SET deleted_at = NULL, updated_at = ?
+            WHERE id = ? AND deleted_at IS NOT NULL
+            """,
+            (_datetime_text(now), conversation_id),
+        )
+        if cursor.rowcount != 1:
+            return False
+        remove_trash_item_for_entity(
+            conn,
+            entity_type="chat_conversation",
+            entity_id=conversation_id,
+        )
+        return True
+
+
+def purge_conversation(
+    conversation_id: str,
+    *,
+    allow_parent_deleted: bool = False,
+) -> bool:
+    ensure_db()
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         exists = conn.execute(
-            "SELECT 1 FROM chat_conversations WHERE id = ?",
+            """
+            SELECT chat_conversations.deleted_at AS conversation_deleted_at,
+                   courses.deleted_at AS course_deleted_at
+            FROM chat_conversations
+            INNER JOIN courses
+                ON courses.id = chat_conversations.course_id
+            WHERE chat_conversations.id = ?
+            """,
             (conversation_id,),
         ).fetchone()
-        if exists is None:
+        if exists is None or (
+            exists["conversation_deleted_at"] is None
+            and not (
+                allow_parent_deleted
+                and exists["course_deleted_at"] is not None
+            )
+        ):
             return False
-
         message_rows = conn.execute(
             "SELECT id FROM chat_messages WHERE conversation_id = ?",
             (conversation_id,),
@@ -284,6 +411,11 @@ def delete_conversation(conversation_id: str) -> bool:
             "DELETE FROM chat_conversations WHERE id = ?",
             (conversation_id,),
         )
+        remove_trash_item_for_entity(
+            conn,
+            entity_type="chat_conversation",
+            entity_id=conversation_id,
+        )
         return True
 
 
@@ -295,6 +427,9 @@ def clear_chat() -> None:
         conn.execute("DELETE FROM chat_citations")
         conn.execute("DELETE FROM chat_messages")
         conn.execute("DELETE FROM chat_turns")
+        conn.execute(
+            "DELETE FROM trash_items WHERE entity_type = 'chat_conversation'"
+        )
         conn.execute("DELETE FROM chat_conversations")
 
 
@@ -329,6 +464,7 @@ def reserve_turn(
     model: str | None = None,
     replace_title_if: str | None = None,
     auto_title: str | None = None,
+    retry_failed: bool = False,
 ) -> ChatTurnReservation:
     ensure_db()
     cleaned_content = content.strip()
@@ -375,7 +511,15 @@ def reserve_turn(
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         conversation_row = conn.execute(
-            "SELECT * FROM chat_conversations WHERE id = ?",
+            """
+            SELECT chat_conversations.*
+            FROM chat_conversations
+            INNER JOIN courses
+                ON courses.id = chat_conversations.course_id
+            WHERE chat_conversations.id = ?
+              AND chat_conversations.deleted_at IS NULL
+              AND courses.deleted_at IS NULL
+            """,
             (conversation_id,),
         ).fetchone()
         if conversation_row is None:
@@ -403,6 +547,12 @@ def reserve_turn(
                 provider=provider,
                 model=model,
             )
+            if retry_failed and existing["status"] == "failed":
+                if conversation_row["status"] != "active":
+                    raise ChatTurnConflictError(
+                        "Archived conversations cannot retry turns."
+                    )
+                return _retry_failed_turn(conn, existing)
             return reservation
 
         if conversation_row["status"] != "active":
@@ -558,6 +708,73 @@ def reserve_turn(
         if turn_row is None:
             raise ChatStoreIntegrityError("Reserved turn disappeared.")
         return _reservation_from_turn(conn, turn_row, replayed=False)
+
+
+def _retry_failed_turn(
+    conn: Connection,
+    turn: Row,
+) -> ChatTurnReservation:
+    now_text = _datetime_text(utc_now())
+    generation_token = uuid4().hex
+    assistant_message_id = str(turn["assistant_message_id"])
+    conn.execute(
+        """
+        DELETE FROM chat_citation_spans
+        WHERE citation_id IN (
+            SELECT id FROM chat_citations WHERE message_id = ?
+        )
+        """,
+        (assistant_message_id,),
+    )
+    conn.execute(
+        "DELETE FROM chat_citations WHERE message_id = ?",
+        (assistant_message_id,),
+    )
+    message_cursor = conn.execute(
+        """
+        UPDATE chat_messages
+        SET content = '',
+            status = 'generating',
+            answer_status = NULL,
+            error_message = NULL,
+            metadata_json = '{}',
+            updated_at = ?
+        WHERE id = ? AND status = 'failed'
+        """,
+        (now_text, assistant_message_id),
+    )
+    turn_cursor = conn.execute(
+        """
+        UPDATE chat_turns
+        SET status = 'pending',
+            retrieval_query = NULL,
+            generation_token = ?,
+            refusal_reason = NULL,
+            error_code = NULL,
+            error_message = NULL,
+            updated_at = ?,
+            started_at = ?,
+            completed_at = NULL
+        WHERE id = ? AND status = 'failed'
+        """,
+        (
+            generation_token,
+            now_text,
+            now_text,
+            turn["id"],
+        ),
+    )
+    if message_cursor.rowcount != 1 or turn_cursor.rowcount != 1:
+        raise ChatMessageStateConflictError(
+            "Failed turn retry lost its compare-and-set race."
+        )
+    retried = conn.execute(
+        "SELECT * FROM chat_turns WHERE id = ?",
+        (turn["id"],),
+    ).fetchone()
+    if retried is None:
+        raise ChatStoreIntegrityError("Retried turn disappeared.")
+    return _reservation_from_turn(conn, retried, replayed=False)
 
 
 def get_turn_reservation(
@@ -1330,6 +1547,7 @@ SELECT
     COUNT(messages.id) AS message_count,
     MAX(messages.created_at) AS last_message_at
 FROM chat_conversations AS conversations
+INNER JOIN courses ON courses.id = conversations.course_id
 LEFT JOIN chat_messages AS messages
     ON messages.conversation_id = conversations.id
 """
@@ -1338,11 +1556,22 @@ LEFT JOIN chat_messages AS messages
 def _get_conversation(
     conn: Connection,
     conversation_id: str,
+    *,
+    include_deleted: bool = False,
 ) -> ChatConversation | None:
+    deleted_filter = (
+        ""
+        if include_deleted
+        else """
+            AND conversations.deleted_at IS NULL
+            AND courses.deleted_at IS NULL
+        """
+    )
     row = conn.execute(
         _CONVERSATION_SELECT
-        + """
+        + f"""
         WHERE conversations.id = ?
+          {deleted_filter}
         GROUP BY conversations.id
         """,
         (conversation_id,),
@@ -1507,7 +1736,10 @@ def _load_citations(
 
 def _require_course(conn: Connection, course_id: str) -> None:
     row = conn.execute(
-        "SELECT 1 FROM courses WHERE id = ?",
+        """
+        SELECT 1 FROM courses
+        WHERE id = ? AND deleted_at IS NULL
+        """,
         (course_id,),
     ).fetchone()
     if row is None:
@@ -1548,7 +1780,10 @@ def _touch_conversation(
     now_text: str,
 ) -> None:
     cursor = conn.execute(
-        "UPDATE chat_conversations SET updated_at = ? WHERE id = ?",
+        """
+        UPDATE chat_conversations SET updated_at = ?
+        WHERE id = ? AND deleted_at IS NULL
+        """,
         (now_text, conversation_id),
     )
     if cursor.rowcount != 1:

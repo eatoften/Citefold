@@ -1,8 +1,9 @@
 from datetime import datetime
 from sqlite3 import Row
 
-from .course import Course
+from .course import Course, utc_now
 from .db import connect, ensure_db
+from .trash_store import put_trash_item, remove_trash_item_for_entity
 
 
 def _datetime_to_text(value: datetime) -> str:
@@ -51,20 +52,30 @@ def create_course(course: Course) -> None:
         )
 
 
-def get_course(course_id: str) -> Course | None:
+def get_course(
+    course_id: str,
+    *,
+    include_deleted: bool = False,
+) -> Course | None:
     ensure_db()
+    deleted_filter = "" if include_deleted else "AND c.deleted_at IS NULL"
 
     with connect() as conn:
         row = conn.execute(
-            """
+            f"""
             SELECT
                 c.*,
                 COUNT(DISTINCT j.id) AS job_count,
                 COUNT(k.id) AS card_count
             FROM courses c
-            LEFT JOIN jobs j ON j.course_id = c.id
-            LEFT JOIN knowledge_cards k ON k.job_id = j.id
+            LEFT JOIN jobs j
+                ON j.course_id = c.id
+                AND j.deleted_at IS NULL
+            LEFT JOIN knowledge_cards k
+                ON k.job_id = j.id
+                AND k.deleted_at IS NULL
             WHERE c.id = ?
+              {deleted_filter}
             GROUP BY c.id
             """,
             (course_id,),
@@ -87,8 +98,13 @@ def list_courses() -> list[Course]:
                 COUNT(DISTINCT j.id) AS job_count,
                 COUNT(k.id) AS card_count
             FROM courses c
-            LEFT JOIN jobs j ON j.course_id = c.id
-            LEFT JOIN knowledge_cards k ON k.job_id = j.id
+            LEFT JOIN jobs j
+                ON j.course_id = c.id
+                AND j.deleted_at IS NULL
+            LEFT JOIN knowledge_cards k
+                ON k.job_id = j.id
+                AND k.deleted_at IS NULL
+            WHERE c.deleted_at IS NULL
             GROUP BY c.id
             ORDER BY c.updated_at DESC, c.title ASC
             """
@@ -107,7 +123,7 @@ def update_course(course: Course) -> None:
             SET title = ?,
                 description = ?,
                 updated_at = ?
-            WHERE id = ?
+            WHERE id = ? AND deleted_at IS NULL
             """,
             (
                 course.title,
@@ -118,11 +134,93 @@ def update_course(course: Course) -> None:
         )
 
 
-def delete_course(course_id: str) -> None:
+def delete_course(course_id: str) -> bool:
+    """Hide a course without moving or deleting any of its children."""
+
     ensure_db()
+    deleted_at = utc_now()
 
     with connect() as conn:
-        conn.execute(
-            "DELETE FROM courses WHERE id = ?",
+        row = conn.execute(
+            """
+            SELECT title FROM courses
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (course_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        cursor = conn.execute(
+            """
+            UPDATE courses SET deleted_at = ?
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (_datetime_to_text(deleted_at), course_id),
+        )
+        if cursor.rowcount != 1:
+            return False
+        put_trash_item(
+            conn,
+            entity_type="course",
+            entity_id=course_id,
+            course_id=course_id,
+            display_name=str(row["title"]),
+            deleted_at=deleted_at,
+        )
+    return True
+
+
+def restore_course(course_id: str) -> bool:
+    ensure_db()
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE courses SET deleted_at = NULL, updated_at = ?
+            WHERE id = ? AND deleted_at IS NOT NULL
+            """,
+            (_datetime_to_text(utc_now()), course_id),
+        )
+        if cursor.rowcount != 1:
+            return False
+        remove_trash_item_for_entity(
+            conn,
+            entity_type="course",
+            entity_id=course_id,
+        )
+    return True
+
+
+def purge_course(
+    course_id: str,
+    *,
+    preserve_course_trash_item: bool = False,
+) -> bool:
+    ensure_db()
+    with connect() as conn:
+        cursor = conn.execute(
+            """
+            DELETE FROM courses
+            WHERE id = ? AND deleted_at IS NOT NULL
+            """,
             (course_id,),
         )
+        if cursor.rowcount != 1:
+            return False
+        if preserve_course_trash_item:
+            conn.execute(
+                """
+                DELETE FROM trash_items
+                WHERE course_id = ?
+                  AND NOT (
+                      entity_type = 'course'
+                      AND entity_id = ?
+                  )
+                """,
+                (course_id, course_id),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM trash_items WHERE course_id = ?",
+                (course_id,),
+            )
+    return True

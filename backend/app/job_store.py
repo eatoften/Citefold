@@ -6,6 +6,7 @@ from .course import DEFAULT_COURSE_ID
 from .db import connect, ensure_db
 from .job import VideoJob, VideoJobStatus, utc_now
 from .media_metadata import VideoMetadata
+from .trash_store import put_trash_item, remove_trash_item_for_entity
 
 
 def _metadata_to_json(job: VideoJob) -> str | None:
@@ -120,12 +121,30 @@ def create_job(
         )
 
 
-def get_job(job_id: str) -> VideoJob | None:
+def get_job(
+    job_id: str,
+    *,
+    include_deleted: bool = False,
+) -> VideoJob | None:
     ensure_db()
+    deleted_filter = (
+        ""
+        if include_deleted
+        else """
+            AND jobs.deleted_at IS NULL
+            AND courses.deleted_at IS NULL
+        """
+    )
 
     with connect() as conn:
         row = conn.execute(
-            "SELECT * FROM jobs WHERE id = ?",
+            f"""
+            SELECT jobs.*
+            FROM jobs
+            INNER JOIN courses ON courses.id = jobs.course_id
+            WHERE jobs.id = ?
+              {deleted_filter}
+            """,
             (job_id,),
         ).fetchone()
 
@@ -139,7 +158,14 @@ def get_job_video_sha256(job_id: str) -> str | None:
     ensure_db()
     with connect() as conn:
         row = conn.execute(
-            "SELECT video_sha256 FROM jobs WHERE id = ?",
+            """
+            SELECT jobs.video_sha256
+            FROM jobs
+            INNER JOIN courses ON courses.id = jobs.course_id
+            WHERE jobs.id = ?
+              AND jobs.deleted_at IS NULL
+              AND courses.deleted_at IS NULL
+            """,
             (job_id,),
         ).fetchone()
     if row is None or row["video_sha256"] is None:
@@ -155,10 +181,13 @@ def list_jobs_missing_video_sha256() -> list[VideoJob]:
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT *
+            SELECT jobs.*
             FROM jobs
-            WHERE video_sha256 IS NULL OR trim(video_sha256) = ''
-            ORDER BY created_at ASC, id ASC
+            INNER JOIN courses ON courses.id = jobs.course_id
+            WHERE (video_sha256 IS NULL OR trim(video_sha256) = '')
+              AND jobs.deleted_at IS NULL
+              AND courses.deleted_at IS NULL
+            ORDER BY jobs.created_at ASC, jobs.id ASC
             """
         ).fetchall()
     return [_row_to_job(row) for row in rows]
@@ -193,29 +222,55 @@ def set_job_video_sha256_if_missing(
     return value or None
 
 
-def list_jobs() -> list[VideoJob]:
+def list_jobs(*, include_deleted: bool = False) -> list[VideoJob]:
     ensure_db()
+    deleted_filter = (
+        ""
+        if include_deleted
+        else """
+            WHERE jobs.deleted_at IS NULL
+              AND courses.deleted_at IS NULL
+        """
+    )
 
     with connect() as conn:
         rows = conn.execute(
-            """
-            SELECT * FROM jobs
-            ORDER BY created_at DESC, id DESC
+            f"""
+            SELECT jobs.*
+            FROM jobs
+            INNER JOIN courses ON courses.id = jobs.course_id
+            {deleted_filter}
+            ORDER BY jobs.created_at DESC, jobs.id DESC
             """
         ).fetchall()
 
     return [_row_to_job(row) for row in rows]
 
 
-def list_jobs_for_course(course_id: str) -> list[VideoJob]:
+def list_jobs_for_course(
+    course_id: str,
+    *,
+    include_deleted: bool = False,
+) -> list[VideoJob]:
     ensure_db()
+    deleted_filter = (
+        ""
+        if include_deleted
+        else """
+            AND jobs.deleted_at IS NULL
+            AND courses.deleted_at IS NULL
+        """
+    )
 
     with connect() as conn:
         rows = conn.execute(
-            """
-            SELECT * FROM jobs
-            WHERE course_id = ?
-            ORDER BY created_at DESC, id DESC
+            f"""
+            SELECT jobs.*
+            FROM jobs
+            INNER JOIN courses ON courses.id = jobs.course_id
+            WHERE jobs.course_id = ?
+              {deleted_filter}
+            ORDER BY jobs.created_at DESC, jobs.id DESC
             """,
             (course_id,),
         ).fetchall()
@@ -242,7 +297,7 @@ def update_job(job: VideoJob) -> None:
                 updated_at = ?,
                 started_at = ?,
                 completed_at = ?
-            WHERE id = ?
+            WHERE id = ? AND deleted_at IS NULL
             """,
             (
                 job.course_id,
@@ -282,18 +337,168 @@ def move_jobs_to_course(
         )
 
 
-def delete_job(job_id: str) -> None:
+def delete_job(job_id: str) -> bool:
     ensure_db()
+    deleted_at = utc_now()
 
     with connect() as conn:
-        conn.execute(
+        row = conn.execute(
+            """
+            SELECT course_id, original_filename, stored_name
+            FROM jobs
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (job_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        cursor = conn.execute(
+            """
+            UPDATE jobs SET deleted_at = ?, updated_at = ?
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (
+                _datetime_to_text(deleted_at),
+                _datetime_to_text(deleted_at),
+                job_id,
+            ),
+        )
+        if cursor.rowcount != 1:
+            return False
+        display_name = (
+            row["original_filename"] or row["stored_name"] or job_id
+        )
+        put_trash_item(
+            conn,
+            entity_type="video_job",
+            entity_id=job_id,
+            course_id=row["course_id"],
+            display_name=str(display_name),
+            deleted_at=deleted_at,
+        )
+    return True
+
+
+def restore_job(job_id: str) -> bool:
+    ensure_db()
+    now = utc_now()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT jobs.course_id
+            FROM jobs
+            INNER JOIN courses ON courses.id = jobs.course_id
+            WHERE jobs.id = ?
+              AND jobs.deleted_at IS NOT NULL
+              AND courses.deleted_at IS NULL
+            """,
+            (job_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        cursor = conn.execute(
+            """
+            UPDATE jobs SET deleted_at = NULL, updated_at = ?
+            WHERE id = ? AND deleted_at IS NOT NULL
+            """,
+            (_datetime_to_text(now), job_id),
+        )
+        if cursor.rowcount != 1:
+            return False
+        remove_trash_item_for_entity(
+            conn,
+            entity_type="video_job",
+            entity_id=job_id,
+        )
+    return True
+
+
+def purge_job(
+    job_id: str,
+    *,
+    allow_parent_deleted: bool = False,
+    preserve_trash_item: bool = False,
+) -> bool:
+    ensure_db()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT jobs.deleted_at AS job_deleted_at,
+                   courses.deleted_at AS course_deleted_at
+            FROM jobs
+            INNER JOIN courses ON courses.id = jobs.course_id
+            WHERE jobs.id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+        if row is None or (
+            row["job_deleted_at"] is None
+            and not (
+                allow_parent_deleted
+                and row["course_deleted_at"] is not None
+            )
+        ):
+            return False
+        cursor = conn.execute(
             "DELETE FROM jobs WHERE id = ?",
             (job_id,),
         )
+        if cursor.rowcount != 1:
+            return False
+        if not preserve_trash_item:
+            remove_trash_item_for_entity(
+                conn,
+                entity_type="video_job",
+                entity_id=job_id,
+            )
+    return True
 
 
 def clear_jobs() -> None:
     ensure_db()
 
     with connect() as conn:
+        conn.execute(
+            "DELETE FROM trash_items WHERE entity_type = 'video_job'"
+        )
         conn.execute("DELETE FROM jobs")
+
+
+def recover_active_jobs(
+    *,
+    error_message: str,
+) -> list[str]:
+    """Turn process-owned legacy states into explicit retryable failures."""
+
+    ensure_db()
+    now = utc_now()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute(
+            """
+            SELECT id FROM jobs
+            WHERE status IN ('probing', 'extracting_audio', 'transcribing')
+              AND deleted_at IS NULL
+            ORDER BY created_at, id
+            """
+        ).fetchall()
+        job_ids = [str(row["id"]) for row in rows]
+        if job_ids:
+            placeholders = ",".join("?" for _ in job_ids)
+            conn.execute(
+                f"""
+                UPDATE jobs
+                SET status = 'failed',
+                    error_message = ?,
+                    updated_at = ?,
+                    completed_at = ?
+                WHERE id IN ({placeholders})
+                """,
+                (
+                    error_message,
+                    now.isoformat(),
+                    now.isoformat(),
+                    *job_ids,
+                ),
+            )
+    return job_ids

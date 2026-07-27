@@ -10,6 +10,8 @@ describe('AppSidebar', () => {
         activeView="sources"
         getViewHref={(view) => `?view=${view}`}
         onChange={vi.fn()}
+        onOpenActivity={vi.fn()}
+        onOpenRecovery={vi.fn()}
       />,
     )
 
@@ -33,6 +35,8 @@ describe('AppSidebar', () => {
         activeView="sources"
         getViewHref={(view) => `/app?view=${view}&course=course-a`}
         onChange={onChange}
+        onOpenActivity={vi.fn()}
+        onOpenRecovery={vi.fn()}
       />,
     )
 

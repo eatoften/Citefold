@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Protocol
 from uuid import uuid4
 
@@ -33,13 +33,16 @@ from .learning_document_store import (
     create_learning_document,
     delete_document_card_link,
     delete_learning_document,
+    get_document_version_by_id,
     get_learning_document_detail,
     list_document_card_links,
     list_document_versions,
     list_learning_documents_for_card,
     list_learning_documents_for_course,
     next_document_version_number,
-    replace_document_sources,
+    purge_learning_document,
+    publish_generated_learning_document,
+    restore_learning_document,
     update_learning_document,
     upsert_document_card_link,
 )
@@ -210,6 +213,30 @@ def delete_saved_learning_document(document_id: str) -> None:
     delete_learning_document(document_id)
 
 
+def restore_saved_learning_document(
+    document_id: str,
+) -> LearningDocumentDetail:
+    if not restore_learning_document(document_id):
+        raise LearningDocumentNotFoundError(
+            "Deleted learning document not found or its course is still in trash."
+        )
+    return _require_document_detail(document_id)
+
+
+def purge_saved_learning_document(
+    document_id: str,
+    *,
+    allow_parent_deleted: bool = False,
+) -> None:
+    if not purge_learning_document(
+        document_id,
+        allow_parent_deleted=allow_parent_deleted,
+    ):
+        raise LearningDocumentNotFoundError(
+            "Deleted learning document not found."
+        )
+
+
 def restore_learning_document_version(
     document_id: str,
     request: LearningDocumentRestoreRequest,
@@ -240,8 +267,25 @@ def generate_learning_document(
     *,
     llm_client: LearningDocumentLLMClient,
     embedder: TextEmbedder | None = None,
+    checkpoint: Callable[[], None] | None = None,
+    operation_id: str | None = None,
 ) -> LearningDocumentGenerationResult:
     document = _require_document_detail(document_id)
+    cleaned_operation_id = (
+        operation_id.strip() if operation_id is not None else None
+    )
+    if operation_id is not None and not cleaned_operation_id:
+        raise InvalidLearningDocumentError(
+            "Generation operation id cannot be empty."
+        )
+    if cleaned_operation_id is not None:
+        existing_version = get_document_version_by_id(cleaned_operation_id)
+        if existing_version is not None:
+            if existing_version.document_id != document.id:
+                raise InvalidLearningDocumentError(
+                    "Generation operation belongs to another document."
+                )
+            return _replayed_generation_result(document.id)
     primary_link = next(
         (link for link in document.card_links if link.role == "primary_anchor"),
         None,
@@ -254,24 +298,17 @@ def generate_learning_document(
         request.supporting_card_ids,
         exclude_card_id=primary_card.id,
     )
-    selected_supporting_ids = {card.id for card in supporting_cards}
-    for link in document.card_links:
-        if (
-            link.role != "primary_anchor"
-            and link.card_id not in selected_supporting_ids
-        ):
-            delete_document_card_link(document.id, link.card_id)
-    for position, card in enumerate(supporting_cards, start=1):
-        upsert_document_card_link(
-            LearningDocumentCardLink(
-                id=uuid4().hex,
-                document_id=document.id,
-                card_id=card.id,
-                role="supporting",
-                position=position,
-                created_at=utc_now(),
-            )
+    supporting_links = [
+        LearningDocumentCardLink(
+            id=uuid4().hex,
+            document_id=document.id,
+            card_id=card.id,
+            role="supporting",
+            position=position,
+            created_at=utc_now(),
         )
+        for position, card in enumerate(supporting_cards, start=1)
+    ]
     assets = _validated_assets(document.course_id, request.source_asset_ids)
     units = list_source_units_for_assets([asset.id for asset in assets])
     selected_units, warning = _select_units(
@@ -321,17 +358,18 @@ def generate_learning_document(
     settings = getattr(llm_client, "settings", None)
     provider = getattr(settings, "provider", "local_llm")
     model = request.model or getattr(settings, "model", None)
+    _checkpoint(checkpoint)
     document.body_markdown = body
     document.generation_mode = "local_llm"
     document.provider = provider
     document.model = model
     document.status = "draft"
     document.updated_at = utc_now()
-    update_learning_document(document)
-    replace_document_sources(document.id, sources)
-    _save_version(
+    publish_generated_learning_document(
         document,
-        change_source="local_llm",
+        supporting_links,
+        sources,
+        operation_id=cleaned_operation_id,
         provider=provider,
         model=model,
     )
@@ -341,6 +379,26 @@ def generate_learning_document(
         selected_cards=1 + len(supporting_cards),
         warning=warning,
     )
+
+
+def _replayed_generation_result(
+    document_id: str,
+) -> LearningDocumentGenerationResult:
+    document = _require_document_detail(document_id)
+    return LearningDocumentGenerationResult(
+        document=document,
+        selected_source_units=sum(
+            source.source_type == "source_unit"
+            for source in document.sources
+        ),
+        selected_cards=len(document.card_links),
+        warning=None,
+    )
+
+
+def _checkpoint(checkpoint: Callable[[], None] | None) -> None:
+    if checkpoint is not None:
+        checkpoint()
 
 
 def _validated_supporting_cards(

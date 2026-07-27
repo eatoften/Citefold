@@ -8,16 +8,29 @@ import pytest
 
 import app.main as main
 import app.course_source_service as course_source_service
+import app.source_asset_service as source_asset_service
 import app.source_index_service as source_index_service
 import app.source_search_service as source_search_service
 from app.course import Course, CourseCreate, DEFAULT_COURSE_ID
-from app.course_service import create_video_course, delete_video_course
+from app.course_service import (
+    create_video_course,
+    delete_video_course,
+    restore_video_course,
+)
 from app.course_source import VideoTimeLocator
 from app.course_source_store import get_source
 from app.job import VideoJob, VideoJobStatus
 from app.job_store import create_job
+from app.reliable_task import ReliableTaskStatus
+from app.reliable_task_store import ReliableTaskRetryError, list_tasks
 from app.source_asset import SourceAsset, SourceUnit
-from app.source_asset_store import create_source_asset, replace_source_units
+from app.source_asset_store import (
+    create_source_asset,
+    get_source_asset,
+    list_source_assets_for_course,
+    list_source_units_for_asset,
+    replace_source_units,
+)
 from app.transcript_chunk import TranscriptChunk
 from app.transcript_chunk_store import replace_chunks_for_job
 
@@ -150,6 +163,161 @@ def _patch_fake_embedders(monkeypatch) -> FakeEmbedder:
         lambda: fake,
     )
     return fake
+
+
+@pytest.mark.parametrize(
+    "endpoint_suffix",
+    ["source-assets", "source-asset-tasks"],
+)
+def test_source_enqueue_failure_is_visible_and_existing_asset_can_retry(
+    monkeypatch,
+    tmp_path: Path,
+    endpoint_suffix: str,
+) -> None:
+    course = _create_course()
+    settings = source_asset_service.get_app_path_settings()
+    source_dir = tmp_path / "sources"
+    monkeypatch.setattr(
+        source_asset_service,
+        "get_app_path_settings",
+        lambda: settings.model_copy(update={"source_dir": source_dir}),
+    )
+    manager = main.get_reliable_task_manager()
+    original_enqueue = manager.enqueue
+    failed_once = False
+
+    def fail_first_enqueue(**kwargs):
+        nonlocal failed_once
+        if not failed_once:
+            failed_once = True
+            raise RuntimeError("queue unavailable")
+        return original_enqueue(**kwargs)
+
+    monkeypatch.setattr(manager, "enqueue", fail_first_enqueue)
+    response = client.post(
+        f"/courses/{course.id}/{endpoint_suffix}",
+        files={
+            "file": (
+                "lecture-notes.txt",
+                b"Gradient descent follows the negative gradient.",
+                "text/plain",
+            )
+        },
+    )
+
+    assert response.status_code == 500
+    assets = list_source_assets_for_course(course.id)
+    assert len(assets) == 1
+    failed_asset = assets[0]
+    assert failed_asset.extraction_status == "failed"
+    assert failed_asset.error_message == (
+        source_asset_service.SOURCE_IMPORT_QUEUE_FAILED_MESSAGE
+    )
+    assert Path(failed_asset.stored_path).is_file()
+    assert list_tasks(
+        resource_type="source_asset",
+        resource_id=failed_asset.id,
+    ) == []
+
+    retried = client.post(
+        f"/source-assets/{failed_asset.id}/processing-tasks"
+    )
+    assert retried.status_code == 202
+    task_id = retried.json()["task"]["id"]
+    completed = manager.wait_for_task(
+        task_id,
+        {ReliableTaskStatus.succeeded},
+        timeout_seconds=5,
+    )
+    restored_asset = get_source_asset(failed_asset.id)
+
+    assert completed.result is not None
+    assert restored_asset is not None
+    assert restored_asset.extraction_status == "ready"
+    assert restored_asset.error_message is None
+    assert restored_asset.unit_count == 1
+    assert len(list_source_units_for_asset(failed_asset.id)) == 1
+
+
+def test_source_retry_starts_fresh_task_when_attempt_budget_is_exhausted(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    course = _create_course()
+    settings = source_asset_service.get_app_path_settings()
+    source_dir = tmp_path / "sources"
+    monkeypatch.setattr(
+        source_asset_service,
+        "get_app_path_settings",
+        lambda: settings.model_copy(update={"source_dir": source_dir}),
+    )
+    original_parse = source_asset_service.parse_source_asset
+
+    def fail_parse(*args, **kwargs):
+        raise source_asset_service.SourceAssetParseError(
+            "simulated parser outage"
+        )
+
+    monkeypatch.setattr(
+        source_asset_service,
+        "parse_source_asset",
+        fail_parse,
+    )
+    response = client.post(
+        f"/courses/{course.id}/source-asset-tasks",
+        files={
+            "file": (
+                "lecture-notes.txt",
+                b"Gradient descent follows the negative gradient.",
+                "text/plain",
+            )
+        },
+    )
+    assert response.status_code == 202
+    manager = main.get_reliable_task_manager()
+    failed_task_id = response.json()["task"]["id"]
+    asset_id = response.json()["asset"]["id"]
+    failed_task = manager.wait_for_task(
+        failed_task_id,
+        {ReliableTaskStatus.failed},
+        timeout_seconds=5,
+    )
+    assert failed_task.retryable is True
+    assert get_source_asset(asset_id).extraction_status == "failed"
+
+    monkeypatch.setattr(
+        source_asset_service,
+        "parse_source_asset",
+        original_parse,
+    )
+
+    def reject_task_retry(task_id: str):
+        raise ReliableTaskRetryError(
+            f"Task {task_id!r} exhausted its attempt budget."
+        )
+
+    monkeypatch.setattr(
+        manager,
+        "retry",
+        reject_task_retry,
+    )
+
+    retried = client.post(f"/source-assets/{asset_id}/processing-tasks")
+
+    assert retried.status_code == 202
+    retry_task_id = retried.json()["task"]["id"]
+    assert retry_task_id != failed_task_id
+    completed = manager.wait_for_task(
+        retry_task_id,
+        {ReliableTaskStatus.succeeded},
+        timeout_seconds=5,
+    )
+    restored_asset = get_source_asset(asset_id)
+    assert completed.status == ReliableTaskStatus.succeeded
+    assert restored_asset is not None
+    assert restored_asset.extraction_status == "ready"
+    assert restored_asset.error_message is None
+    assert len(list_source_units_for_asset(asset_id)) == 1
 
 
 def test_course_sources_unify_video_and_documents_with_typed_locators(
@@ -480,6 +648,119 @@ def test_indexing_skips_unchanged_chunks_and_reembeds_stale_text(
     assert ready.json()["index_model"] == FakeEmbedder.model_name
     assert ready.json()["index_dimension"] == 2
     assert ready.json()["indexed_chunk_count"] == 1
+
+
+def test_cancel_after_source_index_commit_keeps_task_and_source_ready(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    course = _create_course()
+    job = _create_video_with_chunk(
+        tmp_path,
+        course_id=course.id,
+        job_id="late-cancel-video",
+    )
+    _patch_fake_embedders(monkeypatch)
+    domain_committed = Event()
+    return_from_commit = Event()
+    original_commit_source_index = (
+        source_index_service.commit_source_index
+    )
+
+    def block_after_index_commit(*args, **kwargs):
+        result = original_commit_source_index(*args, **kwargs)
+        domain_committed.set()
+        assert return_from_commit.wait(5)
+        return result
+
+    monkeypatch.setattr(
+        source_index_service,
+        "commit_source_index",
+        block_after_index_commit,
+    )
+
+    response = client.post(
+        f"/courses/{course.id}/source-index-tasks",
+        json={"source_ids": [f"job:{job.id}"]},
+    )
+    assert response.status_code == 202
+    manager = main.get_reliable_task_manager()
+    task_id = response.json()["id"]
+    try:
+        assert domain_committed.wait(5)
+        canceling = manager.request_cancel(task_id)
+        assert canceling.status == ReliableTaskStatus.canceling
+        return_from_commit.set()
+        completed = manager.wait_for_task(
+            task_id,
+            {ReliableTaskStatus.succeeded},
+            timeout_seconds=5,
+        )
+    finally:
+        return_from_commit.set()
+
+    source = get_source(f"job:{job.id}")
+    assert completed.cancel_requested_at is not None
+    assert source is not None
+    assert source.index_status == "ready"
+    assert source.indexed_chunk_count == 1
+
+
+def test_cancel_before_source_index_commit_still_cancels_and_fails_index(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    course = _create_course()
+    job = _create_video_with_chunk(
+        tmp_path,
+        course_id=course.id,
+        job_id="early-cancel-video",
+    )
+    embedding_started = Event()
+    return_from_embedding = Event()
+
+    class BlockingEmbedder(FakeEmbedder):
+        def embed_texts(
+            self,
+            texts,
+            *,
+            batch_size=None,
+        ) -> list[list[float]]:
+            embedding_started.set()
+            assert return_from_embedding.wait(5)
+            return super().embed_texts(texts, batch_size=batch_size)
+
+    monkeypatch.setattr(
+        source_index_service,
+        "SentenceTransformerEmbedder",
+        BlockingEmbedder,
+    )
+
+    response = client.post(
+        f"/courses/{course.id}/source-index-tasks",
+        json={"source_ids": [f"job:{job.id}"]},
+    )
+    assert response.status_code == 202
+    manager = main.get_reliable_task_manager()
+    task_id = response.json()["id"]
+    try:
+        assert embedding_started.wait(5)
+        manager.request_cancel(task_id)
+        return_from_embedding.set()
+        canceled = manager.wait_for_task(
+            task_id,
+            {ReliableTaskStatus.canceled},
+            timeout_seconds=5,
+        )
+    finally:
+        return_from_embedding.set()
+
+    source = get_source(f"job:{job.id}")
+    assert canceled.cancel_requested_at is not None
+    assert source is not None
+    assert source.index_status == "failed"
+    assert source.index_error == "Canceled by the user."
+    assert source.indexed_chunk_count == 0
 
 
 def test_search_combines_video_and_document_chunks_and_honors_selection(
@@ -823,9 +1104,12 @@ def test_index_compare_and_swap_rejects_course_move_during_embedding(
     )
 
     assert response.status_code == 409
+    assert client.get(f"/sources/job:{job.id}").status_code == 404
+
+    restore_video_course(course.id)
     source = client.get(f"/sources/job:{job.id}").json()
-    assert source["course_id"] == DEFAULT_COURSE_ID
-    assert source["index_status"] == "stale"
+    assert source["course_id"] == course.id
+    assert source["index_status"] == "failed"
     assert source["indexed_chunk_count"] == 0
 
 

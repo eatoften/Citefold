@@ -7,13 +7,18 @@ import {
 } from 'react'
 import type { CourseSource } from '../sources/sourceTypes'
 import {
-  ChatApiError,
+  cancelReliableTask,
+  enqueueChatGeneration,
+  retryReliableTask,
+  waitForReliableTask,
+  type ReliableTask,
+} from '../reliability'
+import {
   createChatConversation as createConversationRequest,
   getChatConversation,
   isAbortError,
   listChatConversations,
   listCourseSources,
-  sendChatMessage as sendMessageRequest,
   updateChatConversation,
 } from './chatApi'
 import type {
@@ -34,6 +39,12 @@ type RetryIntent =
       clientRequestId: string
       sourceIds: string[]
       model?: string
+    }
+  | {
+      kind: 'message-task'
+      taskId: string
+      conversationId: string
+      content: string
     }
 
 export type ChatPanelError = {
@@ -66,6 +77,7 @@ export type UseChatResult = {
   isCreatingConversation: boolean
   isUpdatingSources: boolean
   isSending: boolean
+  generationTask: ReliableTask<ChatGenerationTaskResult> | null
   generationPollingExhausted: boolean
   selectConversation: (conversationId: string) => void
   createConversation: () => Promise<ChatConversation | null>
@@ -75,6 +87,7 @@ export type UseChatResult = {
   sendMessage: (content: string) => Promise<boolean>
   startNewAttemptForMessage: (message: ChatMessage) => Promise<boolean>
   retryLastRequest: () => Promise<boolean>
+  cancelGeneration: () => Promise<void>
   clearError: () => void
   refresh: () => void
   refreshConversation: () => void
@@ -84,6 +97,10 @@ type SendAttemptSnapshot = {
   clientRequestId: string
   sourceIds: string[]
   model?: string
+}
+
+type ChatGenerationTaskResult = {
+  turn: ChatTurnResponse
 }
 
 const GENERATION_POLL_INTERVAL_MS = 1500
@@ -155,6 +172,8 @@ export function useChat({
   const [isCreatingConversation, setIsCreatingConversation] = useState(false)
   const [isUpdatingSources, setIsUpdatingSources] = useState(false)
   const [isSending, setIsSending] = useState(false)
+  const [generationTask, setGenerationTask] =
+    useState<ReliableTask<ChatGenerationTaskResult> | null>(null)
   const [
     generationPollingExhausted,
     setGenerationPollingExhausted,
@@ -169,10 +188,21 @@ export function useChat({
   const detailControllerRef = useRef<AbortController | null>(null)
   const activeConversationIdRef = useRef<string | null>(null)
   const conversationRef = useRef<ChatConversationDetail | null>(null)
+  const generationTaskIdRef = useRef<string | null>(null)
   const initialConversationIdRef = useRef(initialConversationId)
   const previousRouteConversationIdRef =
     useRef(initialConversationId)
   const onConversationChangeRef = useRef(onConversationChange)
+
+  const commitGenerationTask = useCallback(
+    (
+      task: ReliableTask<ChatGenerationTaskResult> | null,
+    ): void => {
+      generationTaskIdRef.current = task?.id ?? null
+      setGenerationTask(task)
+    },
+    [],
+  )
 
   useEffect(() => {
     initialConversationIdRef.current = initialConversationId
@@ -262,6 +292,7 @@ export function useChat({
     setIsCreatingConversation(false)
     setIsUpdatingSources(false)
     setIsSending(false)
+    commitGenerationTask(null)
     setGenerationPollingExhausted(false)
 
     if (!courseId) {
@@ -331,6 +362,7 @@ export function useChat({
   }, [
     apiBaseUrl,
     activateConversation,
+    commitGenerationTask,
     courseId,
     finishRequest,
     isCurrentEpoch,
@@ -814,6 +846,68 @@ export function useChat({
     await saveSourceSelection([])
   }, [saveSourceSelection])
 
+  const waitForMessageTask = useCallback(
+    async (
+      taskId: string,
+      conversationId: string,
+      controller: AbortController,
+      epoch: number,
+    ): Promise<boolean> => {
+      const completed =
+        await waitForReliableTask<ChatGenerationTaskResult>(
+          apiBaseUrl,
+          taskId,
+          {
+            signal: controller.signal,
+            onProgress: (task) => {
+              if (
+                isCurrentEpoch(epoch) &&
+                activeConversationIdRef.current === conversationId &&
+                task.id === taskId
+              ) {
+                commitGenerationTask(task)
+              }
+            },
+          },
+        )
+      if (
+        !isCurrentEpoch(epoch) ||
+        activeConversationIdRef.current !== conversationId
+      ) {
+        return false
+      }
+      const turn = completed.result?.turn
+      if (
+        !turn ||
+        turn.conversation.id !== conversationId ||
+        turn.conversation.course_id !== courseId
+      ) {
+        throw new Error(
+          'The answer task completed without a valid conversation result.',
+        )
+      }
+      abortDetailRequest()
+      const nextDetail = mergeTurn(conversationRef.current, turn)
+      setConversation(nextDetail)
+      conversationRef.current = nextDetail
+      setConversations((current) =>
+        upsertConversation(current, turn.conversation),
+      )
+      setSelectedSourceIds(turn.conversation.selected_source_ids)
+      if (generationTaskIdRef.current === taskId) {
+        commitGenerationTask(null)
+      }
+      return true
+    },
+    [
+      apiBaseUrl,
+      abortDetailRequest,
+      commitGenerationTask,
+      courseId,
+      isCurrentEpoch,
+    ],
+  )
+
   const sendMessage = useCallback(
     async (
       rawContent: string,
@@ -865,9 +959,11 @@ export function useChat({
       setError(null)
       setIsSending(true)
       setPendingQuestion(content)
+      commitGenerationTask(null)
 
       let conversationId = activeConversationIdRef.current
       let didStartMessageRequest = false
+      let taskId: string | null = null
       try {
         if (!conversationId) {
           setIsCreatingConversation(true)
@@ -890,7 +986,7 @@ export function useChat({
         }
 
         didStartMessageRequest = true
-        const turn = await sendMessageRequest(
+        const task = await enqueueChatGeneration(
           apiBaseUrl,
           conversationId,
           {
@@ -901,29 +997,34 @@ export function useChat({
           },
           controller.signal,
         )
+        taskId = task.id
         if (
-          !isCurrentEpoch(epoch) ||
-          activeConversationIdRef.current !== conversationId
+          isCurrentEpoch(epoch) &&
+          activeConversationIdRef.current === conversationId
         ) {
-          return false
+          commitGenerationTask(
+            task as ReliableTask<ChatGenerationTaskResult>,
+          )
         }
-        abortDetailRequest()
-        const nextDetail = mergeTurn(conversationRef.current, turn)
-        setConversation(nextDetail)
-        conversationRef.current = nextDetail
-        setConversations((current) =>
-          upsertConversation(current, turn.conversation),
+        return await waitForMessageTask(
+          task.id,
+          conversationId,
+          controller,
+          epoch,
         )
-        setSelectedSourceIds(turn.conversation.selected_source_ids)
-        return true
       } catch (requestError: unknown) {
         if (isAbortError(requestError) || !isCurrentEpoch(epoch)) {
           return false
         }
         const retry: RetryIntent = !didStartMessageRequest
           ? { kind: 'create' }
-          : requestError instanceof ChatApiError
-            ? { kind: 'conversation' }
+          : taskId
+            ? {
+                kind: 'message-task',
+                taskId,
+                conversationId: conversationId!,
+                content,
+              }
             : {
                 kind: 'send',
                 content,
@@ -955,6 +1056,7 @@ export function useChat({
       apiBaseUrl,
       activateConversation,
       abortDetailRequest,
+      commitGenerationTask,
       courseId,
       finishRequest,
       isCreatingConversation,
@@ -965,6 +1067,7 @@ export function useChat({
       selectedSourceIds,
       sources,
       startRequest,
+      waitForMessageTask,
       workspaceCourseId,
     ],
   )
@@ -1008,12 +1111,116 @@ export function useChat({
           sourceIds: retry.sourceIds,
           model: retry.model,
         })
+      case 'message-task': {
+        if (
+          activeConversationIdRef.current !== retry.conversationId
+        ) {
+          setConversationReloadKey((value) => value + 1)
+          return false
+        }
+        const epoch = epochRef.current
+        const controller = startRequest()
+        setIsSending(true)
+        setPendingQuestion(retry.content)
+        try {
+          const retried = await retryReliableTask(
+            apiBaseUrl,
+            retry.taskId,
+          )
+          if (
+            isCurrentEpoch(epoch) &&
+            activeConversationIdRef.current === retry.conversationId
+          ) {
+            commitGenerationTask(
+              retried as ReliableTask<ChatGenerationTaskResult>,
+            )
+          }
+          return await waitForMessageTask(
+            retry.taskId,
+            retry.conversationId,
+            controller,
+            epoch,
+          )
+        } catch (requestError: unknown) {
+          if (isAbortError(requestError) || !isCurrentEpoch(epoch)) {
+            return false
+          }
+          setError({
+            message: errorMessage(
+              requestError,
+              'Could not retry the grounded answer.',
+            ),
+            retry,
+          })
+          setConversationReloadKey((value) => value + 1)
+          return false
+        } finally {
+          finishRequest(controller)
+          if (isCurrentEpoch(epoch)) {
+            setPendingQuestion(null)
+            setIsSending(false)
+          }
+        }
+      }
     }
   }, [
+    apiBaseUrl,
+    commitGenerationTask,
     createConversation,
     error,
+    finishRequest,
+    isCurrentEpoch,
     saveSourceSelection,
     sendMessage,
+    startRequest,
+    waitForMessageTask,
+  ])
+
+  const cancelGeneration = useCallback(async (): Promise<void> => {
+    const task = generationTask
+    const epoch = epochRef.current
+    const conversationId = activeConversationIdRef.current
+    if (
+      !task ||
+      !conversationId ||
+      !['queued', 'running', 'canceling'].includes(task.status)
+    ) {
+      return
+    }
+    try {
+      const canceled = await cancelReliableTask(apiBaseUrl, task.id)
+      if (
+        !isCurrentEpoch(epoch) ||
+        activeConversationIdRef.current !== conversationId ||
+        generationTaskIdRef.current !== task.id ||
+        canceled.id !== task.id
+      ) {
+        return
+      }
+      commitGenerationTask(
+        canceled as ReliableTask<ChatGenerationTaskResult>,
+      )
+    } catch (requestError: unknown) {
+      if (
+        !isCurrentEpoch(epoch) ||
+        activeConversationIdRef.current !== conversationId ||
+        generationTaskIdRef.current !== task.id
+      ) {
+        return
+      }
+      setError({
+        message: errorMessage(
+          requestError,
+          'Could not cancel this answer.',
+        ),
+        retry: { kind: 'conversation' },
+      })
+    }
+  }, [
+    apiBaseUrl,
+    commitGenerationTask,
+    generationTask,
+    isCurrentEpoch,
   ])
 
   const clearError = useCallback((): void => {
@@ -1059,6 +1266,7 @@ export function useChat({
     isCreatingConversation,
     isUpdatingSources,
     isSending,
+    generationTask,
     generationPollingExhausted,
     selectConversation,
     createConversation,
@@ -1068,6 +1276,7 @@ export function useChat({
     sendMessage,
     startNewAttemptForMessage,
     retryLastRequest,
+    cancelGeneration,
     clearError,
     refresh,
     refreshConversation,

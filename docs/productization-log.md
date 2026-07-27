@@ -1613,10 +1613,515 @@ With P0.4 accepted and pushed, P0.5 hardens the local notebook lifecycle:
 ```text
 automatic draft preservation
 -> unsaved-change protection and recoverable deletion
--> cancellable/retryable/resumable processing tasks
+-> cancellable/retryable/restart-recoverable processing tasks
 -> validated backup and restore
 -> safe desktop shutdown and restart recovery
 ```
 
 P0.5 must preserve the Source/Chat/Studio route and course-isolation contracts
 rather than creating another task-specific navigation surface.
+
+## P0.5 - Local Workspace Reliability and Recovery
+
+Date: 2026-07-27
+
+Branch: `codex/notebooklm-product-core`
+
+Status: Complete
+
+### User outcome
+
+The local notebook no longer treats a renderer refresh, backend restart,
+failed model call, or mistaken delete as an unrecoverable boundary:
+
+```text
+editing
+-> immediate device draft
+-> revisioned workspace draft
+-> explicit domain save
+
+long-running operation
+-> durable reservation
+-> visible progress
+-> cooperative cancel / retry / restart recovery
+
+ordinary delete
+-> Trash
+-> same-identity restore
+-> explicit permanent purge
+
+workspace disaster recovery
+-> validated full backup
+-> restart-bound staged restore
+-> initialization check
+-> applied result or rollback
+```
+
+Activity and Data & recovery are global utilities rather than a fourth
+primary destination. The canonical Sources / Chat / Studio structure and
+course-scoped URL contract remain intact.
+
+### Why this stage now
+
+P0.1-P0.4 made the product useful enough that losing work became the highest
+risk. The previous system mixed request-owned background work, hard deletion,
+domain-specific status rows, open-database filesystem replacement, and a
+desktop host that inferred ownership from a TCP port. Those shortcuts are
+acceptable for a prototype but not for a flagship portfolio project whose
+central claim is local-first ownership.
+
+Reliability is implemented before Notes because free notes, saved answers, and
+Studio outputs would otherwise multiply the same loss and recovery problems.
+P0.5 establishes shared primitives that P1 features can reuse instead of
+building another special case.
+
+### Scope and non-goals
+
+Delivered:
+
+- reusable device-first and revisioned workspace draft persistence;
+- save/conflict state and browser/window leave protection on the main editing
+  surfaces;
+- one durable task protocol for video processing, Source import/indexing,
+  automatic cards, Chat generation, and Study generation;
+- persisted progress/events, bounded execution, idempotent reservation,
+  claim fencing, cooperative cancellation, retry, and startup recovery;
+- recoverable deletion for courses, video jobs, document Sources, knowledge
+  cards, Study documents, and Chat conversations;
+- full-workspace backup validation, import/export, staged restore, an
+  additional pre-restore safety archive, path rebasing, and restart-time
+  publication;
+- global Activity and Data & recovery surfaces;
+- exact desktop backend instance identity and owned-child shutdown.
+
+Explicit non-goals:
+
+- cloud sync, accounts, remote workers, or multi-device collaboration;
+- preempting arbitrary native Whisper, FFmpeg, or LLM calls mid-instruction;
+- encrypting backup archives or managing encryption keys;
+- an automatic Trash retention scheduler;
+- packaging and publishing a new desktop release;
+- the App decomposition and bundle work reserved for P1.4.
+
+### Architecture and invariants
+
+#### Drafts
+
+Draft persistence and domain publication are separate:
+
+```text
+keystroke
+-> localStorage record in the active workspace generation
+-> 800 ms debounced workspace_drafts compare-and-swap
+-> explicit Save publishes the domain entity/version
+-> successful publication clears the draft
+```
+
+The renderer registers whether every dirty surface is protected. A
+`beforeunload` warning exists only while a change is not durable on either the
+device or server. Restore changes the workspace generation so a newer draft
+from the replaced workspace cannot silently overwrite restored data. Device
+protection is credited only after writing and reading back the exact current
+payload, not merely because an older key exists. While a queued restore is
+pending, the renderer keeps polling its exact identity; observing a new
+authoritative generation quarantines old drafts and reloads the application
+even when the backend was restarted outside the desktop restart command.
+
+#### Durable tasks
+
+The generic state machine is:
+
+```text
+queued -> running -> succeeded
+queued -> canceled
+running -> canceling -> canceled
+running -> failed
+canceling -> succeeded when completion beat the cancellation checkpoint
+running at startup -> failed(error_code = interrupted)
+canceling at startup -> canceled
+retryable failed/canceled -> queued as the next attempt while attempts remain
+```
+
+Reservation occurs before execution. A bounded `ThreadPoolExecutor` claims
+SQLite rows with a new token for every attempt. Progress, heartbeat, result,
+error, and an append-only event stream are persisted. Only the current claim
+may publish. A normal handler return is the publication boundary: success may
+win from either `running` or `canceling`, while a cancellation observed at a
+pre-publication checkpoint settles as `canceled`. Single-result Chat and Study
+handlers checkpoint immediately before publication; chunked and pipeline
+workflows checkpoint at safe boundaries and may retain completed
+stages/chunks. Chat retries retain the original client request ID.
+
+Automatic cards add a second, domain-level publication ledger. Each transcript
+chunk publishes its cards, review items, and succeeded result in one immediate
+SQLite transaction. A retried task reconstructs counters from that ledger and
+invokes the model only for unfinished chunks. Persisting the reliable-task
+reservation is the enqueue success boundary: an optional immediate worker
+wakeup is best-effort, while a true pre-reservation enqueue failure closes the
+already-created Source or card-generation record as visibly failed.
+
+Quiescing stops new dispatch, requests cooperative cancellation, and waits for
+active handlers to reach a checkpoint. A timeout is reported as a forced
+shutdown condition; it is never described as safely checkpointed.
+
+#### Trash and workspace lifecycle
+
+Normal delete tombstones the root and creates a durable Trash item. Ordinary
+queries filter tombstoned roots while dependent rows, managed files, canonical
+Source projections, chunks, and embeddings remain available for restoration.
+Restore keeps the same IDs and relationships.
+
+Restore and purge claim a Trash item by compare-and-swap. Once purge starts,
+restore is forbidden. Because existing entity stores and filesystem cleanup
+cannot share one transaction, course-tree purge persists a monotonic phase
+plan and resumes only unfinished irreversible steps. File-backed video and
+document roots likewise retain their Trash item while projection, database,
+and artifact phases advance; a file error becomes retryable `purge_failed`
+instead of a false success. Enqueue, retry, delete, restore, purge, backup, and
+restore preparation share the workspace lifecycle gate so an operation cannot
+pass a stale resource check while a conflicting mutation is published.
+
+#### Backup and restore
+
+A `.vcc-backup` archive contains:
+
+- a SQLite online-backup snapshot including committed WAL state;
+- managed uploads, extracted audio, transcripts, and imported Source files;
+- a versioned manifest with application/format/schema identity, relative
+  paths, sizes, SHA-256 hashes, and archive entry/file counts.
+
+Validation treats every archive as untrusted. It rejects traversal, absolute
+or duplicate paths, Windows device names, symbolic links/special entries,
+size and compression-ratio bombs, hash/size mismatch, invalid SQLite, missing
+managed references, and unknown future schema.
+
+Restore is a two-phase, restart-bound operation:
+
+```text
+queue one restore identity
+-> restart owned backend
+-> revalidate, extract, and rebase managed paths
+-> create a pre-restore safety archive when a current database exists
+-> checkpoint and isolate the live SQLite database family
+-> write the receipt and swap the staged workspace before init_db
+-> initialize, migrate, reconcile, and check workspace
+-> finalize receipt as applied
+
+initialization failure
+-> rollback from retained pre-swap transaction paths
+-> persist an explicit failed result
+```
+
+Queue identity and the last result are durable. The UI confirms that the same
+restore ID reached `applied`; backend readiness alone is not success. A queued
+restore can be canceled before restart and cannot be silently replaced by a
+second operation.
+
+#### Desktop ownership
+
+Tauri generates a UUID instance token for every sidecar spawn and passes it in
+the environment. `/health` returns exact JSON application, API, and instance
+identity. Ready and quiesce checks parse that contract; substring matching is
+not used. The host stores child handle, PID, and token, clears ownership on the
+matching termination event, and never enumerates or kills an unknown process
+because it occupies port 8001.
+
+### Technology and responsibility map
+
+| Concern | Technology | Responsibility |
+| --- | --- | --- |
+| Draft fallback | versioned browser `localStorage` | protect an edit before the network round trip |
+| Durable draft copy | SQLite `workspace_drafts` + revision CAS | backup-visible recovery and conflict detection alongside the newer device draft |
+| Task queue | SQLite task/event tables | durable reservation, lineage, progress, and safe public errors |
+| Local worker | Python `ThreadPoolExecutor` + dispatcher | bounded execution without Redis/Celery |
+| Lifecycle serialization | Python re-entrant workspace gate + SQLite transactions | close enqueue/delete/backup time-of-check races |
+| Trash | tombstones + Trash intent journal | hide, restore, and separately purge user roots |
+| DB backup | Python SQLite online Backup API | consistent committed database snapshot |
+| Archive | ZIP + JSON manifest + SHA-256 | portable and independently validated workspace package |
+| Restore | staging directories + atomic replacement + durable receipt | keep live DB handles out of replacement |
+| Desktop identity | Tauri child handle/PID + UUID handshake | control only the backend instance this app owns |
+| Product UI | React context/hooks + global utility drawer + operation epochs | cross-route drafts, task activity, Trash, recovery, and rejection of late responses after scope changes |
+
+The implementation stays inside the existing Python 3.11, FastAPI, Pydantic,
+SQLite, React 19, TypeScript 6, Vite 8, Vitest/Testing Library, Rust, and
+Tauri 2 stack. `serde_json` and UUID v4 are direct Rust dependencies for the
+strict desktop handshake; no broker, cloud SDK, or global frontend state
+library is added.
+
+Schema checkpoint: v4 -> v7. v5 adds workspace drafts, durable tasks,
+tombstones, and Trash; v6 separates `restore_failed` from `purge_failed`; v7
+adds the automatic-card per-chunk publication ledger.
+
+### Problems encountered and resolutions
+
+1. **Request-owned background work did not survive process lifetime.**
+   FastAPI background callbacks could leave a domain row in a permanent
+   in-between state and had no generic claim or cancellation lineage. The
+   resolution is persist-first task reservation plus a bounded worker whose
+   state is entirely reconstructable from SQLite.
+2. **A cancellation arriving after publication could make the task history
+   lie.** A handler could commit a Chat answer, Study document, completed video,
+   ready Source index, or automatic-card run, receive a late cancellation
+   before returning, and then be recorded as `canceled`. Domain handlers
+   checkpoint before publication and never call a cancellation-aware progress
+   callback after their commit boundary; a normal handler return can atomically
+   win success from the same `running` or `canceling` claim while retaining the
+   cancellation timestamp for audit. Automatic cards also reconcile a
+   cancellation against the chunk ledger: when every selected chunk is already
+   published, the service returns normally so task success wins.
+3. **Chat retry initially defeated its own idempotency.** Appending a retry
+   suffix to `client_request_id` could duplicate a completed turn if the
+   process died between domain commit and task settlement. Every attempt now
+   reuses the original request identity and replays the committed turn.
+4. **Task tests leaked workers across isolated SQLite databases.** API tests
+   swapped temporary database paths while a cached manager still owned
+   threads. The fixture now waits for idle, shuts down and clears the cached
+   manager before replacing the database.
+5. **Soft delete initially removed the canonical Source projection.** That
+   made a restored Source lose stable citation/index evidence. Tombstoned
+   projections, chunks, and embeddings now survive until explicit purge;
+   user-facing Source reads filter their deleted roots.
+6. **A delete guard without a shared lifecycle boundary had a race.** An
+   enqueue could occur after the guard query but before delete. Conflicting
+   enqueue/retry/delete/restore/purge operations now use one lifecycle gate,
+   and retry revalidates that its course/resource is active.
+7. **Permanent course purge could fail after deleting only part of a
+   subtree.** Blind Trash status updates could then allow restoration of an
+   incomplete course. Trash operations now claim state with CAS, distinguish
+   restore from purge failure, forbid restore once purge begins, and commit
+   a durable phase after each idempotent purge step so retry resumes forward
+   without exposing a partially purged course.
+8. **A database-only or live restore was not a workspace restore.** SQLite
+   paths refer to managed media and Windows prevents safe replacement through
+   open handles. The archive includes managed files, and restore is queued,
+   staged, and applied before the application opens the database.
+9. **Restore readiness and restore success were conflated.** A failed apply
+   could roll back and still expose a healthy API, causing a false success
+   message. Queue/result identity is now durable and the renderer waits for
+   the same restore ID to reach `applied`.
+10. **Clean-install restore assumed an existing database.** The automatic
+    pre-restore safety archive failed when no current DB existed. The restore
+    path now skips that additional snapshot only for a genuinely empty
+    workspace and still validates the imported archive.
+11. **Device persistence failures were initially classified as protected.**
+    `localStorage` can throw a `SecurityError`; a successful no-op mock can
+    also leave no record. Protection now depends on a confirmed device record
+    or server save, and regression tests retain the leave warning while
+    neither exists.
+12. **Restore could replay a draft from the replaced workspace.** Local draft
+    keys originally used only the entity draft ID and preferred a newer
+    device timestamp. A durable workspace generation now namespaces device
+    drafts; a restored workspace never consumes the prior generation.
+13. **Port identity was weaker than process ownership.** A string search in a
+    health response could accept the wrong service or another VCC instance;
+    an exited child handle could remain stale. Health is parsed as exact JSON,
+    a per-spawn token protects ready/quiesce, and the matching termination
+    event clears `{handle, pid, token}` ownership.
+14. **The initial quiesce endpoint returned before running handlers stopped.**
+    `ThreadPoolExecutor.shutdown(wait=False)` cannot stop already running
+    work. Quiesce now stops dispatch, requests cooperative cancellation, waits
+    for manager idle, and returns success only after that condition.
+15. **The host and production bundle remain structurally large.** Reliability
+    adds global orchestration to an already large `App.tsx` and keeps the
+    Vite main-chunk warning. The stage records this honestly; feature slices,
+    a shared API client, route-level splitting, and automated UI journeys are
+    P1.4 work.
+16. **A valid old SQLite WAL could overwrite a newly restored main database.**
+    SQLite `quick_check` can still report `ok` after that replay. Restore and
+    rollback now treat the database as a file family: old `-wal`, `-shm`, and
+    rollback-journal sidecars are transactionally quarantined before the new
+    main file is published, and interrupted rollback resumes from its durable
+    receipt.
+17. **A course purge plan could retain the old workspace's absolute paths
+    after portable restore.** Restore now parses only the versioned,
+    allow-listed course-purge metadata shape, rebases paths from the manifest's
+    source data directory, rejects external or unknown fields before swap, and
+    revalidates containment again before deletion.
+18. **Single video and document purge removed its retry handle before file
+    deletion.** A locked Windows file could leave an orphan, and Source cleanup
+    previously swallowed its `OSError`. File-backed roots now persist
+    `planned -> projection -> database -> artifacts`, retain the Trash item as
+    `purge_failed`, and resume the unfinished artifact phase on retry.
+19. **A process exit could leave Trash permanently claimed.** `restoring` and
+    `purging` were neither terminal nor claimable after restart. Startup now
+    releases those claims in one transaction as `restore_failed` and
+    `purge_failed`, preserves every phase-plan field, and does so before any
+    worker dispatch.
+20. **A root whitelist alone did not prove file ownership.** A structurally
+    valid entity plan could name another file inside `uploads` or `sources`.
+    Entity plan v2 binds video/audio/transcript names to the job ID and Source
+    paths to `<course_id>/<asset_id>.<supported extension>`; restore validates
+    the same shared schema before swapping an imported workspace.
+21. **A course purge plan could claim another course's flat video files.**
+    Course plan v2 moves artifact deletion ahead of destructive row deletion,
+    requires exact managed roots and course Source namespaces, and compares the
+    pending artifact set with the still-present Job/Source records. Only after
+    that file phase is durable may the database subtree be removed.
+22. **Restore generation was published before its irreversible commit
+    fence.** A crash could leave a `swapped` receipt with generation `N+1`,
+    permit rollback, and then report a failed generation `N`. Finalization now
+    first atomically writes a `finalizing` receipt with its commit timestamp;
+    state, result, and receipt-last cleanup are idempotent consequences of that
+    write-ahead fence, and no later startup may roll it back.
+23. **A completed rollback could disappear between cleanup and failure
+    publication.** Removing the pending marker or receipt before persisting the
+    failed result made the next startup either loop on an incomplete marker or
+    silently forget the restore failure. A `rollback_finalizing` write-ahead
+    fence now records the stable failure identity, original generation, error,
+    and completion time immediately after the filesystem rollback. Failure
+    archive/result publication and marker, transaction, and receipt-last
+    cleanup are idempotent, including failures raised inside the original
+    apply process.
+24. **Canonical file names alone did not exclude a second database owner.**
+    A corrupted record could point at another job's otherwise valid
+    `uploads/<job_id>.<ext>` path. Imported workspaces now require canonical
+    Job, transcript, and Source paths and globally unique normalized managed
+    paths. Runtime purge independently scans all remaining Job and Source
+    records immediately before unlinking; a cross-entity or cross-course
+    reference changes the operation to retryable `purge_failed` and preserves
+    the file.
+25. **An older device draft could falsely protect the newest edit.** Merely
+    finding a local-storage key did not prove that the latest serialization
+    succeeded, so a quota or security failure could suppress the leave warning
+    while the newest text existed nowhere durable. The hook now writes and
+    reads back the exact current payload and credits only that payload or the
+    matching server revision.
+26. **Backend restart and renderer lifetime were incorrectly assumed to be
+    identical.** A restore completed after a manual backend restart could
+    change the workspace generation without remounting React, leaving old
+    course state and device drafts alive. The reliability provider polls the
+    exact queued restore identity and reloads on the authoritative generation
+    transition, independent of how the backend restarted.
+27. **A durable reservation could be mistaken for an enqueue failure.**
+    Immediate executor notification originally threw after the task row had
+    committed; callers then marked their Source or automatic-card run failed
+    even though the dispatcher could still execute it. Notification is now
+    best-effort after reservation. Failures before reservation explicitly
+    close the domain row, keep the uploaded Source recoverable, and expose a
+    same-resource requeue path.
+28. **Automatic-card retry could replay already published model output.** A
+    process exit after card insertion but before run settlement caused a full
+    rerun, and title-based deduplication was neither an atomic commit record nor
+    a reliable identity. Schema v7 records each chunk outcome; cards, review
+    items, and the succeeded ledger row commit in one transaction, IDs are
+    deterministic within the run, and retry reconstructs progress before
+    generating only unfinished chunks.
+29. **Course purge could unlink twice across its irreversible boundary.**
+    After the artifact phase had deleted the old files, database cleanup called
+    entity purge helpers that touched the same paths again. If the process
+    crashed and another entity acquired a canonical path before retry, the new
+    file could be deleted. Post-artifact course cleanup is now projection- and
+    records-only, with a crash/rebuild/retry regression test.
+30. **String coercion made corrupted ownership records look valid.** Runtime
+    purge converted arbitrary SQLite values with `str()`, allowing BLOB, empty,
+    relative, non-canonical, or platform-colliding identifiers and paths to
+    evade the intended checks. The ownership scan now validates raw types,
+    canonical namespaces, managed containment, and normalized global
+    uniqueness before any unlink.
+31. **A parent purge could erase the only retry journal for an incomplete
+    child purge.** Once the child database row was gone, the course subtree
+    cleanup could no longer infer that the child's artifact phase had failed.
+    A parent now checks every same-course child Trash journal first and stops
+    until each child has durably reached its artifact boundary; the child
+    handle remains retryable and the parent resumes only afterward.
+32. **Late frontend responses crossed course and resource boundaries.**
+    Cancel, retry, chunk generation, Study generation, Chat settlement, and
+    card-generation responses could arrive after navigation and overwrite the
+    newly selected scope. Each async family now carries an operation epoch plus
+    its course, resource, or task identity; switching scope aborts supported
+    requests and invalidates every older completion before state publication.
+33. **Chunk isolation accidentally converted partial failure into overall
+    success.** The per-chunk loop recorded a failed chunk but swallowed its
+    exception, then unconditionally completed the run and reliable task. A
+    final immediate transaction now derives counters, errors, and status from
+    every selected ledger row. Failed or missing chunks fail the task and keep
+    it retryable; retry preserves the same task payload and run identity while
+    regenerating only unfinished chunks.
+34. **A late executor could downgrade published success.** Failure upsert
+    originally replaced an existing succeeded row, and stale in-memory
+    counters could then overwrite the run despite physical cards already being
+    committed. Succeeded chunk rows are monotonic, one compare-and-swap claim
+    owns an active run attempt, and every progress/final state is reconstructed
+    transactionally from the ledger. Concurrent invocation, stale
+    reconciliation, and final-publication cancellation are regression-tested.
+
+### Verification matrix
+
+The final P0.5 checkpoint was validated from one tree after all audit fixes:
+
+| Area | Coverage | Result |
+| --- | --- | --- |
+| Drafts | local-first save, server debounce, conflict, restore precedence, storage failure, leave warning, workspace generation isolation | Backend draft API: 3 passed; frontend reliability and stale-response checkpoint: 10 files / 57 passed |
+| Durable task store | reservation idempotency, active key, claim fencing, progress/events, cancel, retry, startup recovery | 9 passed |
+| Durable task manager | bounded dispatch, handler outcomes, post-handler cancel fence, quiesce, shutdown, recovery | 9 passed |
+| Workflow integration | video, Source import/index, automatic cards, Chat, Study; course/resource lifecycle validation | 70 passed |
+| Trash | six root types, same-ID restore, Source preservation, CAS/concurrency, failed purge safety, permanent purge | 35 passed |
+| Backup/restore | WAL snapshot, files/manifest, adversarial archives, import, clean install, two-phase finalize/rollback, API status | 58 passed |
+| Frontend reliability | Activity, cancel/retry, Trash/Undo, backup/import/restore, action/refresh error separation, stale polling, responsive drawer | 10 files / 57 passed |
+| Full backend | complete pytest suite | 665 passed, 1 skipped, 1 existing deprecation warning |
+| Full frontend | complete Vitest suite | 24 files / 154 passed |
+| Static frontend | ESLint | Passed |
+| Production frontend | TypeScript + Vite | Passed; existing 576.40 kB main-chunk warning retained for P1.4 |
+| Desktop host | Rust unit tests/check and exact instance/quiesce contract | Format passed; 6 tests passed; check passed |
+| Dependencies | high-severity npm audit | 0 vulnerabilities |
+| Repository | whitespace, diff scope, tracked secret/build/cache review | Passed; no tracked secret-pattern or generated-artifact matches |
+| Browser acceptance | desktop and narrow Sources / Chat / Studio plus Activity/Data & recovery smoke | Passed at 1280x720 and 360x640; backup created; no horizontal overflow or console warnings/errors |
+
+### Known limitations
+
+- Cancellation is cooperative. A native model/transcription call can delay
+  confirmation until control returns to a checkpoint; the UI continues to say
+  `Canceling` during that interval.
+- The durable worker is deliberately single-process and local. It is not a
+  distributed job system, and scaling it to multiple backend processes would
+  require a stronger lease/coordination design.
+- Trash records include a purge-after date, but automatic expiry is not
+  enabled. Permanent purge remains a deliberate user action.
+- Workspace archives are local and unencrypted. They may contain private
+  course material and should be stored accordingly.
+- Full backups can be large because they include managed videos and derived
+  files. Streaming desktop export with a native save destination remains
+  product-polish work; the current validated server archive is the recovery
+  source of truth.
+- If both restore initialization and its transaction rollback fail, the
+  receipt and pre-swap transaction paths are deliberately retained for manual
+  recovery instead of claiming that the workspace is safe.
+- Portable backup and course purge intentionally support the standard managed
+  roots under `VCC_DATA_DIR`. An out-of-tree `VCC_SOURCE_DIR` override fails
+  closed during portability checks and is not a supported portable layout.
+- P0.5 does not publish a new signed desktop installer. The productization
+  branch remains ahead of the public `v0.1.1` release.
+- `App.tsx` and the main JavaScript bundle remain above their P1.4 targets.
+
+### Git checkpoint
+
+Intended commit subject:
+
+```text
+feat(reliability): protect local work and recover long-running tasks
+```
+
+Final checkpoint policy:
+
+```text
+commit identity: the independent commit containing this P0.5 entry
+remote verification: origin/codex/notebooklm-product-core must equal local HEAD
+```
+
+The immutable SHA is reported after commit and push; a commit cannot contain
+its own hash without changing that hash.
+
+### Next gate
+
+P1.1 closes the knowledge-capture loop:
+
+```text
+free notebook note
+-> save a grounded Chat answer as a note
+-> edit and organize the note
+-> promote selected note content into a retrievable Source
+-> cite that Source in later Chat and Studio work
+```
+
+Notes must reuse P0.5 drafts, Trash, backup, and task/lifecycle boundaries
+rather than creating another persistence path.

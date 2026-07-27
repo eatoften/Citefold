@@ -19,6 +19,30 @@ body {
   margin: 0;
 }
 
+.draft-save-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-muted, #64748b);
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+.draft-save-status.sync_failed,
+.draft-save-status.conflict {
+  color: var(--danger, #b45309);
+}
+
+.draft-save-spin {
+  animation: draft-save-spin 0.9s linear infinite;
+}
+
+@keyframes draft-save-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 #root {
   min-height: 100vh;
 }

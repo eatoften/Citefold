@@ -403,6 +403,208 @@ def _add_video_content_fingerprint(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN video_sha256 TEXT")
 
 
+def _add_local_workspace_lifecycle(conn: sqlite3.Connection) -> None:
+    """Add durable drafts, tasks, and recoverable deletion metadata."""
+
+    for table_name in (
+        "courses",
+        "jobs",
+        "source_assets",
+        "knowledge_cards",
+        "learning_documents",
+        "chat_conversations",
+    ):
+        table = conn.execute(
+            """
+            SELECT 1
+            FROM sqlite_master
+            WHERE type = 'table' AND name = ?
+            """,
+            (table_name,),
+        ).fetchone()
+        if table is None:
+            continue
+        columns = {
+            str(row["name"])
+            for row in conn.execute(
+                f"PRAGMA table_info({table_name})"
+            ).fetchall()
+        }
+        if "deleted_at" not in columns:
+            conn.execute(
+                f"ALTER TABLE {table_name} ADD COLUMN deleted_at TEXT"
+            )
+
+    conn.execute(
+        """
+        CREATE TABLE workspace_drafts (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            draft_type TEXT NOT NULL,
+            entity_id TEXT,
+            payload_json TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            base_updated_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CHECK (revision >= 1)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_workspace_drafts_course_updated
+        ON workspace_drafts (course_id, updated_at DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_workspace_drafts_entity
+        ON workspace_drafts (draft_type, entity_id)
+        """
+    )
+
+    # The task schema is isolated from the runtime store so migration imports
+    # do not create a db -> migrations -> store -> db cycle.
+    from .reliable_task_schema import create_reliable_task_tables
+
+    create_reliable_task_tables(conn)
+
+    conn.execute(
+        """
+        CREATE TABLE trash_items (
+            id TEXT PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            course_id TEXT,
+            display_name TEXT NOT NULL,
+            deleted_at TEXT NOT NULL,
+            purge_after TEXT,
+            status TEXT NOT NULL DEFAULT 'trashed',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            restored_at TEXT,
+            UNIQUE(entity_type, entity_id),
+            CHECK (status IN ('trashed', 'restoring', 'purging', 'failed'))
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_trash_items_deleted
+        ON trash_items (deleted_at DESC, id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_trash_items_course
+        ON trash_items (course_id, deleted_at DESC)
+        """
+    )
+
+
+def _strengthen_trash_operation_states(conn: sqlite3.Connection) -> None:
+    """Separate recoverable restore failures from irreversible purge failures."""
+
+    table = conn.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'trash_items'
+        """
+    ).fetchone()
+    if table is None:
+        return
+
+    conn.execute("ALTER TABLE trash_items RENAME TO trash_items_legacy")
+    conn.execute(
+        """
+        CREATE TABLE trash_items (
+            id TEXT PRIMARY KEY,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            course_id TEXT,
+            display_name TEXT NOT NULL,
+            deleted_at TEXT NOT NULL,
+            purge_after TEXT,
+            status TEXT NOT NULL DEFAULT 'trashed',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            restored_at TEXT,
+            UNIQUE(entity_type, entity_id),
+            CHECK (
+                status IN (
+                    'trashed',
+                    'restoring',
+                    'restore_failed',
+                    'purging',
+                    'purge_failed'
+                )
+            )
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO trash_items (
+            id, entity_type, entity_id, course_id, display_name,
+            deleted_at, purge_after, status, metadata_json, restored_at
+        )
+        SELECT
+            id, entity_type, entity_id, course_id, display_name,
+            deleted_at, purge_after,
+            CASE status
+                WHEN 'restoring' THEN 'restore_failed'
+                WHEN 'purging' THEN 'purge_failed'
+                WHEN 'failed' THEN 'purge_failed'
+                ELSE status
+            END,
+            metadata_json, restored_at
+        FROM trash_items_legacy
+        """
+    )
+    conn.execute("DROP TABLE trash_items_legacy")
+    conn.execute(
+        """
+        CREATE INDEX idx_trash_items_deleted
+        ON trash_items (deleted_at DESC, id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_trash_items_course
+        ON trash_items (course_id, deleted_at DESC)
+        """
+    )
+
+
+def _add_card_generation_chunk_ledger(conn: sqlite3.Connection) -> None:
+    """Make automatic card publication resumable at the chunk boundary."""
+
+    conn.execute(
+        """
+        CREATE TABLE card_generation_chunk_results (
+            run_id TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            cards_created INTEGER NOT NULL DEFAULT 0,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, chunk_id),
+            CHECK (status IN ('succeeded', 'failed')),
+            CHECK (chunk_index >= 0),
+            CHECK (cards_created >= 0)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_card_generation_chunk_results_run
+        ON card_generation_chunk_results (run_id, status, chunk_index)
+        """
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version=1,
@@ -423,6 +625,21 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=4,
         name="video_content_fingerprint",
         apply=_add_video_content_fingerprint,
+    ),
+    Migration(
+        version=5,
+        name="local_workspace_lifecycle",
+        apply=_add_local_workspace_lifecycle,
+    ),
+    Migration(
+        version=6,
+        name="strengthen_trash_operation_states",
+        apply=_strengthen_trash_operation_states,
+    ),
+    Migration(
+        version=7,
+        name="card_generation_chunk_ledger",
+        apply=_add_card_generation_chunk_ledger,
     ),
 )
 
@@ -590,6 +807,7 @@ def _backfill_sources(conn: sqlite3.Connection) -> None:
             "transcribing": "processing",
             "completed": "ready",
             "failed": "failed",
+            "canceled": "failed",
         }.get(status, "pending")
         title = (
             row["original_filename"]

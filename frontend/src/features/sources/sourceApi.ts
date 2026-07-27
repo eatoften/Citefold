@@ -4,6 +4,23 @@ import type {
   SourceAssetImportResult,
   SourceIndexResult,
 } from './sourceTypes'
+import {
+  enqueueSourceImport,
+  enqueueSourceIndex,
+  type ReliableTask,
+  type SourceAssetTaskResponse,
+} from '../reliability'
+
+export type SourceImportTaskResult = {
+  import: SourceAssetImportResult
+}
+
+export type SourceIndexTaskResult = {
+  index: SourceIndexResult
+}
+
+export type StagedSourceAsset =
+  SourceAssetImportResult['asset']
 
 export class SourceApiError extends Error {
   readonly status: number
@@ -139,6 +156,18 @@ export function indexCourseSources(
   )
 }
 
+export function startCourseSourceIndexTask(
+  apiBaseUrl: string,
+  courseId: string,
+  sourceIds: string[],
+): Promise<ReliableTask<SourceIndexTaskResult>> {
+  return enqueueSourceIndex(
+    apiBaseUrl,
+    courseId,
+    sourceIds,
+  ) as Promise<ReliableTask<SourceIndexTaskResult>>
+}
+
 export function importCourseSource(
   apiBaseUrl: string,
   courseId: string,
@@ -153,6 +182,18 @@ export function importCourseSource(
       method: 'POST',
       formData,
     },
+  )
+}
+
+export function startCourseSourceImportTask(
+  apiBaseUrl: string,
+  courseId: string,
+  file: File,
+): Promise<SourceAssetTaskResponse<StagedSourceAsset>> {
+  return enqueueSourceImport<StagedSourceAsset>(
+    apiBaseUrl,
+    courseId,
+    file,
   )
 }
 
