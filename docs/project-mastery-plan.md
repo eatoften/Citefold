@@ -255,11 +255,14 @@ The full local regression at `eaf9274` passed 681 backend tests with one skip,
 214 frontend tests, lint, production build, Python compilation, lock checks,
 Cargo formatting/check/tests, and the existing repository gates.
 
-They are not yet on local `main` or in a new public desktop release. At the
-start of the 2026-08-08 G0 session, GitHub connectivity failed during fetch, so
-the validated commit was used to create local branch
-`codex/concept-graph-foundation` without pretending that a merge or push had
-succeeded. Remote state must be rechecked before G0 is marked Published.
+They are now integrated into local and remote `main` at `eaf9274`, but are not
+in a new public desktop release. At the start of the 2026-08-08 G0 session,
+GitHub connectivity failed during fetch, so the validated commit was first used
+to create local branch `codex/concept-graph-foundation` without pretending that
+a merge or push had succeeded. Connectivity later recovered; remote `main` was
+confirmed to be the direct ancestor with divergence `0/7`, then fast-forwarded
+and pushed. The graph documentation branch was also published without rewriting
+its history.
 
 The current Explore graph is still a sparse CardRelation discovery prototype.
 Concept/Evidence/Relation, deterministic tracing, and topological learning paths
@@ -270,7 +273,7 @@ are planned work, not implemented features.
 The accepted sequence is:
 
 ```text
-merge the seven verified commits into main when remote access returns
+seven verified product-core commits integrated into main at eaf9274
 -> establish the graph branch and G0 contract
 -> G1 Concept / Evidence / Relation foundation
 -> G2 one human-reviewed golden course graph

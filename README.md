@@ -88,7 +88,7 @@ Studio
 That checkpoint includes a typed canonical route contract, legacy-link
 migration, one mixed Source catalog, full course Chat with conversation deep
 links, the original five Studio tools, and cross-course request isolation.
-P0.4 is complete on the productization branch but is **not part of the
+P0.4 is complete on `main` but is **not part of the
 published `v0.1.1` desktop release**.
 
 P0.5 completes automatic preservation, recoverable and cancellable processing
@@ -99,8 +99,8 @@ an explicit publish action turns an exact revision into the stable Source
 `note:<note_id>`. Note Sources participate in the same retrieval, citation,
 Trash, reconciliation, and backup/restore contracts as imported material.
 
-These checkpoints are complete on the productization branch but are **not yet
-a public desktop release**. ADR-0008 now places G0-G4 before P1.2: define a
+These checkpoints are now integrated into `main` but are **not yet a public
+desktop release**. ADR-0008 places G0-G4 before P1.2: define a
 canonical Concept/Evidence/Relation model, build one human-reviewed golden
 course graph, implement deterministic traversal and prerequisite ordering, and
 ship stable paths with per-edge evidence. Those G-stage capabilities are a
