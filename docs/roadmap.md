@@ -1,6 +1,6 @@
 # Video Course Cards Roadmap
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 ## Product Direction
 
@@ -47,7 +47,7 @@ commit, and remote push are all complete.
 | P0.5 Reliability | Autosave, recoverable tasks, backup/restore, safe desktop lifecycle | Complete |
 | P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Complete |
 | G0 Graph contract and baseline | Relation semantics, evidence rules, evaluation scope, and non-goals are frozen | In progress |
-| G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | In progress - G1.1 candidates plus G1.2a/G1.2b projection and review lifecycle implemented |
+| G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | In progress - G1.1 candidates plus G1.2a-G1.2c projection, review, and identity lifecycles implemented |
 | G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | Planned |
 | G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | Planned |
 | G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | Planned |
@@ -154,12 +154,20 @@ same transaction, while prerequisite acceptance rejects both existing and
 concurrently proposed cycles. Busy locks return a bounded `503`; unexpected
 persistence errors fail as a safe `500`.
 
-G1.1/G1.2a/G1.2b do **not** satisfy the full G1 gate. Merge/retirement,
-idempotent initial Concept/relation creation, immutable graph publication, and
-the remaining full-G1 release checks are still required. Initial create uses a
-separate contract because it has no prior head revision; before release it
-needs a client request ID, canonical request hash, and stored entity receipt.
-Until then, the project must not claim that every graph write is idempotent.
+G1.2c adds append-only Concept merge and retirement revisions. A merge uses
+compare-and-swap on both source and survivor heads, preserves the source's
+historical aliases/evidence, never silently rewrites the survivor, and
+atomically marks every incident current Relation stale. Current-head redirect
+dependencies permit a star of duplicates around one active survivor while
+forbidding redirect chains and cycles. Merge/retire retries use the same
+course-scoped immutable operation ledger as other revision mutations.
+
+G1.1/G1.2a-G1.2c do **not** satisfy the full G1 gate. Idempotent initial
+Concept/relation creation, immutable graph publication, and the remaining
+full-G1 release checks are still required. Initial create uses a separate
+contract because it has no prior head revision; before release it needs a
+client request ID, canonical request hash, and stored entity receipt. Until
+then, the project must not claim that every graph write is idempotent.
 
 Deliverables:
 

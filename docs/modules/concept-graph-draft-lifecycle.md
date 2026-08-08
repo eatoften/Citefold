@@ -1,7 +1,7 @@
 # Concept Graph Draft Lifecycle
 
 - **Program:** G1.2
-- **Status:** G1.2a and G1.2b implemented; G1.2c pending
+- **Status:** G1.2a-G1.2c implemented and locally verified; G1.3 pending
 - **Depends on:** [G1.1 candidate substrate](concept-graph-substrate.md)
 - **Projection identity:** [G1.2a Source generations](source-projection-generation.md)
 - **Architecture owner:** [ADR-0008](../decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md)
@@ -157,15 +157,18 @@ Different Concepts may share an alias because ambiguity is real and must be
 resolved by context or review rather than a database-wide false constraint.
 
 Merging source Concept `L` into survivor `S` requires both expected revisions,
-same-course active identities, and non-self endpoints. The new `L` revision
-stores the redirect. It does not copy evidence or aliases into `S`, and it does
-not rewrite incident relation endpoints. Every incident relation becomes stale
-atomically. Consolidating evidence into `S` requires a separate candidate
-revision and review.
+same-course active identities, and non-self endpoints. The terminal `L`
+revision stores the redirect while preserving `L`'s review/validity state and
+copying its complete revision-owned aliases and evidence for audit. It never
+copies them into or advances `S`, and it does not rewrite incident relation
+endpoints. Every incident relation becomes stale atomically. Consolidating
+evidence into `S` requires a separate candidate revision and review.
 
-Retirement records no redirect and also stales incident relations. A Concept
-that is still the survivor of another merge cannot retire until the redirect
-dependency is resolved.
+Retirement records no redirect, preserves the source revision snapshot, and
+also stales incident relations. A Concept that is still the survivor of
+another current merge redirect cannot itself merge or retire until the
+dependency is resolved. This forbids redirect chains and cycles while allowing
+many independent source Concepts to merge directly into one active survivor.
 
 ## Read model and failure contract
 
@@ -190,13 +193,15 @@ trusts a cached eligibility flag; G1.3 rechecks the complete snapshot.
 | temporary SQLite write-lock exhaustion | `503` with bounded retry guidance |
 | unexpected persistence failure | safe `500` without SQL or local paths |
 
-### Implemented G1.2b HTTP surface
+### Implemented G1.2 HTTP surface
 
 ```text
 GET   /courses/{course_id}/concepts/{concept_id}/revisions/{revision}
 PATCH /courses/{course_id}/concepts/{concept_id}
 POST  /courses/{course_id}/concepts/{concept_id}/review
 POST  /courses/{course_id}/concepts/{concept_id}/mark-stale
+POST  /courses/{course_id}/concepts/{concept_id}/merge
+POST  /courses/{course_id}/concepts/{concept_id}/retire
 
 GET   /courses/{course_id}/concept-relations/{relation_id}/revisions/{revision}
 PATCH /courses/{course_id}/concept-relations/{relation_id}
@@ -219,17 +224,25 @@ not rewritten.
    incident invalidation for implemented head changes, prerequisite cycle
    guard, concurrency, busy-lock, idempotency, and rollback recovery tests.
 3. **G1.2c normalization integrity:** merge/retirement and reuse of the proven
-   incident-invalidation primitive for those identity transitions.
+   incident-invalidation primitive for those identity transitions, dual-head
+   CAS, replayable receipts, and redirect-dependency protection.
 
 Each slice receives an independent commit and remote CI result. G1.2 is not
-complete until G1.2c passes full compatibility tests and this module is marked
-complete. G1.2b does not implement merge/retirement, immutable publication,
-G2 fixtures/evaluation, G3 paths, G4 UI, or LLM candidate generation.
+an immutable publication layer: G1.3 remains responsible for freezing an
+authoritative graph version. G1.2 does not implement G2 fixtures/evaluation,
+G3 paths, G4 UI, or LLM candidate generation.
 The G1.1 initial Concept/relation create endpoints also remain outside this
 operation ledger: they do not yet accept an idempotent client request ID or
 persist a create receipt. Closing that reliability debt requires a separate
 create hash/entity-receipt contract without `expected_revision`; this slice
-does not retrofit it implicitly.
+does not retrofit it implicitly. Migration v12 reserves `concept_create` and
+`relation_create` ledger kinds only so that later widening does not require
+another table rebuild; no create-receipt behavior is claimed here.
+
+Migration v12 also makes revision-owned Concept/relation revisions, evidence,
+and aliases reject in-place `UPDATE`s at the database boundary. Production
+mutations append child-complete revisions and move stable heads; `DELETE`
+remains available for explicit aggregate cleanup and course deletion.
 
 ## Required adversarial tests
 

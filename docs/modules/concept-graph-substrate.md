@@ -202,6 +202,7 @@ evidence row without its aggregate.
 - list/get reads never cross course boundaries;
 - all pre-existing backend tests remain green.
 
-Focused commands are recorded with the implementation commit. Full G1 later
-adds review/currentness transitions, aliases/merge history, draft CAS,
-prerequisite acyclicity, immutable graph versions, and publication tests.
+Focused commands are recorded with the implementation commit. G1.2 now adds
+review/currentness transitions, aliases/merge history, dual-head draft CAS,
+incident invalidation, and prerequisite acyclicity. G1.3 still owns immutable
+graph versions and publication tests.

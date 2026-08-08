@@ -9,6 +9,8 @@ from .concept_graph import (
     Concept,
     ConceptCreate,
     ConceptPage,
+    ConceptMergeRequest,
+    ConceptRetireRequest,
     ConceptRevisionEdit,
     ConceptRelation,
     ConceptRelationCreate,
@@ -142,6 +144,40 @@ def mark_course_concept_stale(
 ) -> Concept:
     try:
         return concept_graph_service.mark_course_concept_stale(
+            course_id, concept_id, request
+        )
+    except concept_graph_service.ConceptGraphServiceError as exc:
+        _raise_http_error(exc)
+
+
+@router.post(
+    "/courses/{course_id}/concepts/{concept_id}/merge",
+    response_model=Concept,
+)
+def merge_course_concept(
+    course_id: ResourceId,
+    concept_id: ResourceId,
+    request: ConceptMergeRequest,
+) -> Concept:
+    try:
+        return concept_graph_service.merge_course_concept(
+            course_id, concept_id, request
+        )
+    except concept_graph_service.ConceptGraphServiceError as exc:
+        _raise_http_error(exc)
+
+
+@router.post(
+    "/courses/{course_id}/concepts/{concept_id}/retire",
+    response_model=Concept,
+)
+def retire_course_concept(
+    course_id: ResourceId,
+    concept_id: ResourceId,
+    request: ConceptRetireRequest,
+) -> Concept:
+    try:
+        return concept_graph_service.retire_course_concept(
             course_id, concept_id, request
         )
     except concept_graph_service.ConceptGraphServiceError as exc:

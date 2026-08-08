@@ -24,6 +24,11 @@ V11_OBJECTS = {
 
 def _drop_v11(conn: sqlite3.Connection) -> None:
     for trigger in (
+        "concept_revisions_immutable_update",
+        "concept_evidence_immutable_update",
+        "concept_aliases_immutable_update",
+        "concept_relation_revisions_immutable_update",
+        "relation_evidence_immutable_update",
         "concept_graph_operation_immutable_update",
         "concept_graph_operation_result_insert",
         "concept_relation_identity_immutable_update",
@@ -38,11 +43,12 @@ def _drop_v11(conn: sqlite3.Connection) -> None:
     ):
         conn.execute(f"DROP TABLE IF EXISTS {table}")
     for index in (
+        "idx_concept_revisions_merge_target",
         "idx_concept_relations_source_incident",
         "idx_concept_relations_target_incident",
     ):
         conn.execute(f"DROP INDEX IF EXISTS {index}")
-    conn.execute("DELETE FROM schema_migrations WHERE version = 11")
+    conn.execute("DELETE FROM schema_migrations WHERE version IN (11, 12)")
 
 
 def test_v11_clean_schema_has_review_tables_indexes_and_triggers() -> None:
@@ -94,7 +100,7 @@ def test_v10_upgrade_to_v11_is_additive_and_idempotent() -> None:
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
             )
         }
-        completed = apply_migrations(conn)
+        completed = apply_migrations(conn, migrations=MIGRATIONS[:11])
         after = {
             str(row[0])
             for row in conn.execute(
@@ -104,7 +110,7 @@ def test_v10_upgrade_to_v11_is_additive_and_idempotent() -> None:
         assert completed == [11]
         assert before <= after
         assert V11_OBJECTS <= after
-        assert apply_migrations(conn) == []
+        assert apply_migrations(conn, migrations=MIGRATIONS[:11]) == []
 
 
 def test_v11_failure_rolls_back_all_schema_objects() -> None:
@@ -132,7 +138,7 @@ def test_v11_failure_rolls_back_all_schema_objects() -> None:
         assert conn.execute(
             "SELECT COUNT(*) FROM schema_migrations WHERE version = 11"
         ).fetchone()[0] == 0
-        assert apply_migrations(conn) == [11]
+        assert apply_migrations(conn, migrations=MIGRATIONS[:11]) == [11]
 
 
 def test_operation_ledger_rejects_invalid_result_and_is_immutable() -> None:

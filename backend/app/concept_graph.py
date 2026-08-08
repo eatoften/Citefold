@@ -274,6 +274,23 @@ class GraphMarkStaleRequest(GraphMutationRequest):
     pass
 
 
+class ConceptMergeRequest(GraphMutationRequest):
+    survivor_concept_id: str = Field(min_length=1, max_length=200)
+    expected_survivor_revision: int = Field(ge=1)
+
+    @field_validator("survivor_concept_id")
+    @classmethod
+    def clean_survivor_concept_id(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Survivor Concept id is required.")
+        return cleaned
+
+
+class ConceptRetireRequest(GraphMutationRequest):
+    pass
+
+
 class SourceEvidenceSnapshot(BaseModel):
     id: str = Field(min_length=1, max_length=200)
     course_id: str = Field(min_length=1, max_length=200)

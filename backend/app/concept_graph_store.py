@@ -9,6 +9,8 @@ from .concept_graph import (
     Concept,
     ConceptAlias,
     ConceptEvidence,
+    ConceptMergeRequest,
+    ConceptRetireRequest,
     ConceptRevisionEdit,
     ConceptRelation,
     ConceptRelationSummary,
@@ -66,6 +68,10 @@ class GraphReviewTransitionError(ConceptGraphStoreError):
 
 
 class GraphOperationReuseError(ConceptGraphStoreError):
+    pass
+
+
+class GraphMergeDependencyError(ConceptGraphStoreError):
     pass
 
 
@@ -234,10 +240,7 @@ def edit_concept_revision(
             )
         current = _require_current_concept_row(conn, course_id, concept_id)
         _require_expected_revision(current, request.expected_revision)
-        if current["identity_status"] != "active":
-            raise GraphReviewTransitionError(
-                "Only an active Concept can be edited."
-            )
+        _require_active_concept_identity(current, action="edited")
 
         now = utc_now()
         revision = int(current["revision"]) + 1
@@ -325,6 +328,7 @@ def review_concept_revision(
             )
         current = _require_current_concept_row(conn, course_id, concept_id)
         _require_expected_revision(current, request.expected_revision)
+        _require_active_concept_identity(current, action="reviewed")
         if current["review_status"] != "candidate":
             raise GraphReviewTransitionError(
                 "Only a candidate Concept can be reviewed."
@@ -408,6 +412,7 @@ def mark_concept_revision_stale(
             )
         current = _require_current_concept_row(conn, course_id, concept_id)
         _require_expected_revision(current, request.expected_revision)
+        _require_active_concept_identity(current, action="marked stale")
         if current["validity_status"] != "current":
             raise GraphReviewTransitionError(
                 "Only a current Concept revision can be marked stale."
@@ -440,6 +445,155 @@ def mark_concept_revision_stale(
             course_id=course_id,
             operation_id=request.operation_id,
             kind="concept_mark_stale",
+            request_hash=request_hash,
+            actor=request.actor,
+            reason=request.reason,
+            entity_type="concept",
+            entity_id=concept_id,
+            result_revision=revision,
+            created_at=now,
+        )
+        row = _select_concept_revision(conn, course_id, concept_id, revision)
+        assert row is not None
+        return _load_concept(conn, row)
+
+
+def merge_concept_identity(
+    course_id: str,
+    concept_id: str,
+    request: ConceptMergeRequest,
+    request_hash: str,
+) -> Concept:
+    ensure_db()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        replay = _replay_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            request_hash=request_hash,
+            kind="concept_merge",
+            entity_type="concept",
+            entity_id=concept_id,
+        )
+        if replay is not None:
+            return _load_concept_revision_or_raise(
+                conn, course_id, concept_id, replay
+            )
+        source = _require_current_concept_row(conn, course_id, concept_id)
+        _require_expected_revision(source, request.expected_revision)
+        _require_active_concept_identity(source, action="merged")
+        if concept_id == request.survivor_concept_id:
+            raise GraphReviewTransitionError(
+                "A Concept cannot be merged into itself."
+            )
+        survivor = _require_current_concept_row(
+            conn, course_id, request.survivor_concept_id
+        )
+        _require_expected_revision(
+            survivor, request.expected_survivor_revision
+        )
+        _require_active_concept_identity(survivor, action="used as survivor")
+        _require_no_incoming_merge_redirects(conn, course_id, concept_id)
+
+        now = utc_now()
+        revision = int(source["revision"]) + 1
+        concept = _copy_concept_revision(
+            source,
+            revision=revision,
+            identity_status="merged",
+            merged_into_concept_id=request.survivor_concept_id,
+            now=now,
+        )
+        _insert_concept_revision(conn, concept)
+        _copy_concept_children(
+            conn, concept=concept, source_revision=int(source["revision"])
+        )
+        _stale_incident_relations(
+            conn, course_id=course_id, concept_id=concept_id, now=now
+        )
+        _advance_concept_head(
+            conn,
+            course_id,
+            concept_id,
+            request.expected_revision,
+            revision,
+            now,
+        )
+        _record_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            kind="concept_merge",
+            request_hash=request_hash,
+            actor=request.actor,
+            reason=request.reason,
+            entity_type="concept",
+            entity_id=concept_id,
+            result_revision=revision,
+            created_at=now,
+        )
+        row = _select_concept_revision(conn, course_id, concept_id, revision)
+        assert row is not None
+        return _load_concept(conn, row)
+
+
+def retire_concept_identity(
+    course_id: str,
+    concept_id: str,
+    request: ConceptRetireRequest,
+    request_hash: str,
+) -> Concept:
+    ensure_db()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        replay = _replay_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            request_hash=request_hash,
+            kind="concept_retire",
+            entity_type="concept",
+            entity_id=concept_id,
+        )
+        if replay is not None:
+            return _load_concept_revision_or_raise(
+                conn, course_id, concept_id, replay
+            )
+        current = _require_current_concept_row(conn, course_id, concept_id)
+        _require_expected_revision(current, request.expected_revision)
+        _require_active_concept_identity(current, action="retired")
+        _require_no_incoming_merge_redirects(conn, course_id, concept_id)
+
+        now = utc_now()
+        revision = int(current["revision"]) + 1
+        concept = _copy_concept_revision(
+            current,
+            revision=revision,
+            identity_status="retired",
+            merged_into_concept_id=None,
+            now=now,
+        )
+        _insert_concept_revision(conn, concept)
+        _copy_concept_children(
+            conn, concept=concept, source_revision=int(current["revision"])
+        )
+        _stale_incident_relations(
+            conn, course_id=course_id, concept_id=concept_id, now=now
+        )
+        _advance_concept_head(
+            conn,
+            course_id,
+            concept_id,
+            request.expected_revision,
+            revision,
+            now,
+        )
+        _record_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            kind="concept_retire",
             request_hash=request_hash,
             actor=request.actor,
             reason=request.reason,
@@ -1102,6 +1256,40 @@ def _require_expected_revision(row: Row, expected_revision: int) -> None:
     if int(row["revision"]) != expected_revision:
         raise GraphRevisionConflictError(
             "The expected revision is no longer current."
+        )
+
+
+def _require_active_concept_identity(row: Row, *, action: str) -> None:
+    if row["identity_status"] != "active":
+        raise GraphReviewTransitionError(
+            f"Only an active Concept can be {action}."
+        )
+
+
+def _require_no_incoming_merge_redirects(
+    conn: Connection,
+    course_id: str,
+    concept_id: str,
+) -> None:
+    row = conn.execute(
+        """
+        SELECT merged.id
+        FROM concepts AS merged
+        INNER JOIN concept_revisions AS revisions
+            ON revisions.concept_id = merged.id
+           AND revisions.course_id = merged.course_id
+           AND revisions.revision = merged.current_revision
+        WHERE merged.course_id = ?
+          AND revisions.identity_status = 'merged'
+          AND revisions.merged_into_concept_id = ?
+        LIMIT 1
+        """,
+        (course_id, concept_id),
+    ).fetchone()
+    if row is not None:
+        raise GraphMergeDependencyError(
+            "A Concept with incoming merge redirects cannot be merged or "
+            "retired."
         )
 
 

@@ -3050,3 +3050,148 @@ The immutable SHA is reported after the commit is created and pushed.
 G1.2c implements Concept merge/retirement with dual-head CAS, redirect and
 dependency rules, and atomic incident invalidation. The initial-create receipt
 debt must close before immutable G1.3 publication is treated as release-ready.
+
+## G1.2c - Concept identity merge and retirement lifecycle
+
+**Status:** Complete as a bounded G1.2 slice; initial-create reliability and G1.3 remain open
+
+**Date:** 2026-08-09
+
+**Branch:** `codex/concept-graph-foundation`
+
+### User outcome
+
+A reviewer can now normalize duplicate or out-of-scope Concepts without
+overwriting history. Merging one Concept into an active survivor or retiring a
+Concept creates a terminal revision, preserves the source's exact aliases and
+evidence for audit, and makes every incident current Relation stale in the
+same transaction. A retry after a lost response returns the original terminal
+revision rather than applying the decision twice.
+
+This slice does not silently consolidate survivor evidence, rewrite Relation
+endpoints, publish an authoritative graph, or implement traversal. Those are
+separate review and publication decisions.
+
+### Delivered scope
+
+- `POST /courses/{course_id}/concepts/{concept_id}/merge` requires the expected
+  source and survivor revisions plus operation ID, actor, and reason;
+- `POST /courses/{course_id}/concepts/{concept_id}/retire` requires the expected
+  source revision and the same mutation metadata;
+- both operations enter `BEGIN IMMEDIATE`, replay an existing receipt before
+  reading mutable state, then compare-and-swap the relevant stable heads;
+- merge appends a terminal `identity_status=merged` source revision with a
+  same-course survivor redirect, while retirement appends
+  `identity_status=retired` without a redirect;
+- aliases and evidence are copied into the source's terminal revision for a
+  complete historical snapshot, but never copied into or used to advance the
+  survivor;
+- incoming and outgoing current Relations are append-only transitioned to
+  stale; non-incident and already-stale Relations are left untouched;
+- many duplicate Concepts may point directly to one active survivor, but an
+  identity with an incoming current redirect cannot itself merge or retire,
+  which prevents redirect chains and cycles;
+- terminal identities reject later edit, review, stale, merge, or retirement
+  operations, while an identical previously committed operation remains
+  replayable;
+- schema v12 widens the immutable operation ledger for merge/retire and
+  reserves create kinds for the next isolated slice;
+- schema v12 also rejects in-place updates to revision-owned Concept/relation
+  revisions, aliases, and evidence at the database boundary;
+- the v11 ledger rebuild preserves existing receipt bytes and remains fully
+  rollback-safe under the migration savepoint.
+
+### Decisions and technology
+
+Concept identity normalization is modeled as an append-only state transition,
+not a destructive row rewrite. The stable source ID therefore remains a valid
+historical address, and the redirect records identity resolution without
+claiming that the survivor automatically inherits the source's reviewed
+evidence. Consolidation into the survivor must be an explicit later revision
+that passes the normal evidence and review contract.
+
+The redirect invariant deliberately permits a star and forbids a chain. A
+star gives every old identity one hop to an active survivor; forbidding a
+survivor with incoming redirects from later merging or retiring avoids
+recursive resolution, path compression, and ambiguous deletion behavior in
+the first reliable implementation. SQLite's serialized writer boundary makes
+opposite merges and merge-versus-retire races deterministic: at most one
+transition can validate the original heads.
+
+Revision-owned tables use `BEFORE UPDATE` abort triggers. `DELETE` is retained
+for explicit aggregate cleanup and course purge, so immutability does not turn
+normal workspace deletion into an impossible operation. A dedicated regression
+test verifies cleanup with a live merge redirect and clean foreign keys.
+
+Migration v12 rebuilds only `concept_graph_operations` because SQLite cannot
+widen a table `CHECK` constraint in place. It copies every v11 column directly,
+recreates receipt validation and immutability guards, and reserves
+`concept_create` / `relation_create` kinds without claiming that initial-create
+idempotency is already implemented.
+
+### Problems encountered and resolutions
+
+- The first dependency failure was classified as an invalid transition and
+  would have returned `422`. A dedicated merge-dependency error now maps the
+  concurrent/state conflict to `409`.
+- The first self-merge check ran before source lookup, so a missing path ID
+  equal to the submitted survivor ID returned `422`. Source lookup now wins
+  and preserves the documented `404` boundary for missing entities.
+- The first happy-path test covered only an outgoing Relation. The final test
+  proves both endpoint directions, a non-incident edge, and an already-stale
+  edge, matching the store's `source OR target` invalidation query.
+- Merge rollback coverage initially stood in for retirement because both use
+  the same transaction primitive. A symmetric fault-injection test now proves
+  that retirement also rolls back the terminal revision, incident Relation
+  revisions, stable heads, and receipt.
+- A concurrency test initially treated only `409` as a legitimate loser.
+  Depending on serialization order, endpoint validation can instead return a
+  safe `422`; the final assertion tests the invariant that the edge is stale
+  and unpublishable rather than overfitting one scheduling-dependent status.
+
+### Verification
+
+- independent adversarial review: no P0/P1 findings; all reported P2 items
+  were closed before the checkpoint;
+- focused identity/review/migration suite: **32 passed**;
+- concurrency race tests repeated five times: passed;
+- full backend final-tree result: **778 passed, 3 skipped**;
+- full frontend: **27 files, 214 tests passed**, plus ESLint and production
+  TypeScript/Vite build;
+- Python compilation, `uv lock --check`, SQLite `foreign_key_check`, SQLite
+  `quick_check`, and `git diff --check`: passed.
+
+The three backend skips remain environment-dependent path/symlink cases. The
+frontend build retains the already documented 588.23 kB main-chunk warning;
+this backend lifecycle slice did not increase the bundle.
+
+### Known debt and claim boundary
+
+Initial Concept/relation POST requests still lack client-provided operation
+metadata and stored create receipts. The v12 ledger accepts those kind labels
+only as a schema reservation. Until G1.2d lands, the project may claim
+idempotent graph **revision and identity transitions**, not idempotent graph
+creation.
+
+The graph store has grown beyond 2,500 lines. G1.3 publication should use a
+separate publication module/store behind the existing graph read boundary
+rather than extending this mutation file indefinitely. Incident stale
+revisions remain causally inferable from the root identity operation but do not
+yet store an explicit cause ID.
+
+### Git checkpoint
+
+Independent commit subject:
+
+```text
+feat(graph): add concept identity lifecycle
+```
+
+The immutable SHA is reported after the commit is created and pushed.
+
+### Next gate
+
+G1.2d makes initial Concept and Relation creation operation-ID based,
+transactional, and replayable without weakening the existing request-hash
+contract. Only after that reliability debt closes does G1.3 freeze immutable,
+content-hashed graph versions for deterministic path consumers.

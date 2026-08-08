@@ -12,6 +12,8 @@ from .concept_graph import (
     Concept,
     ConceptCreate,
     ConceptPage,
+    ConceptMergeRequest,
+    ConceptRetireRequest,
     ConceptRevisionEdit,
     ConceptRelation,
     ConceptRelationCreate,
@@ -33,6 +35,7 @@ from .concept_graph_store import (
     RelationEndpointNotFoundError,
     GraphEntityNotFoundError,
     GraphEvidenceStaleError,
+    GraphMergeDependencyError,
     GraphOperationReuseError,
     GraphReviewTransitionError,
     GraphRevisionConflictError,
@@ -48,6 +51,8 @@ from .concept_graph_store import (
     list_concept_summaries_for_course,
     list_relation_summaries_for_course,
     mark_concept_revision_stale,
+    merge_concept_identity,
+    retire_concept_identity,
     mark_relation_revision_stale,
     review_concept_revision,
     review_relation_revision,
@@ -359,6 +364,54 @@ def mark_course_concept_stale(
     )
 
 
+def merge_course_concept(
+    course_id: str,
+    concept_id: str,
+    request: ConceptMergeRequest,
+) -> Concept:
+    course = _require_course(course_id)
+    return _run_mutation(
+        lambda: merge_concept_identity(
+            course.id,
+            concept_id,
+            request,
+            _mutation_hash(
+                course_id=course.id,
+                entity_type="concept",
+                entity_id=concept_id,
+                kind="concept_merge",
+                path="/courses/{course_id}/concepts/{concept_id}/merge",
+                request=request,
+            ),
+        ),
+        entity_type="concept",
+    )
+
+
+def retire_course_concept(
+    course_id: str,
+    concept_id: str,
+    request: ConceptRetireRequest,
+) -> Concept:
+    course = _require_course(course_id)
+    return _run_mutation(
+        lambda: retire_concept_identity(
+            course.id,
+            concept_id,
+            request,
+            _mutation_hash(
+                course_id=course.id,
+                entity_type="concept",
+                entity_id=concept_id,
+                kind="concept_retire",
+                path="/courses/{course_id}/concepts/{concept_id}/retire",
+                request=request,
+            ),
+        ),
+        entity_type="concept",
+    )
+
+
 def edit_course_relation(
     course_id: str,
     relation_id: str,
@@ -468,6 +521,7 @@ def _run_mutation(
         GraphOperationReuseError,
         GraphRevisionConflictError,
         GraphEvidenceStaleError,
+        GraphMergeDependencyError,
         PrerequisiteCycleError,
     ) as exc:
         raise ConceptGraphConflictError(str(exc)) from exc

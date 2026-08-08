@@ -1236,6 +1236,68 @@ def _add_source_projection_generation(conn: sqlite3.Connection) -> None:
     )
 
 
+def _create_concept_graph_operation_guards(
+    conn: sqlite3.Connection,
+) -> None:
+    conn.execute(
+        """
+        CREATE INDEX idx_concept_graph_operations_entity
+        ON concept_graph_operations (
+            course_id, entity_type, entity_id, result_revision
+        )
+        """
+    )
+    operation_result_contract = """
+        json_valid(NEW.result_json) != 1
+        OR json_type(NEW.result_json) != 'object'
+        OR json_type(NEW.result_json, '$.entity_type') != 'text'
+        OR json_type(NEW.result_json, '$.entity_id') != 'text'
+        OR json_type(NEW.result_json, '$.revision') != 'integer'
+        OR json_extract(NEW.result_json, '$.entity_type') IS NOT NEW.entity_type
+        OR json_extract(NEW.result_json, '$.entity_id') IS NOT NEW.entity_id
+        OR json_extract(NEW.result_json, '$.revision') IS NOT NEW.result_revision
+        OR (SELECT COUNT(*) FROM json_each(NEW.result_json)) != 3
+        OR (
+            NEW.entity_type = 'concept'
+            AND NOT EXISTS (
+                SELECT 1 FROM concept_revisions
+                WHERE concept_revisions.course_id = NEW.course_id
+                  AND concept_revisions.concept_id = NEW.entity_id
+                  AND concept_revisions.revision = NEW.result_revision
+            )
+        )
+        OR
+        (
+            NEW.entity_type = 'relation'
+            AND NOT EXISTS (
+                SELECT 1 FROM concept_relation_revisions
+                WHERE concept_relation_revisions.course_id = NEW.course_id
+                  AND concept_relation_revisions.relation_id = NEW.entity_id
+                  AND concept_relation_revisions.revision = NEW.result_revision
+            )
+        )
+    """
+    conn.execute(
+        f"""
+        CREATE TRIGGER concept_graph_operation_result_insert
+        BEFORE INSERT ON concept_graph_operations
+        WHEN {operation_result_contract}
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid Concept graph operation result');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER concept_graph_operation_immutable_update
+        BEFORE UPDATE ON concept_graph_operations
+        BEGIN
+            SELECT RAISE(ABORT, 'Concept graph operation is immutable');
+        END
+        """
+    )
+
+
 def _add_concept_graph_review_lifecycle(
     conn: sqlite3.Connection,
 ) -> None:
@@ -1409,63 +1471,7 @@ def _add_concept_graph_review_lifecycle(
         )
         """
     )
-    conn.execute(
-        """
-        CREATE INDEX idx_concept_graph_operations_entity
-        ON concept_graph_operations (
-            course_id, entity_type, entity_id, result_revision
-        )
-        """
-    )
-    operation_result_contract = """
-        json_valid(NEW.result_json) != 1
-        OR json_type(NEW.result_json) != 'object'
-        OR json_type(NEW.result_json, '$.entity_type') != 'text'
-        OR json_type(NEW.result_json, '$.entity_id') != 'text'
-        OR json_type(NEW.result_json, '$.revision') != 'integer'
-        OR json_extract(NEW.result_json, '$.entity_type') IS NOT NEW.entity_type
-        OR json_extract(NEW.result_json, '$.entity_id') IS NOT NEW.entity_id
-        OR json_extract(NEW.result_json, '$.revision') IS NOT NEW.result_revision
-        OR (SELECT COUNT(*) FROM json_each(NEW.result_json)) != 3
-        OR (
-            NEW.entity_type = 'concept'
-            AND NOT EXISTS (
-                SELECT 1 FROM concept_revisions
-                WHERE concept_revisions.course_id = NEW.course_id
-                  AND concept_revisions.concept_id = NEW.entity_id
-                  AND concept_revisions.revision = NEW.result_revision
-            )
-        )
-        OR
-        (
-            NEW.entity_type = 'relation'
-            AND NOT EXISTS (
-                SELECT 1 FROM concept_relation_revisions
-                WHERE concept_relation_revisions.course_id = NEW.course_id
-                  AND concept_relation_revisions.relation_id = NEW.entity_id
-                  AND concept_relation_revisions.revision = NEW.result_revision
-            )
-        )
-    """
-    conn.execute(
-        f"""
-        CREATE TRIGGER concept_graph_operation_result_insert
-        BEFORE INSERT ON concept_graph_operations
-        WHEN {operation_result_contract}
-        BEGIN
-            SELECT RAISE(ABORT, 'invalid Concept graph operation result');
-        END
-        """
-    )
-    conn.execute(
-        """
-        CREATE TRIGGER concept_graph_operation_immutable_update
-        BEFORE UPDATE ON concept_graph_operations
-        BEGIN
-            SELECT RAISE(ABORT, 'Concept graph operation is immutable');
-        END
-        """
-    )
+    _create_concept_graph_operation_guards(conn)
     conn.execute(
         """
         CREATE INDEX idx_concept_relations_source_incident
@@ -1489,6 +1495,110 @@ def _add_concept_graph_review_lifecycle(
         END
         """
     )
+
+
+def _add_concept_graph_identity_lifecycle(
+    conn: sqlite3.Connection,
+) -> None:
+    # SQLite cannot widen a CHECK constraint in place. Rebuild only the
+    # operation ledger, preserving every immutable v11 receipt byte-for-byte.
+    conn.execute("DROP TRIGGER concept_graph_operation_immutable_update")
+    conn.execute("DROP TRIGGER concept_graph_operation_result_insert")
+    conn.execute("DROP INDEX idx_concept_graph_operations_entity")
+    conn.execute(
+        "ALTER TABLE concept_graph_operations "
+        "RENAME TO concept_graph_operations_v11"
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_graph_operations (
+            course_id TEXT NOT NULL,
+            operation_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            result_revision INTEGER NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (course_id, operation_id),
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (length(operation_id) BETWEEN 1 AND 100),
+            CHECK (kind IN (
+                'concept_create', 'concept_edit', 'concept_review',
+                'concept_mark_stale', 'concept_merge', 'concept_retire',
+                'relation_create', 'relation_edit', 'relation_review',
+                'relation_mark_stale'
+            )),
+            CHECK (length(request_hash) = 64),
+            CHECK (request_hash NOT GLOB '*[^0-9a-f]*'),
+            CHECK (length(actor) BETWEEN 1 AND 200),
+            CHECK (trim(actor) != ''),
+            CHECK (length(reason) BETWEEN 1 AND 4000),
+            CHECK (trim(reason) != ''),
+            CHECK (entity_type IN ('concept', 'relation')),
+            CHECK (
+                (entity_type = 'concept' AND kind IN (
+                    'concept_create', 'concept_edit', 'concept_review',
+                    'concept_mark_stale', 'concept_merge', 'concept_retire'
+                ))
+                OR
+                (entity_type = 'relation' AND kind IN (
+                    'relation_create', 'relation_edit', 'relation_review',
+                    'relation_mark_stale'
+                ))
+            ),
+            CHECK (length(entity_id) BETWEEN 1 AND 200),
+            CHECK (result_revision >= 1),
+            CHECK (json_valid(result_json)),
+            CHECK (length(result_json) BETWEEN 2 AND 4096)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO concept_graph_operations (
+            course_id, operation_id, kind, request_hash, actor, reason,
+            entity_type, entity_id, result_revision, result_json, created_at
+        )
+        SELECT course_id, operation_id, kind, request_hash, actor, reason,
+               entity_type, entity_id, result_revision, result_json,
+               created_at
+        FROM concept_graph_operations_v11
+        """
+    )
+    conn.execute("DROP TABLE concept_graph_operations_v11")
+    _create_concept_graph_operation_guards(conn)
+    conn.execute(
+        """
+        CREATE INDEX idx_concept_revisions_merge_target
+        ON concept_revisions (
+            course_id, merged_into_concept_id, concept_id, revision
+        )
+        WHERE merged_into_concept_id IS NOT NULL
+        """
+    )
+
+    immutable_revision_tables = (
+        ("concept_revisions", "concept revision"),
+        ("concept_evidence", "Concept evidence"),
+        ("concept_aliases", "Concept alias"),
+        ("concept_relation_revisions", "relation revision"),
+        ("relation_evidence", "relation evidence"),
+    )
+    for table, label in immutable_revision_tables:
+        conn.execute(
+            f"""
+            CREATE TRIGGER {table}_immutable_update
+            BEFORE UPDATE ON {table}
+            BEGIN
+                SELECT RAISE(ABORT, '{label} is immutable');
+            END
+            """
+        )
 
 
 MIGRATIONS: tuple[Migration, ...] = (
@@ -1546,6 +1656,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=11,
         name="concept_graph_review_lifecycle",
         apply=_add_concept_graph_review_lifecycle,
+    ),
+    Migration(
+        version=12,
+        name="concept_graph_identity_lifecycle",
+        apply=_add_concept_graph_identity_lifecycle,
     ),
 )
 
