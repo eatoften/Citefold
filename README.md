@@ -114,6 +114,93 @@ sparse CardRelation discovery baseline. See the
 [append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.
 
+## Target architecture: one evidence backbone, two consumers
+
+> **Planned G1-G4 architecture, not a current feature claim.** The existing
+> Source-to-Chat path already implements much of the evidence backbone. The
+> current automatic Card pipeline still reads video `TranscriptChunk` objects
+> directly, and Explore still renders a Card-to-Card `CardRelation` graph.
+
+Every imported material enters through a modality-specific adapter and is
+normalized into the canonical `CourseSource` / `CourseSourceChunk` / typed
+`Locator` contract. Chat and Understanding are sibling consumers of that
+evidence layer: Chat retrieves original evidence directly, while Understanding
+proposes structured semantic artifacts. Cards are learning outputs, not graph
+truth, and no model proposal is published as knowledge without evidence
+grounding and explicit validation.
+
+```mermaid
+flowchart TD
+    A["Original Source<br/>Video / PDF / PPTX / DOCX / Note"]
+    B["CourseSource<br/>canonical identity and processing state"]
+    C["Modality adapter<br/>ASR / page / slide / paragraph / OCR"]
+    D["CourseSourceChunk + typed Locator<br/>canonical evidence layer"]
+
+    E["Index / Retrieval"]
+    F["Grounded Chat"]
+    G["Sentence citation"]
+
+    H["Understanding pipeline"]
+    I["Concept / Claim / Relation candidates<br/>optional Card drafts"]
+    J["Grounding + validation + human review"]
+    K["Published Concept / Evidence / Relation graph"]
+    L["Deterministic paths<br/>BFS / relation tracing / topological layers"]
+    M["Studio artifacts<br/>Cards / Quiz / Study Guide"]
+
+    A --> B
+    B --> C
+    C --> D
+
+    D --> E
+    E --> F
+    F --> G
+    G --> D
+
+    D --> H
+    H --> I
+    I --> J
+    J --> K
+    K --> L
+    K --> M
+    D --> M
+```
+
+The architecture preserves three different responsibilities:
+
+| Layer | Authority | Responsibility |
+| --- | --- | --- |
+| Evidence | original Source plus revision-bound Chunk and Locator projections | preserve searchable text and a deterministic route back to the material |
+| Semantics | reviewed Concepts, Claims, Relations, and their evidence links | represent stable meaning and justified structure without replacing the Source |
+| Learning products | Cards, quizzes, guides, maps, and paths | present evidence and semantics for a learning task; remain regenerable artifacts |
+
+The implementation migration is additive:
+
+1. G1 introduces separate Concept, ConceptEvidence, Relation, and
+   RelationEvidence storage without renaming or deleting current Cards.
+2. G2 makes Understanding consume canonical `CourseSourceChunk` inputs across
+   modalities, records revision/hash/Locator provenance, and publishes only
+   grounded reviewed candidates. The legacy video Card path remains available
+   until compatibility and backfill checks pass.
+3. G3 builds deterministic traversal over accepted, current graph versions;
+   model output may propose candidates but cannot decide path correctness.
+4. G4 replaces the CardRelation-only discovery experience with stable Concept
+   paths and per-edge evidence navigation, then measures quality and migration
+   completeness before retiring legacy behavior.
+
+This boundary is the architecture invariant for subsequent work:
+
+```text
+modality-specific extraction -> canonical evidence chunks
+canonical evidence chunks    -> direct retrieval and grounded Chat
+canonical evidence chunks    -> model-assisted semantic candidates
+grounded + validated review  -> published Concept graph
+Concept graph + evidence     -> paths and learning artifacts
+```
+
+See [ADR-0008](docs/decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md)
+and the [graph annotation protocol](docs/graph-annotation-protocol.md) for the
+identity, evidence, review, validity, versioning, and transaction contracts.
+
 ## Results
 
 | Experiment | Data | Main result | Status |
