@@ -89,7 +89,7 @@ The project has three honest resume states:
 
 | State | Allowed claim |
 | --- | --- |
-| Portfolio in progress | The current Source-first notebook, Grounded Chat, citations, Notes, and reliability foundation may be listed as active development; G1-G4 must be described as planned |
+| Portfolio in progress | The Source-first notebook, Grounded Chat, citations, Notes, reliability foundation, and G1 Concept-graph substrate may be listed as implemented; G0.2 remains in progress and G2-G4 must be described as planned |
 | SDE flagship ready | The product, graph program, critical polish/hardening, release, measurements, and maintainer ownership gates below all pass |
 | Applied-MLE flagship ready | The SDE flagship gates pass and MLE-E1 adds a frozen evaluation set, baselines, ablations, metrics, latency, and error analysis |
 
@@ -119,10 +119,11 @@ a public artifact, test, commit, measurement, or video timestamp in the demo.
 
 Current checkpoint: the P0/P1.1 foundation is strong and G1 now has an
 immutable authority boundary, but the final flagship gate is **not yet
-passed**. G0.2 and G2-G4, critical product finish, the next public release, and
-maintainer mastery remain.
+passed**. G0.2a has made the evaluation protocol executable and fail closed;
+the real CS336 Source-slice freeze, G2-G4, critical product finish, the next
+public release, and maintainer mastery remain.
 The visible maintainability baseline also includes a 5,169-line `App.tsx`, a
-3,803-line `main.py`, a tag/manual-only Windows release workflow, an empty
+3,809-line `main.py`, a tag/manual-only Windows release workflow, an empty
 backend README, and an unchanged Vite-template frontend README. These are
 recorded debts, not hidden from the portfolio plan.
 
@@ -158,8 +159,10 @@ finished flagship, also produce:
 - frozen P1.2/P1.3/P1.4 scope sheets that map every required journey or debt to
   an owner module, acceptance command, and retained artifact;
 - for MLE claims, a sealed test manifest and label hash created before the final
-  run, an independent review record, pinned dependency/model/runner identity,
-  numeric tolerances, raw run outputs, and an error-analysis ledger;
+  run, a prediction-blind delayed human review record, pinned
+  dependency/model/runner identity, numeric tolerances, raw run outputs, and an
+  error-analysis ledger; solo review is reported as temporal intra-rater, while
+  inter-rater review is claimed only when a real second human participates;
 - a lightweight security/release review covering import limits, path trust,
   local API/process boundaries, dependency/secrets checks, model-output
   validation, binary provenance, and the tests that enforce the chosen limits.
@@ -361,9 +364,11 @@ confirmed to be the direct ancestor with divergence `0/7`, then fast-forwarded
 and pushed. The graph documentation branch was also published without rewriting
 its history.
 
-The current Explore graph is still a sparse CardRelation discovery prototype.
-Concept/Evidence/Relation, deterministic tracing, and topological learning paths
-are planned work, not implemented features.
+The visible Explore graph is still a sparse CardRelation discovery prototype.
+Behind it, G1 has implemented the Concept/Alias/Evidence/Relation lifecycle,
+current-evidence enforcement, and immutable graph publication boundary.
+Automatic Understanding, the G2 human gold fixture, deterministic tracing,
+topological learning paths, and the G4 evidence-first UI remain planned work.
 
 ## Delivery Sequence
 

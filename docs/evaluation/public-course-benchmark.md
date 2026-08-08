@@ -1,6 +1,7 @@
 # Public Course Benchmark Contract
 
-- **Status:** G0 protocol draft; no held-out result has been opened
+- **Status:** G0.2a infrastructure implemented; CS336 instance draft; no
+  held-out result has been opened
 - **Date registered:** 2026-08-08
 - **Decision:** evaluate the unified Evidence/Understanding architecture on
   pinned public course materials without assuming that public access grants
@@ -39,10 +40,18 @@ The eight registered PDFs are lectures 3 (architecture), 4 (MoEs), 5 (GPUs),
 | --- | --- | --- |
 | authoring | 3, 5, 9, 15 | schema, annotation-guide, and runner development |
 | development | 4, 7 | prompt, threshold, and error-taxonomy calibration |
-| sealed transfer | 11, 16 | one final model/threshold evaluation after freeze |
+| sealed transfer | 11, 16 | one diagnostic transfer run after all later authorities freeze |
 
 Lecture 3 is the first golden graph slice, targeting 12-20 Concepts and 20-35
 adjudicated relations.
+
+The two currently registered sealed lectures are fewer than the protocol's
+minimum five independent lecture clusters for confirmatory confidence
+intervals. The current protocol therefore registers only a diagnostic transfer
+claim boundary; a future run-bundle runner must enforce actual sample/cluster
+eligibility. Before any confirmatory claim, register a new protocol with at
+least five independent sealed lecture clusters and complete the lifecycle
+below before opening any prediction or result.
 
 Even with the repository license, this project does not vendor the PDFs by
 default because individual slides may reproduce third-party paper figures or
@@ -97,12 +106,21 @@ license SPDX/status and license URL
 redistribution policy and acquisition safety limits
 ```
 
-The independent evaluation protocol manifest must own selected page/slide
-ranges, exclusions, parser version, chunker version, Source/Chunk artifact
-hashes, label lineage, prompt/model identity, and runner identity. That strict
-G0.2 protocol loader is **pending**; until it exists and is frozen, no sealed or
-resume-quality benchmark result may be claimed. The two manifests together,
-not either one alone, form the reproducibility contract.
+The independent evaluation protocol owns selected page/slide ranges,
+exclusions, parser version, chunker version, semantic Source/Chunk artifact
+hashes, metric semantics, and claim boundaries. Its strict G0.2a loader,
+canonical sidecar contract, and no-overwrite freeze authority are implemented;
+the CS336 Lecture 3 instance remains **draft** until its exact Source slice is
+chosen and generated. The acquisition `ManifestAuthority` is the upstream
+byte/rights prerequisite, not a fifth downstream evaluation authority. The
+four downstream authorities are (1) the protocol definition plus Source-slice
+freeze, (2) a partition-bound `GoldBundleSeal`, (3) the
+automatic-proposal/Chat run family consisting of a pre-annotation `RunSpecSeal`
+and later sealed `PredictionBundle`/`ResultBundle` artifacts that reference it,
+and (4) the future append-only access ledger. Until all required authorities
+exist for a run, no sealed or resume-quality benchmark result may be claimed.
+The acquisition and evaluation artifacts together, not either one alone, form
+the Source-slice reproducibility contract.
 
 The downloader uses HTTPS and redirect allowlists, count/per-file/aggregate
 limits, socket timeout plus a monotonic whole-asset deadline, exact content
@@ -112,9 +130,10 @@ updates a manifest. Evaluation runners must consume exact registered asset IDs,
 never recursively glob the download root.
 
 A verified hash proves byte identity, not PDF safety. Downstream parsers must
-still treat PDFs as untrusted and enforce resource/feature limits. No-overwrite
-hard-link publication is atomic but not crash-durable; an abrupt crash may
-leave a hidden `.part` file for later quarantine. Gold artifacts contain only
+still treat PDFs as untrusted and enforce resource/feature limits. The
+acquisition downloader's no-overwrite hard-link publication is atomic but not
+power-loss durable; an abrupt stop may leave a hidden `.part` file for later
+quarantine. Gold artifacts contain only
 short maintainer-authored labels, exact evidence spans/hashes, and structured
 contracts rather than slide bodies.
 
@@ -125,14 +144,17 @@ contracts rather than slide bodies.
 | authoring | develop schemas, examples, and runner behavior | yes; never reported as held out |
 | development | calibrate prompts, thresholds, and error categories | yes; every change is logged |
 | golden graph | delayed two-pass annotation and deterministic path fixture | labels freeze before path evaluation |
-| sealed transfer | final extraction and Chat measurement | no; open once for final evaluation after selection and runner/targets freeze |
+| sealed transfer | diagnostic extraction and Chat transfer measurement in v1 | no; follow the sealed lifecycle below and open predictions/results once |
 | external robustness | domain/modality transfer without redistribution | no flagship claim if others cannot reproduce the local source |
 
 No item may cross partitions through duplicated text, derived Cards,
-paraphrased questions, or reused labels. Before sealed execution, freeze the
-source and label manifests, annotation schema, prompt/model identity, chunker,
-index, runner commit, seeds, thresholds, and numeric tolerances. A changed
-protocol creates a new benchmark version instead of silently rerunning v1.
+paraphrased questions, or reused labels. In particular, the Lecture 3
+authoring gold may not serve as sealed-transfer gold; every sealed-transfer
+partition needs its own partition-bound `GoldBundleSeal`. Before annotation
+opens, the future implementation must seal the Source/protocol inputs and a
+`RunSpecSeal` containing prompt/model identity, chunker, index, runner commit,
+seeds, thresholds, and numeric tolerances. A changed protocol creates a new
+benchmark version instead of silently rerunning v1.
 
 `R_gold` is annotated without showing system proposals: every pair in the
 frozen `C_gold` inventory receives none or one/more typed/directed judgments.
@@ -191,11 +213,16 @@ These initial gates are fixed before any sealed result is viewed:
 | path API P95 at 10,000 nodes | at most `1,000 ms`, excluding first materialization |
 
 These numerical quality gates are registration targets, not active pass
-claims. G0.2 must freeze and validate the evaluation bundle and the minimum
-sample/interval rules below before any sealed run. The four-question
-counterfactual fixture is excluded from every minimum.
+claims. G0.2a registers the rule registry and Source-slice contract, including
+the minimum sample/interval rules below. G2 later creates a partition-bound
+`GoldBundleSeal`; the automatic-proposal/Chat run family separately requires a
+pre-annotation `RunSpecSeal` and sealed `PredictionBundle`/`ResultBundle`
+artifacts that reference it. A future access-ledger implementation must record
+sealed opening and reproduction events. No complete evaluation authority
+exists until those separate artifacts exist. The four-question counterfactual
+fixture is excluded from every minimum.
 
-### Minimum samples and scoring rules to freeze in G0.2
+### Minimum samples and scoring rules registered in G0.2
 
 The v1 evaluation protocol may increase these values before opening sealed
 data, but may not reduce them afterward:
@@ -224,7 +251,8 @@ data, but may not reduce them afterward:
   share one lecture. Every statistical gate reports a 95% interval. A pass
   requires both its registered point threshold and the separately frozen
   lower-confidence-bound floor; if sample size cannot support the registered
-  interval, the result is diagnostic rather than confirmatory.
+  interval, the result is diagnostic rather than confirmatory. The current two
+  sealed-transfer lectures cannot satisfy the five-cluster minimum.
 
 Development results may cause a documented v2 target proposal, but v1 targets
 are not moved to rescue a sealed result. Low proposal quality does not negate
@@ -244,12 +272,15 @@ Registered comparisons are:
 - ungrounded proposal vs evidence-bound candidate;
 - deterministic BFS/Kahn baseline vs evidence/constraint-aware path serving.
 
-Report the G0.2-frozen 95% intervals and results by question/relation type. At
-least one negative or rejected ablation remains in the final report.
+Report the G0.2a-registered 95% intervals only from a later sealed
+`ResultBundle` and only when the future runner's sample/cluster eligibility
+checks pass. Always report results by question/relation type; at least one
+negative or rejected ablation remains in the final report.
 
 ## Required outputs
 
-Each run emits raw machine-readable results and a concise report containing:
+Each future completed run must emit raw machine-readable results and a concise
+report containing:
 
 - manifest, label, environment, dependency, model, prompt, and artifact hashes;
 - exact formulas, matching rules, tolerances, and zero-denominator policy;
@@ -260,6 +291,26 @@ Each run emits raw machine-readable results and a concise report containing:
 - baseline, ablation, confidence interval, negative result, and limitations;
 - a claim ledger mapping every README/resume statement to its evidence.
 
-The sealed test is opened once for final evaluation after selection and
-protocol freeze. Later executions are explicitly labeled reproductions, not
-new tuning opportunities.
+“Open once” refers to predictions/outcomes, not to a human annotator being
+forbidden to read the Source. The required sealed-transfer lifecycle is:
+
+```text
+RunSpecSeal
+-> source_annotation_open (human sees Source; predictions unavailable)
+-> transfer-specific GoldBundleSeal
+-> sealed PredictionBundle / ResultBundle referencing RunSpecSeal
+-> prediction_evaluation_open (once)
+-> explicitly labeled reproduction
+```
+
+`RunSpecSeal` is an artifact frozen before annotation opens. `GoldBundleSeal`
+is the immutable, partition-specific gold artifact; `gold_sealed` is the future
+ledger event that records that artifact, not another name for the artifact.
+The future access-ledger implementation must reject prediction/result opening
+before the transfer-specific `GoldBundleSeal` and must reject a second final
+opening.
+Later executions must use the already sealed artifacts and be explicitly
+labeled reproductions, not new tuning opportunities. In this contract, held
+out means the predictions and evaluation outcomes remained unseen until their
+registered opening; it never means the human created labels without reading
+the evidence Source.

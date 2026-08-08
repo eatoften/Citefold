@@ -2711,11 +2711,15 @@ so its slides, videos, assignments, and excerpts are not vendored.
 
 ### Decisions and technology
 
-The acquisition manifest owns byte identity and rights metadata; a later G0.2
-evaluation manifest owns page ranges, parser/chunker versions, derived Source
-artifacts, labels, prompts/models, runner, seeds, and tolerances. Keeping these
-contracts separate prevents a downloader change from silently changing the
-evaluation protocol and prevents labels from entering the ingestible corpus.
+**Superseded by the G0.2a authority split below:** this checkpoint originally
+described one later evaluation manifest as owning page ranges, labels, and run
+configuration. The corrected design treats acquisition `ManifestAuthority` as
+an upstream byte/rights prerequisite, then separates four downstream
+authorities: protocol definition plus Source-slice freeze, a partition-bound
+`GoldBundleSeal`, an automatic-proposal/Chat run family, and an append-only
+access ledger. This preserves the original goal—preventing downloader changes
+or labels from silently changing the ingestible corpus—without collapsing
+distinct lifecycle responsibilities.
 
 The implementation uses only Python standard-library networking, hashing,
 filesystem, and JSON primitives plus typed immutable records. Downloads are
@@ -2765,10 +2769,11 @@ The immutable SHA is reported after the commit is created and pushed.
 
 ### Next gate
 
-G0.2 builds and freezes the parser/chunker/label/runner manifest and a bounded
-Lecture 3 annotation bundle before G2 automation or sealed measurement. The
-sealed transfer assets remain unopened until model, prompts, thresholds, and
-scoring rules are fixed.
+**Superseded by the G0.2a authority split below:** G0.2 does not build one
+parser/chunker/label/runner manifest. It first freezes the protocol and bounded
+Source slice; G2 later seals partition-bound gold; a separate future run family
+owns `RunSpecSeal` and sealed predictions/results; and a future access ledger
+must enforce opening and reproduction events.
 
 ## G1.2a - Non-reusable Source projection generations
 
@@ -3481,3 +3486,248 @@ fixture protocol and CS336 Lecture 3 Source slice; then generate blinded
 annotation packets and materialize a human-reviewed G2 graph through the G1
 service/publication boundary. Lecture 3 is authoring data, not a held-out model
 accuracy claim.
+
+## G0.2a - Executable golden-graph protocol boundary
+
+**Status:** Complete as strict protocol infrastructure; the real CS336 Source
+slice and all human gold remain deliberately unfrozen
+
+### Problem and authority decision
+
+The acquisition manifest proves which upstream bytes are registered. A prose
+annotation guide explains intended human behavior. Neither one proves that a
+particular PDF page set, parser result, Chunk universe, metric, or claim is the
+same input another run used. Conversely, a SHA-256 over an arbitrary file proves
+only byte identity; it does not prove that the file is a valid Source catalog.
+
+G0.2a therefore makes the boundary executable and separates four downstream
+authorities that must not be collapsed:
+
+1. the protocol definition plus Source-slice freeze registers ontology,
+   procedure, metrics, thresholds, claim scope, one exact page partition,
+   parser/chunker lineage, dependency environment, and redacted semantic
+   Source/Chunk artifacts;
+2. the later partition-bound `GoldBundleSeal` owns closed-world Concepts, the
+   complete pair universe, delayed Pass A/B decisions, adjudication, and the
+   frozen alias table for one exact partition;
+3. the future automatic-proposal/Chat run family owns a pre-annotation
+   `RunSpecSeal` and later sealed `PredictionBundle`/`ResultBundle` artifacts
+   that reference that exact run spec;
+4. the future append-only evaluation-access ledger owns sealed-opening and
+   reproduction event history.
+
+The acquisition `ManifestAuthority` remains an upstream byte/rights
+prerequisite, not a fifth downstream authority. The required future
+sealed-transfer lifecycle is:
+
+```text
+RunSpecSeal
+-> source_annotation_open
+-> transfer-specific GoldBundleSeal
+-> sealed PredictionBundle / ResultBundle referencing RunSpecSeal
+-> prediction_evaluation_open
+-> explicitly labeled reproduction
+```
+
+`GoldBundleSeal` is the immutable artifact, while `gold_sealed` is the future
+ledger event recording it. Lecture 3 authoring gold cannot be reused as the
+gold authority for a sealed-transfer partition. The run-family and access-ledger
+implementations are not part of G0.2a; future code must enforce this ordering.
+
+`protocol_status=frozen` is therefore data rather than authority. A consumer
+must hold a receipt returned after the persisted canonical artifact and every
+bound leaf have been re-read and validated.
+
+### Implementation and system design
+
+- strict, frozen Pydantic models reject unknown fields and type coercion;
+- canonical JSON uses sorted compact UTF-8 bytes, forbids duplicate keys and
+  non-finite numbers, and requires an exact filename-bound SHA-256 sidecar;
+- acquisition authority is reloaded from its repository file through the
+  existing fail-closed manifest parser and cross-checks path, manifest hash,
+  corpus, upstream commit, asset, partition, registered raw-byte hash, license,
+  attribution, and redistribution policy;
+- only `authoring` assets can enter this graph-authoring protocol;
+- the page scope must classify every physical one-based PDF page exactly once,
+  with a non-empty included set and explicit inclusion/exclusion reasons;
+- dependency, parser/chunker configuration, semantic Source catalog, and
+  semantic Chunk manifest use
+  exact-key allowlist schemas rather than accepting an opaque file with the
+  right hash;
+- public Source rows contain only stable logical page IDs, physical page
+  numbers, parse status, text hash, and UTF-8 byte length. Runtime UUIDs,
+  database IDs, timestamps, PDF bytes, screenshots, page text, and exact quotes
+  remain outside public artifacts;
+- non-included Source pages carry an enumerated reason and no semantic bytes;
+  Chunk locators use exact UTF-8 byte offsets, bind the Source catalog and tool
+  identities, stay inside included page lengths, and their union covers every
+  byte of every included page. Sliding overlap is explicitly allowed, while an
+  exact locator occurrence cannot claim two different Chunk identities;
+- parser/chunker code/config hashes, the exact parsed `uv.lock`, a dependency
+  snapshot, and the installed distribution version are cross-checked at freeze
+  and reload;
+- persisted freeze derives one canonical path from `protocol_id`; it stages
+  complete `fsync`ed bytes under a same-directory temporary name, atomically
+  exposes them with a no-replace hard link, repairs only byte-identical
+  JSON/sidecar crash remnants, and reloads the acquisition manifest,
+  annotation guide, and all Source-slice leaves before returning authority;
+- the review contract hashes the exact annotation guide and requires a later
+  human attestation at the `GoldBundleSeal`, delayed blind Pass A/B, at least
+  72 hours, adjudication, and temporal intra-rater terminology. Automation may create
+  packets and validate them but may not impersonate the human reviewer;
+- every reported metric has an exact unit, evidence scope, future authority,
+  and interval policy; every gated target additionally fixes comparison and
+  threshold. Relation proposal recall is report-only rather than silently
+  lacking a contract. Lecture 3 is `confirmatory=false`; G0.2a only registers
+  the diagnostic claim limit for too few lecture clusters, and the future
+  run-bundle runner must enforce actual sample/cluster eligibility;
+- Concept matching semantics are frozen now, while the actual alias-table hash
+  belongs to the future gold-bundle seal. The 1k/10k latency targets require a
+  separate seeded synthetic-graph performance authority owned by G3 rather
+  than borrowing scientific authority from one lecture or blocking the G0.2
+  Source-slice freeze on a future path implementation.
+
+The semantic catalog identity is intentionally independent of product UUIDs.
+The later private materializer will bind each logical page/Chunk to concrete
+Source revisions and projection generations without changing the public
+semantic hash.
+
+### Defects found during adversarial design
+
+1. The first design allowed an in-memory model to change from `draft` to
+   `frozen`. It now derives one canonical path from the protocol identity,
+   persists canonical bytes without replacement, and reloads them before
+   issuing authority.
+2. The first leaf check accepted any file whose raw SHA matched. Strict
+   dependency/Source/Chunk schemas and lineage cross-checks now
+   prevent a garbage JSON file from satisfying freeze.
+3. The existing product parser and projections use runtime UUIDs. Public
+   evaluation identity now uses logical page IDs and semantic hashes; runtime
+   materialization is a separate later binding.
+4. A lecture-cluster bootstrap over one authoring lecture or two sealed
+   lectures can look quantitative without supporting a confirmatory interval.
+   The protocol now records a minimum cluster count and the diagnostic-only
+   claim contract below it; the future run-bundle runner must enforce the
+   actual eligibility check.
+5. Alias matching and 1k/10k latency initially risked becoming mutable hidden
+   evaluation choices. Matching edge semantics are registered before
+   prediction, gold must later seal the alias table, and latency is scoped to a
+   separate reproducible synthetic protocol.
+6. Dependency snapshots initially allowed the same case-folded package name
+   with two versions, while a dictionary lookup silently chose one. Package
+   names are now unique independent of case, and installed versions are
+   cross-checked.
+7. Repository-relative POSIX syntax alone allowed Windows NTFS alternate data
+   streams and reserved/trailing names. Protocol paths now use a portable
+   cross-platform subset, and public leaves/configs cannot live under the
+   gitignored data root.
+8. Requiring every Chunk content hash to be unique rejected legitimate repeated
+   headers or content. Occurrence identity now includes locators: repeated
+   content at distinct locations is valid, while an exact duplicate occurrence
+   is rejected.
+9. A direct write to the canonical name could leave partial immutable bytes if
+   the process died mid-write; a crash between JSON and sidecar could also
+   leave different orphan states. Publication now stages and `fsync`s complete
+   bytes before an atomic no-replace hard link exposes each canonical name.
+   Later identical calls repair an exact one-file remnant, concurrent identical
+   publishers converge, and conflicting identities fail closed without
+   overwriting the winner. Hard-link-unsupported filesystems fail safely; a
+   hard kill may leave only an ignored staging name.
+10. The first receipt trusted an already-created in-memory manifest object and
+    a prefilled human-attestation statement. Freeze now reloads the manifest and
+    hashed annotation guide from disk; the protocol records that a real human
+    attestation is required later at the G2 `GoldBundleSeal`.
+11. Relation recall appeared in the report list without a unit, authority, or
+    interval rule, and canonical readers allocated files before checking their
+    size. Recall now has a complete report-only contract, and protocol,
+    sidecar, binding, manifest, and recovery reads are bounded regular-file
+    operations.
+12. The first page/Chunk contract accepted a page as “covered” when one small
+    locator touched it, and non-included pages lacked a bounded reason. That
+    permitted silent within-page cherry-picking. The v1 contract now records
+    exact status/reason semantics and requires the union of locator intervals
+    to cover `[0, semantic_utf8_bytes)` without gaps or tail omission; overlap
+    remains explicit because sliding-window chunkers need it.
+13. Pydantic's shallow `frozen` option still allowed nested collection
+    mutation after an authority receipt was issued. All protocol/binding
+    collections now materialize as immutable tuples while canonical JSON keeps
+    array encoding, so in-memory authority cannot drift away from its hash.
+14. A lock-file hash and installed package check did not prove that the lock
+    actually contained the declared parser version, and opaque config JSON
+    could hide mutable choices or Source text. Freeze now parses the lock and
+    validates exact-key, redacted parser/chunker configuration envelopes.
+15. A public-prefix string alone did not exclude symlink/reparse/hardlink
+    aliases into private repository data. Bound repository leaves are checked
+    component by component, must be single-link regular files, and—inside a Git
+    worktree—must already be tracked in the index.
+16. `model_copy(update=...)` can bypass Pydantic validation. Publication now
+    rebuilds the complete protocol through the strict schema before deriving a
+    canonical path or writing either leaf, so invalid in-memory data cannot
+    reserve an immutable identity.
+17. Git pathspec metacharacters, inherited `GIT_*` repository redirection, and
+    case-folded Windows paths could make an untracked or non-portable spelling
+    look authoritative. Tracked checks now use literal pathspecs, a sanitized
+    subprocess environment, and exact component spelling.
+18. A descriptor reader that checked only inode and size could accept bytes
+    mixed across a same-size concurrent rewrite. Reads now compare descriptor
+    and pathname metadata before and after the bounded read, including link
+    count, size, modification/change timestamps, file type, and reparse state.
+19. Windows path equality also accepted a differently cased frozen filename,
+    while TOML's `true == 1` behavior could impersonate uv lock schema version
+    1. Filename comparison is now exact and lock version requires an actual
+    integer.
+20. Early concurrent recovery could inspect the publisher's legitimate
+    temporary hard-link window, and the first public loader cleaned staging-like
+    names as a read side effect. Public reload now only performs a bounded wait;
+    one internal publish-or-converge primitive handles both missing JSON and
+    missing sidecar races and limits cleanup to exact same-inode staging names.
+21. With `core.autocrlf=true`, a fresh Windows checkout could change a hashed
+    guide, lock, manifest, canonical JSON, or sidecar. Repository
+    `.gitattributes` now fixes text authority bytes to LF across platforms.
+
+### Verification and honest claim boundary
+
+| Gate | Result |
+| --- | --- |
+| G0.2a focused protocol suite | `76 passed, 2 skipped`; both skips require unavailable Windows directory-symlink privilege |
+| Acquisition + protocol integration | `97 passed, 4 skipped` |
+| Full backend regression | `915 passed, 5 skipped`; one upstream Starlette/httpx deprecation warning retained |
+| Frontend regression | 27 files / `214 passed`; ESLint and TypeScript/Vite production build passed; the already-recorded 588.23 kB main-chunk advisory remains |
+| Desktop host | Rust fmt/check passed; `6 passed` |
+| Static/reproducibility checks | Python compileall, `uv lock --check`, `git diff --check`, and LF authority attributes passed |
+| Adversarial concurrency | 288 fresh, JSON-only, and sidecar-only concurrent publications converged to one digest; independent red-team review found no remaining P0/P1 |
+| Checked-in draft identity | guide `3aca0f16eb6c26b67bbb31dc36f9ded283f4f6d70ccf0bdcbb8945cd8f6970c9`; canonical draft `60448d44efaea9d109b847315e8b77cc39a6219feecffa2701c9ff58ca8c200e`; still draft/no accuracy claim |
+
+Focused tests cover the checked-in incomplete CS336 draft, a complete synthetic
+binding freeze/reload path backed by a real manifest file, exact acquisition
+identity, partition isolation, page
+coverage, strict binding schemas and lineage, code/config/dependency drift,
+metric/claim semantics, human-review declarations, canonical JSON, sidecars,
+idempotent crash recovery, atomic publish failure, concurrent identical and
+conflicting publishers, immutable identity conflicts, resource bounds,
+portable paths, and malformed/forbidden public data. Full repository
+verification and remote CI are recorded at the Git checkpoint.
+
+This stage makes a reproducible and leakage-aware protocol possible. It does
+**not** choose the CS336 Lecture 3 pages, parse or redistribute its PDF, create
+human Concepts/Relations, seal a gold graph, open sealed data, run a model, or
+report accuracy. The checked-in Lecture 3 protocol leaves all unknowable
+Source-slice fields empty and must fail freeze until the maintainer-owned page
+decision and bounded catalog builder produce real artifacts.
+
+### Git checkpoint
+
+Independent commit subject:
+
+```text
+feat(eval): define golden graph fixture protocol
+```
+
+The immutable SHA and remote CI result are recorded after commit and push.
+
+### Next gate
+
+G0.2b implements the bounded PDF-to-semantic-Source catalog builder and private
+materialization boundary. The maintainer then selects the Lecture 3 page scope;
+the system records that decision without guessing it. Only after that Source
+slice freezes may G2 generate empty blinded annotation packets.

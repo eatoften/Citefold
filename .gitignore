@@ -8,6 +8,7 @@ __pycache__/
 tmp/
 
 backend/data/
+backend/golden_graph/protocols/.*.publish-tmp
 backend/build/
 backend/dist/
 backend/*.spec

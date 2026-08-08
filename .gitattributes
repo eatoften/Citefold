@@ -1,0 +1,8 @@
+# Raw bytes are authority identities in the evaluation pipeline. Keep every
+# text checkout byte-stable across Windows, macOS, and Linux.
+* text=auto eol=lf
+
+# Explicit binary declarations prevent content detection from ever applying
+# newline normalization to repository media.
+*.ico binary
+*.png binary

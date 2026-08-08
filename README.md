@@ -139,9 +139,22 @@ Evaluation is also staged rather than retrofitted after implementation. The
 [public-course benchmark contract](docs/evaluation/public-course-benchmark.md)
 registers hash-pinned CS336 Spring 2025 slides, isolated authoring/development/
 sealed partitions, a fail-closed acquisition boundary, and a separate CC0
-counterfactual trust fixture. It currently reports **no accuracy result**:
-parser/chunker identity, human labels, runner, model/prompt identity, and the
-sealed-use ledger must be frozen in G0.2 before resume-quality metrics exist.
+counterfactual trust fixture. The
+[G0.2 executable protocol boundary](docs/modules/golden-graph-evaluation-protocol.md)
+now provides strict canonical artifacts, dependency and Source-slice binding,
+registered claim rules, and no-overwrite freeze authority. The CS336 Lecture 3
+artifact is still deliberately a draft and reports **no accuracy result**:
+its exact Source slice and later human gold must be frozen before path results,
+and later evaluation must keep four downstream authorities separate: the
+protocol definition plus Source-slice freeze, a partition-bound
+`GoldBundleSeal`, an automatic-proposal/Chat run family (`RunSpecSeal` plus
+sealed `PredictionBundle`/`ResultBundle`), and an append-only access ledger.
+The acquisition `ManifestAuthority` is their upstream prerequisite, not a
+fifth downstream authority. The two currently registered sealed-transfer
+lectures are below the five-cluster minimum, so G0.2a currently registers only
+a diagnostic claim boundary; a future run-bundle runner must enforce actual
+eligibility, and a confirmatory metric requires a new pre-registered protocol
+with at least five independent sealed lecture clusters.
 
 ## Target architecture: one evidence backbone, two consumers
 
@@ -160,9 +173,10 @@ Every imported material enters through a modality-specific adapter and is
 normalized into the canonical `CourseSource` / `CourseSourceChunk` / typed
 `Locator` contract. Chat and Understanding are sibling consumers of that
 evidence layer: Chat retrieves original evidence directly, while Understanding
-proposes structured semantic artifacts. Cards are learning outputs, not graph
-truth, and no model proposal is published as knowledge without evidence
-grounding and explicit validation.
+produces only evidence-bound Card drafts. A separate promotion boundary may
+normalize reviewed Cards into Concept/Relation candidates; Cards remain
+learning outputs rather than graph truth, and no candidate is published as
+knowledge without Source evidence and explicit review.
 
 ```mermaid
 flowchart TD
@@ -176,8 +190,8 @@ flowchart TD
     G["Sentence citation"]
 
     H["Understanding pipeline"]
-    I["Concept / Claim / Relation candidates<br/>optional Card drafts"]
-    J["Grounding + validation + human review"]
+    I["Evidence-bound Card drafts<br/>the only direct model output"]
+    J["Review + semantic promotion<br/>Concept / Relation candidates"]
     K["Published Concept / Evidence / Relation graph"]
     L["Deterministic paths<br/>BFS / relation tracing / topological layers"]
     M["Studio artifacts<br/>Cards / Quiz / Study Guide"]
@@ -213,9 +227,11 @@ The implementation migration is additive:
 1. G1 introduces separate Concept, ConceptEvidence, Relation, and
    RelationEvidence storage without renaming or deleting current Cards.
 2. G2 makes Understanding consume canonical `CourseSourceChunk` inputs across
-   modalities, records revision/hash/Locator provenance, and publishes only
-   grounded reviewed candidates. The legacy video Card path remains available
-   until compatibility and backfill checks pass.
+   modalities and emit only evidence-bound Card drafts with
+   revision/hash/Locator provenance. A separate review/promotion service maps
+   reviewed Cards and original Chunks to Concept/Relation candidates. The
+   legacy video Card path remains available until compatibility and backfill
+   checks pass.
 3. G3 builds deterministic traversal over accepted, current graph versions;
    model output may propose candidates but cannot decide path correctness.
 4. G4 replaces the CardRelation-only discovery experience with stable Concept
@@ -227,7 +243,8 @@ This boundary is the architecture invariant for subsequent work:
 ```text
 modality-specific extraction -> canonical evidence chunks
 canonical evidence chunks    -> direct retrieval and grounded Chat
-canonical evidence chunks    -> model-assisted semantic candidates
+canonical evidence chunks    -> model-assisted Card drafts
+reviewed Cards + Chunks      -> semantic candidates
 grounded + validated review  -> published Concept graph
 Concept graph + evidence     -> paths and learning artifacts
 ```

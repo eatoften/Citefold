@@ -100,9 +100,29 @@ separate CC0 counterfactual trust fixture. No slide PDF is committed and no
 quality result is claimed. CS61B remains an external-only robustness track
 because a course-wide redistribution license has not been established.
 
-G0 is still open: G0.2 must freeze the exact page ranges, parser/chunker and
-Source/Chunk artifact identities, human label lineage, runner, prompts/models,
-seeds, tolerances, and sealed-use ledger before any held-out result is opened.
+G0.2a also implements the
+[executable golden-graph protocol boundary](modules/golden-graph-evaluation-protocol.md):
+strict schemas, canonical JSON and sidecar hashes, acquisition/tool/dependency
+cross-checks, redacted semantic Source/Chunk envelopes, registered metric and
+claim scope, and no-overwrite persisted freeze authority. The checked-in
+Lecture 3 protocol remains a draft rather than silently choosing pages or
+claiming that labels already exist.
+
+G0 is still open: the exact Lecture 3 page scope, bounded parser/chunker output,
+semantic Source/Chunk identities, statistical interval rules, and numerical
+lower-confidence-bound floors must be frozen next. G2 must separately seal
+human label lineage and aliases; future automatic-proposal/Chat evaluation must
+separately create a pre-annotation `RunSpecSeal`, a post-gold sealed
+`PredictionBundle`/`ResultBundle` that references it, and an append-only access
+ledger before any held-out project result is opened.
+
+For a later sealed-transfer protocol, access has one registered order:
+`RunSpecSeal`, `source_annotation_open` for prediction-blind human labeling, a
+transfer-specific `GoldBundleSeal`, a sealed `PredictionBundle`/`ResultBundle`
+that references the run spec, one `prediction_evaluation_open`, and then only
+explicitly labeled reproductions. Here, held out means predictions and outcomes
+remain unavailable before the registered evaluation opening; it does not mean
+a human annotator is forbidden from reading the Source needed to create gold.
 
 Deliverables:
 
@@ -207,15 +227,27 @@ Deliverables:
 
 Deliverables:
 
-- select one bounded course slice and normalize 12-20 Concepts plus aliases;
-- map supporting Chunks/Cards and annotate 20-35 typed directed/symmetric relations;
+- select one bounded course slice, have the human maintainer normalize 12-20
+  evidence-bound Concepts plus aliases, and freeze the resulting `C_gold` hash;
+- deterministically enumerate the complete unordered `N * (N - 1) / 2` pair
+  universe from that frozen Concept inventory before relation review begins;
+- run delayed, system-blind Relation Pass A and Pass B over the same pair
+  manifest, report agreement only for Relation judgments, and adjudicate every
+  disagreement; report a real second-human review separately if available;
+- target 20-35 accepted typed directed/symmetric relations after adjudicating
+  the complete pair universe, rather than selecting only likely positive pairs;
 - attach locatable evidence, rationale, and proposal/review provenance to every
-  accepted/current entity and edge;
-- complete a delayed blinded second pass, adjudicate disagreement, version,
-  hash, and freeze the fixture; report a second human review separately if available;
-- freeze a key-Concept inventory and bounded pair judgments, then report the
-  ADR-0008-defined coverage, isolate, exact edge precision/recall, prerequisite
-  direction, agreement, and per-type error measures before making graph claims.
+  accepted/current entity and edge, then version, hash, and seal the gold bundle
+  before final graph materialization, path evaluation, or system proposals;
+- report coverage, isolate rate, exact edge import precision/recall,
+  prerequisite direction, Relation agreement, and per-type errors as graph
+  integrity and materialization-fidelity evidence. These comparisons between a
+  published graph and the same sealed gold are not model proposal accuracy;
+  later raw system proposals are scored separately against gold before editing.
+- preserve the product boundary that Understanding emits only evidence-bound
+  Card drafts. Any automated Concept/Relation score belongs to a separate
+  review/promotion run over Cards plus original Chunks, never to direct LLM
+  publication into the graph.
 
 Unsupported edges are removed even when doing so lowers coverage.
 

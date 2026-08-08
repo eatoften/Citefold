@@ -1,6 +1,6 @@
 # ADR-0008: Build an Evidence-Grounded Concept Graph Before Expanding Studio
 
-- **Status:** Accepted; implementation pending G0-G4
+- **Status:** Accepted; G1 implemented, G0.2 in progress, G2-G4 planned
 - **Date:** 2026-08-08
 - **Decision owners:** Project maintainer and Codex implementation agent
 
@@ -229,16 +229,23 @@ participate in the topological Learning Path.
 ### 7. Build and freeze one human-reviewed golden course graph first
 
 Before automatic expansion, G2 creates one bounded reference graph. The
-initial target is 12-20 canonical Concepts and 20-35 reviewed relations from
-one course slice. Every accepted/current Concept and relation receives locatable
-evidence and a rationale. The annotation guide, adjudication decisions, data
-hash, and graph version are frozen before path evaluation.
+human maintainer first normalizes 12-20 canonical Concepts and aliases from one
+course slice, binds them to evidence, and freezes the `C_gold` hash. The system
+then deterministically enumerates the complete unordered Concept-pair universe.
+Relation Pass A and delayed Pass B judge that same pair-manifest hash while
+blind to system proposals; 20-35 is the target number of accepted relations
+after all pairs are judged, not the number of pairs selected for annotation.
+Every accepted/current Concept and relation receives locatable evidence and a
+rationale. The annotation guide, adjudication decisions, data hash, and graph
+version are frozen before path evaluation.
 
-For a solo-maintained project, the minimum review protocol is two-pass blinded
-review: initial annotation, a delayed second pass without seeing the first
-decision, then logged adjudication. If a second human reviewer is available,
-inter-reviewer agreement is reported separately. A single immediate pass is not
-described as independent human review.
+For a solo-maintained project, the two delayed passes and temporal intra-rater
+agreement apply only to Relation judgments; the one maintainer-authored Concept
+inventory receives no fabricated agreement claim. Pass B cannot see Pass A,
+and both passes remain blind to system output until after gold sealing and
+logged adjudication. If a second human reviewer is available, inter-reviewer
+agreement is reported separately. A single immediate pass is not described as
+independent human review.
 
 This graph is an engineering and evaluation fixture. It does not prove a
 large-scale knowledge graph or improved learning outcomes.
@@ -288,7 +295,9 @@ prerequisite constraint and therefore cannot imply learning order.
 
 Rejected as an authoritative workflow. It is non-deterministic, can invent
 relations, and cannot guarantee an acyclic prerequisite graph. The LLM remains
-useful for candidate generation and explanations.
+useful inside Understanding for evidence-bound Card drafts and explanations.
+Concept/Relation candidates cross a separate review/promotion boundary; they
+are not direct authoritative LLM graph output.
 
 ### Replace the graph renderer first
 
@@ -368,24 +377,29 @@ and human acceptance.
 
 ### Golden graph
 
-- before annotation, freeze the selected Source revisions and a key-Concept
-  inventory `C_gold`; every unordered Concept pair in the bounded inventory is
-  judged as none or one/more typed relations, with direction where applicable,
-  to produce adjudicated `R_gold`;
+- before Relation annotation, freeze the selected Source revisions and the
+  human-authored key-Concept inventory `C_gold`; deterministically enumerate
+  every unordered Concept pair from that hash, then bind both Relation passes
+  to the same pair manifest;
+- every pair is judged as none or one/more typed relations, with direction where
+  applicable, to produce adjudicated `R_gold`; 20-35 accepted relations is a
+  target after complete-pair adjudication;
 - inventory coverage is `accepted/current Concepts matched to C_gold / |C_gold|`;
 - isolate rate is `accepted/current Concepts with zero accepted/current
   incident edges / accepted/current Concepts`;
-- exact edge precision and recall compare normalized `(type, source, target)`
-  tuples in the evaluated graph with `R_gold`; symmetric endpoints are
-  canonicalized;
+- exact edge import precision and recall compare normalized
+  `(type, source, target)` tuples in the materialized graph with `R_gold`;
+  symmetric endpoints are canonicalized. These publication-vs-gold checks are
+  materialization fidelity, not model proposal accuracy;
 - prerequisite direction accuracy is reported conditionally for endpoint pairs
   adjudicated as prerequisite, alongside exact prerequisite precision so false
   prerequisite claims cannot be hidden;
 - proposal precision is evaluated separately against a frozen labeled proposal
   set; it never describes the manually adjudicated reference graph itself;
-- two-pass agreement, disagreements, and adjudication are recorded before the
-  fixture hash is frozen; if two humans participate, inter-reviewer agreement
-  is reported separately;
+- Relation Pass A/B temporal agreement, disagreements, and adjudication are
+  recorded before the fixture hash is frozen; the single Concept-authoring step
+  receives no agreement claim, and inter-reviewer agreement is reported only if
+  two humans participate;
 - formulas, thresholds, reviewer protocol, and threshold owner are registered
   before path results are viewed. The initial structural targets are at least
   80% inventory coverage and at most 15% isolates, without adding unsupported
@@ -414,14 +428,24 @@ and human acceptance.
 
 ### G0 - Contract, baseline, and evaluation freeze
 
+**Status:** In progress; G0.2a protocol infrastructure is implemented, while
+the real Source-slice freeze and remaining confidence floors are pending.
+
 - accept this ADR and resequence the roadmap;
 - merge the seven verified product-core commits into `main` when the remote is reachable;
 - freeze terminology, relation directions, lifecycle, annotation protocol,
-  thresholds, performance budget, and non-goals;
+  point thresholds, confidence-bound floors, performance budget, and non-goals;
+- require later sealed evaluation to record `RunSpecSeal`, prediction-blind
+  human Source annotation, a transfer-specific `GoldBundleSeal`, a sealed
+  `PredictionBundle`/`ResultBundle` that references the run spec, one
+  prediction-evaluation opening, and explicitly labeled reproductions in that
+  order;
 - record the existing Card graph and retrieval baselines without upgrading
   their research status.
 
 ### G1 - Evidence-grounded graph substrate
+
+**Status:** Complete.
 
 - additive schema migration;
 - Concept, Alias, ConceptEvidence, Relation, and RelationEvidence store/service/API;
@@ -435,13 +459,24 @@ and human acceptance.
 
 ### G2 - Human-reviewed golden course graph
 
-- normalize Concepts and aliases for one bounded course slice;
-- map Chunks/Cards to Concepts;
-- annotate typed directed/symmetric edges, support-role evidence, rationale,
-  and provenance axes;
-- complete two-pass blinded review, adjudicate, version, freeze, and report the graph.
+**Status:** Planned.
+
+- have the human maintainer normalize and freeze one evidence-bound `C_gold`
+  Concept/alias inventory for a bounded course slice;
+- deterministically enumerate every unordered Concept pair from that fixed
+  inventory and bind both Relation passes to the same pair-manifest hash;
+- map Chunks/Cards to Concepts and annotate typed directed/symmetric edges,
+  support-role evidence, rationale, and provenance axes;
+- complete delayed, system-blind Relation Pass A/B, report agreement only for
+  Relation judgments, adjudicate every disagreement, and target 20-35 accepted
+  edges after reviewing the complete pair universe;
+- seal the gold bundle before materialization, path evaluation, or system
+  proposals; report publication-vs-gold checks as materialization fidelity, not
+  model proposal accuracy.
 
 ### G3 - Deterministic traversal and path engine
+
+**Status:** Planned.
 
 - bounded N-hop Local Graph and typed/directional A-to-B Relationship Trace;
 - prerequisite ancestor closure, cycle detection, topological layers, and one
@@ -450,6 +485,8 @@ and human acceptance.
   algorithm correctness/complexity tests.
 
 ### G4 - Product integration and graph quality gate
+
+**Status:** Planned.
 
 - separate Overview, Local, Trace, and Learning Path experiences;
 - stable layered path layout and node/edge evidence navigation;
