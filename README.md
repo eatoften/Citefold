@@ -11,6 +11,8 @@
   &nbsp;|&nbsp;
   <a href="docs/project-mastery-plan.md">Learning and mastery plan</a>
   &nbsp;|&nbsp;
+  <a href="docs/learning/README.md">Technical notes</a>
+  &nbsp;|&nbsp;
   <a href="docs/productization-log.md">Engineering log</a>
   &nbsp;|&nbsp;
   <a href="docs/Multimodal%20CNN%20ViT%20reader%20study.md">CNN vs ViT report</a>

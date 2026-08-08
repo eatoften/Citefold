@@ -109,6 +109,10 @@ the seven already verified product-core commits are safely integrated into the
 intended base, and the checkpoint is available on the remote. Local branch
 creation alone is not completion.
 
+The working rules and maintainer-owned examples live in the
+[draft graph annotation protocol](graph-annotation-protocol.md). It remains
+Draft until the Session 1 review and the remaining G0 freeze conditions pass.
+
 #### G1 - Evidence-grounded graph substrate
 
 Deliverables:

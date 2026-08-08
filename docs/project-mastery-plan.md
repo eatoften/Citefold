@@ -58,9 +58,10 @@ Current official internship descriptions reinforce the same core profile:
 Primary references, checked on 2026-08-08:
 
 - [Google Software Engineering Intern, Summer 2027](https://www.google.com/about/careers/applications/jobs/results/120997883141857990-software-engineering-intern-summer-2027)
-- [Amazon AWS Data Services SDE Intern, Fall 2026](https://prod.gamma.amazon.jobs/en-gb/jobs/10412530/software-development-engineer-intern-aws-data-services-fall-2026-us)
+- [Amazon AWS Data Services SDE Intern, Fall 2026](https://amazon.jobs/en/jobs/10412530/software-development-engineer-intern-aws-data-services-fall-2026-us)
 - [Amazon Shenzhen Seed Engineer / SDE Intern, 2026](https://www.amazon.jobs/pt/jobs/3159987/seed-engineer-program-software-development-engineer-intern-2026-shenzhen)
-- [Apple Software Engineering Intern, Machine Learning/AI Workflows](https://jobs.apple.com/en-my/details/200655115-1731/software-engineering-intern-machine-learning-ai-workflows)
+- [Apple Machine Learning Engineer Intern, Shanghai](https://jobs.apple.com/en-us/details/200609538/machine-learning-engineer-intern-shanghai)
+- [Apple ML/AI Undergrad Internships](https://jobs.apple.com/en-us/details/200664780-3810/machine-learning-and-artificial-intelligence-undergrad-internships)
 
 The practical conclusion is that this project should demonstrate both tracks:
 
@@ -75,6 +76,96 @@ MLE credibility
 Shared proof
 -> evidence-grounded Concept graph and deterministic path system
 ```
+
+## Resume Readiness Contract
+
+Completing the accepted sequence can make this a strong flagship project for
+large-company SDE and applied-MLE internship applications. It cannot guarantee
+an interview or offer. Hiring also depends on role fit, degree/location rules,
+resume quality, application timing, coding interviews, CS fundamentals, and
+the maintainer's ability to defend the work without assistance.
+
+The project has three honest resume states:
+
+| State | Allowed claim |
+| --- | --- |
+| Portfolio in progress | The current Source-first notebook, Grounded Chat, citations, Notes, and reliability foundation may be listed as active development; G1-G4 must be described as planned |
+| SDE flagship ready | The product, graph program, critical polish/hardening, release, measurements, and maintainer ownership gates below all pass |
+| Applied-MLE flagship ready | The SDE flagship gates pass and MLE-E1 adds a frozen evaluation set, baselines, ablations, metrics, latency, and error analysis |
+
+Research-heavy MLE roles may additionally expect graduate study, publications,
+or deeper model-training research. This project is strongest for software,
+ML-systems, retrieval/RAG, applied MLE, and AI product-engineering roles; it is
+not a substitute for role-specific qualifications.
+
+### Required flagship gates
+
+| Gate | Required evidence |
+| --- | --- |
+| R1 differentiated product | Source -> Chat -> sentence citation and Source -> Concept -> relation/path -> edge evidence both work end to end; the graph is more than a force-layout similarity demo |
+| R2 engineering correctness | additive migrations, course isolation, graph/version invariants, reliable tasks, recovery, deterministic algorithms, and focused fault tests pass |
+| R3 measurable quality | frozen golden graph, locator validity, path correctness, graph coverage/error report, latency budget, and preserved Dense Chat baseline |
+| R4 maintainability | a frozen P1.4 checklist names each debt, owner module, acceptance command, and expected artifact; critical items then pass: bounded frontend slices, shared contracts/client where valuable, automated frontend/backend/E2E gates, and documented failure states |
+| R5 product finish | a frozen P1.2/P1.3 journey checklist defines success before implementation; onboarding/error recovery, reproducible setup, clean public README, fresh-machine demo, and a versioned desktop release pass it |
+| R6 maintainer ownership | M3 on all five critical vertical slices, two or three M4 design defenses, user-owned diffs/commits, and reproducible bug/design stories |
+| R7 interview readiness | separate DSA, OS, networking, database, behavioral, and timed coding preparation appropriate to the target role |
+| R8 MLE evidence when claimed | MLE-E1 uses a sealed, independently reviewed test set frozen before results; a pinned runner/environment and numeric tolerances compare justified retrieval/routing baselines and report ranking, citation, abstention, latency, ablation, and per-error results; the maintainer reaches M3 on retrieval/evaluation/PyTorch |
+| R9 security and release hygiene | threat boundaries for untrusted imports, local HTTP/process/file access, and model output are documented; path/resource controls, secret/dependency checks, artifact provenance, license decisions, and bounded abuse/failure tests pass |
+
+Passing R1-R7 and R9 makes the repository defensible as an SDE flagship. Passing
+R1-R9 makes it defensible as an applied-MLE/ML-systems flagship. A recruiter
+may see only a few lines and a short demo, so every resume sentence must map to
+a public artifact, test, commit, measurement, or video timestamp in the demo.
+
+Current status on 2026-08-08: the P0/P1.1 foundation is strong and merged to
+`main`, but the final flagship gate is **not yet passed**. G0 is active; G1-G4,
+critical product finish, the next public release, and maintainer mastery remain.
+The visible maintainability baseline also includes a 5,169-line `App.tsx`, a
+3,803-line `main.py`, a tag/manual-only Windows release workflow, an empty
+backend README, and an unchanged Vite-template frontend README. These are
+recorded debts, not hidden from the portfolio plan.
+
+### Portfolio artifacts required before resume freeze
+
+The feature stages alone are insufficient. Before calling the project a
+finished flagship, also produce:
+
+- PR/push CI for backend tests, frontend tests/lint/build, Python compile/lock
+  checks, Cargo fmt/check/test, and both bounded resume-claim journeys on the
+  release artifact: sample Source -> index -> Chat -> sentence citation -> exact
+  locator, and sample Source -> Concept -> deterministic path -> per-edge
+  evidence -> exact locator; the
+  current GitHub workflow primarily builds a Windows release and is not yet a
+  normal change-level quality gate;
+- a graph performance report that separates materialization/sorting from
+  traversal and records P50/P95 latency, query count, and memory on the frozen
+  course plus registered synthetic scales such as 100/1,000/10,000 nodes;
+- one license-clear sample course/evaluation corpus that another person can
+  run without private local materials;
+- a current architecture diagram, five vertical-slice diagrams, a 3-5 minute
+  demo, and a recruiter-first README;
+- a versioned golden graph, annotation guide, integrity/quality/error reports,
+  and canonical artifact hashes;
+- a desktop release containing the claimed P0/P1/G features and release notes,
+  validated from the downloaded GitHub Release artifact in a clean Windows VM
+  or user profile; record artifact hash and environment while checking initial
+  setup, missing-model recovery, sample import, restart, and both resume paths;
+- a resume-claim ledger mapping every sentence to code, test, metric, commit,
+  or demo evidence;
+- an explicit repository-license decision and repaired backend/frontend
+  developer entry documentation;
+- frozen P1.2/P1.3/P1.4 scope sheets that map every required journey or debt to
+  an owner module, acceptance command, and retained artifact;
+- for MLE claims, a sealed test manifest and label hash created before the final
+  run, an independent review record, pinned dependency/model/runner identity,
+  numeric tolerances, raw run outputs, and an error-analysis ledger;
+- a lightweight security/release review covering import limits, path trust,
+  local API/process boundaries, dependency/secrets checks, model-output
+  validation, binary provenance, and the tests that enforce the chosen limits.
+
+A partial second-human graph review and observations from 3-5 real users are
+strong additions, but they are not fabricated or treated as hard blockers when
+external participants are unavailable.
 
 ## Mastery Levels
 
@@ -110,7 +201,7 @@ of fashionable libraries:
 | Retrieval | sentence-transformers / BM25 experiments | rank locatable evidence and expose measurable diagnostics |
 | Generation | Ollama-compatible local LLM | generate only inside bounded evidence and structured-output contracts |
 | Media/document ingestion | FFmpeg, faster-whisper, document parsers | project raw local materials into canonical locatable Sources |
-| Multimodal research | OpenCV, RapidOCR, PyTorch | run isolated visual-reading experiments without turning them into product claims |
+| Multimodal research | NumPy/Pillow, RapidOCR/ONNX Runtime, PyTorch | run isolated visual-reading experiments without turning them into product claims |
 | Verification | pytest, Vitest, ESLint, build, Cargo tests, browser acceptance | turn invariants into repeatable delivery evidence |
 
 ### SDE foundation
@@ -238,8 +329,8 @@ types should remain present.
 
 ## Current Product Reality
 
-Seven product-core checkpoints are locally implemented and fully regressed on
-the product branch. They represent six runtime slices plus the P0.0 contract:
+Seven product-core checkpoints are implemented, fully regressed, and merged to
+`main`. They represent six runtime slices plus the P0.0 contract:
 
 | Commit | Product checkpoint | What the maintainer must eventually own | Mastery |
 | --- | --- | --- | --- |
@@ -287,7 +378,9 @@ G4 -> MLE-E1 reproducible portfolio evaluation for MLE-targeted applications
 
 [ADR-0008](decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md)
 owns the architecture and non-goals. The [roadmap](roadmap.md) owns stage
-status. This document owns the learning contract.
+status. This document owns the learning contract. The
+[technical-stack notebook](learning/README.md) owns review notes and session
+evidence.
 
 ### Indicative schedule, not a deadline promise
 
@@ -368,6 +461,7 @@ This rolling section is updated after each accepted session.
 
 #### Session 1 - Understand and operationalize G0
 
+- **Lesson:** [Session 1: Source, Card, and graph contracts](learning/session-01-source-card-graph-contract.md).
 - **Read first:** ADR-0008; `backend/app/course_source.py`;
   `backend/app/card_relation.py`; graph assembly in
   `backend/app/card_relation_service.py`.
@@ -375,7 +469,8 @@ This rolling section is updated after each accepted session.
   `Source revision -> ConceptEvidence -> reviewed Relation -> graph version -> path`.
 - **Maintainer task:** after the annotation-protocol skeleton is created, add
   three accepted relation examples and one deliberately rejected ambiguous
-  example, each with direction, support basis, evidence role, and rationale.
+  example to the [draft annotation protocol](graph-annotation-protocol.md), each
+  with direction, support basis, evidence role, and rationale.
 - **Acceptance:** `git diff --check`, local Markdown-link validation, and a
   line-by-line review of the examples.
 - **Oral questions:** Why is a Card not a Concept? Why are proposal origin,
@@ -581,6 +676,9 @@ The final repository and preparation folder should contain:
 
 - [Active product roadmap](roadmap.md)
 - [Append-only productization log](productization-log.md)
+- [Technical-stack learning notebook](learning/README.md)
+- [Session 1 lesson](learning/session-01-source-card-graph-contract.md)
+- [Draft graph annotation protocol](graph-annotation-protocol.md)
 - [Architecture decisions](decisions/)
 - [ADR-0008: evidence-grounded Concept graph](decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md)
 - [Graph as associative knowledge structure](Graph%20as%20associative%20knowledge%20structure.md)

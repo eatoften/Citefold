@@ -488,6 +488,8 @@ and reversible, and to retain the current Explore experience until G4 passes.
 
 - [Active product roadmap](../roadmap.md)
 - [Project mastery plan](../project-mastery-plan.md)
+- [Draft graph annotation protocol](../graph-annotation-protocol.md)
+- [Technical-stack learning notebook](../learning/README.md)
 - [Graph as associative knowledge structure](../Graph%20as%20associative%20knowledge%20structure.md)
 - [RAG retrieval and graph study](../RAG%20retrieval%20and%20graph%20study.md)
 - [ADR-0001: Source-first local course notebook](ADR-0001-source-first-local-course-notebook.md)
