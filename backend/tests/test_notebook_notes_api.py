@@ -1136,7 +1136,7 @@ def test_workspace_backup_contains_v8_note_lineage(tmp_path: Path) -> None:
         db_path=get_db_path(),
         data_dir=tmp_path,
     )
-    assert backup.schema_version == 8
+    assert backup.schema_version == 9
     extracted_db = tmp_path / "extracted.sqlite3"
     with ZipFile(backup.path) as archive:
         extracted_db.write_bytes(archive.read(DATABASE_ARCHIVE_PATH))

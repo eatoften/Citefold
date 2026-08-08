@@ -1,6 +1,6 @@
 # Productization Log
 
-Last updated: 2026-07-27
+Last updated: 2026-08-08
 
 This append-only log records verified product engineering work. It exists to
 preserve the reasoning behind the implementation, not to advertise unverified
@@ -2563,3 +2563,108 @@ same commit would change the SHA. Acceptance requires local `HEAD` to equal
 P1.2 is now the next product slice: turn Study, Review, and Course Map into one
 persistent Studio output library, then add Overview, FAQ, Study Guide, Quiz,
 and Flashcards without creating parallel evidence or task systems.
+
+## G1.1 - Grounded Concept graph candidate substrate
+
+**Status:** Complete as a bounded G1 slice; full G1 remains in progress
+
+**Date:** 2026-08-08
+
+**Branch:** `codex/concept-graph-foundation`
+
+### User outcome
+
+The backend can now store and inspect human-proposed Concepts and typed Concept
+relations without treating Cards, embeddings, or model output as graph truth.
+Every candidate is course-scoped and carries an immutable evidence snapshot
+that resolves to the canonical Source/Chunk/Locator backbone.
+
+### Why this slice exists
+
+Path algorithms are only defensible if their nodes and edges have stable
+identity, explicit semantics, current locatable evidence, and auditable
+revisions. Building BFS or a graph UI over the legacy similarity-oriented
+`CardRelation` table would make a visually convincing but semantically
+unreliable product. G1.1 therefore establishes the smallest vertical graph
+aggregate before review workflows, graph publication, or traversal.
+
+### Scope and non-goals
+
+Delivered scope:
+
+- additive Concept/relation identity heads plus immutable revision/evidence
+  tables in schema v9;
+- grounded human-candidate create, summary-list, and detail-read APIs;
+- exact quote, current Chunk hash, typed Locator, Source/course ownership, and
+  complete endpoint-evidence fingerprint validation;
+- permanent canonical identity for symmetric relations and explicit directed
+  relation semantics;
+- strict `source_asserted` versus `pedagogical_inference` evidence-role
+  contracts;
+- one `BEGIN IMMEDIATE` transaction for each aggregate write and deferred
+  current-revision foreign keys;
+- bounded cursor pagination and safe HTTP error translation.
+
+This slice does not accept or publish graph truth. It does not yet implement
+review compare-and-swap, aliases, merges, retirement, stale transitions,
+prerequisite-cycle validation, graph versions, model proposals, paths, or UI.
+
+### Decisions and technology
+
+SQLite remains the local source of truth. Stable head tables separate identity
+from immutable revision tables so later reviews preserve history instead of
+overwriting it. Evidence stores a server-resolved snapshot rather than trusting
+client-provided hashes or Locators. Database constraints protect structural
+invariants; the store rechecks semantic and course boundaries inside the same
+serialized write transaction. FastAPI/Pydantic own transport validation and
+do not infer graph facts.
+
+Cards remain regenerable learning artifacts. A Card ID, cosine similarity, or
+model confidence can propose future work but cannot satisfy evidence or create
+an accepted relation. This avoids a second evidence system and preserves
+compatibility with the existing Card, Topic, Explore, Chat, and citation paths.
+
+### Problems encountered and resolutions
+
+- A relation role check initially allowed evidence that was merely locatable
+  but did not match the endpoint Concept revision. The store now compares the
+  complete Source, Chunk, text-hash, quote, and canonical-Locator fingerprint.
+- Symmetric edges could otherwise acquire two identities. Endpoints are
+  canonicalized before the permanent uniqueness check.
+- Broad SQLite integrity handling could misreport unexpected corruption as a
+  duplicate. Only known conflicts map to `409`; unexpected integrity failures
+  return a safe `500` and roll back.
+- Clean-runner RAG tests exposed a separate database-snapshot configuration
+  bug hidden by local state. The snapshot now hashes the configured database,
+  and explicit mismatches are rejected rather than silently benchmarking a
+  different corpus.
+
+### Verification
+
+- adversarial graph review: no remaining P0/P1 finding after the second pass;
+- graph API/store/migration verification: 20 focused tests passed;
+- combined graph and existing migration/citation compatibility selection:
+  48 passed, 1 skipped, with one existing Starlette deprecation warning;
+- full working-tree backend regression, including the pending evaluation
+  harness: 718 passed, 2 skipped, with the same upstream warning;
+- Python compilation and `git diff --check`: passed.
+
+The skips cover environment-specific Windows symlink privileges and an
+existing platform-bound path case; neither changes the graph contract.
+
+### Git checkpoint
+
+Independent commit subject:
+
+```text
+feat(graph): add grounded concept candidates
+```
+
+The immutable SHA is reported after the commit is created and pushed; it is
+not embedded in its own content.
+
+### Next gate
+
+G1.2 adds review/currentness transitions, aliases and merge/retirement history,
+prerequisite acyclicity, and immutable accepted graph publication. Only a
+published graph version may become input to deterministic G3 traversal.

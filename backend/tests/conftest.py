@@ -4,6 +4,7 @@ from app.db import configure_db, init_db
 from app.card_generation_run_store import clear_runs
 from app.card_relation_store import clear_card_relations
 from app.chat_store import clear_chat
+from app.concept_graph_store import clear_concept_graph
 from app.job_store import clear_jobs
 from app.knowledge_card_store import clear_cards
 from app.knowledge_card_note_store import clear_notes
@@ -38,6 +39,7 @@ def isolated_job_db(tmp_path_factory):
     configure_db(db_dir / "jobs.db")
     init_db()
     clear_card_relations()
+    clear_concept_graph()
     clear_chat()
     clear_notes()
     clear_notebook_notes()
@@ -55,6 +57,7 @@ def isolated_job_db(tmp_path_factory):
 
     _stop_api_task_manager()
     clear_card_relations()
+    clear_concept_graph()
     clear_chat()
     clear_notes()
     clear_notebook_notes()

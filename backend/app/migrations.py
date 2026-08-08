@@ -738,6 +738,339 @@ def _add_notebook_notes(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_evidence_grounded_concept_graph(
+    conn: sqlite3.Connection,
+) -> None:
+    conn.execute(
+        """
+        CREATE TABLE concepts (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            current_revision INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (id, course_id),
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+            FOREIGN KEY (id, course_id, current_revision)
+                REFERENCES concept_revisions(concept_id, course_id, revision)
+                DEFERRABLE INITIALLY DEFERRED,
+            CHECK (length(id) BETWEEN 1 AND 200),
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (current_revision >= 1)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_revisions (
+            concept_id TEXT NOT NULL,
+            course_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            preferred_name TEXT NOT NULL,
+            short_definition TEXT NOT NULL,
+            identity_status TEXT NOT NULL DEFAULT 'active',
+            merged_into_concept_id TEXT,
+            review_status TEXT NOT NULL DEFAULT 'candidate',
+            validity_status TEXT NOT NULL DEFAULT 'current',
+            proposal_origin TEXT NOT NULL DEFAULT 'human',
+            provider TEXT,
+            model TEXT,
+            prompt_protocol TEXT,
+            output_version TEXT,
+            review_actor TEXT,
+            reviewed_at TEXT,
+            review_revision INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (concept_id, revision),
+            UNIQUE (concept_id, course_id, revision),
+            FOREIGN KEY (concept_id, course_id)
+                REFERENCES concepts(id, course_id) ON DELETE CASCADE
+                DEFERRABLE INITIALLY DEFERRED,
+            FOREIGN KEY (merged_into_concept_id, course_id)
+                REFERENCES concepts(id, course_id),
+            CHECK (length(concept_id) BETWEEN 1 AND 200),
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (trim(preferred_name) != ''),
+            CHECK (trim(short_definition) != ''),
+            CHECK (identity_status IN ('active', 'merged', 'retired')),
+            CHECK (
+                (identity_status = 'merged' AND merged_into_concept_id IS NOT NULL)
+                OR
+                (identity_status != 'merged' AND merged_into_concept_id IS NULL)
+            ),
+            CHECK (
+                merged_into_concept_id IS NULL
+                OR merged_into_concept_id != concept_id
+            ),
+            CHECK (revision >= 1),
+            CHECK (review_status IN ('candidate', 'accepted', 'rejected')),
+            CHECK (validity_status IN ('current', 'stale', 'tombstoned')),
+            CHECK (proposal_origin IN ('human', 'model', 'import')),
+            CHECK (
+                proposal_origin != 'model'
+                OR (
+                    provider IS NOT NULL AND trim(provider) != ''
+                    AND model IS NOT NULL AND trim(model) != ''
+                    AND prompt_protocol IS NOT NULL
+                    AND trim(prompt_protocol) != ''
+                    AND output_version IS NOT NULL
+                    AND trim(output_version) != ''
+                )
+            ),
+            CHECK (
+                (review_status = 'candidate' AND review_actor IS NULL
+                    AND reviewed_at IS NULL AND review_revision IS NULL)
+                OR
+                (review_status != 'candidate' AND review_actor IS NOT NULL
+                    AND trim(review_actor) != '' AND reviewed_at IS NOT NULL
+                    AND review_revision IS NOT NULL
+                    AND review_revision >= 1)
+            )
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_concepts_course_id
+        ON concepts (course_id, id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_concept_revisions_course_status
+        ON concept_revisions (
+            course_id,
+            identity_status,
+            review_status,
+            validity_status,
+            concept_id,
+            revision
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_evidence (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            concept_id TEXT NOT NULL,
+            concept_revision INTEGER NOT NULL,
+            source_id TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            chunk_text_hash TEXT NOT NULL,
+            source_title TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            quote TEXT NOT NULL,
+            locator_json TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (concept_id, concept_revision, ordinal),
+            UNIQUE (
+                concept_id,
+                concept_revision,
+                source_id,
+                chunk_id,
+                quote
+            ),
+            FOREIGN KEY (concept_id, course_id, concept_revision)
+                REFERENCES concept_revisions(
+                    concept_id, course_id, revision
+                ) ON DELETE CASCADE,
+            CHECK (length(id) BETWEEN 1 AND 200),
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (length(source_id) BETWEEN 1 AND 200),
+            CHECK (length(chunk_id) BETWEEN 1 AND 200),
+            CHECK (concept_revision >= 1),
+            CHECK (length(chunk_text_hash) = 64),
+            CHECK (trim(source_title) != ''),
+            CHECK (length(quote) BETWEEN 1 AND 16000),
+            CHECK (trim(quote) != ''),
+            CHECK (json_valid(locator_json)),
+            CHECK (ordinal >= 0)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_concept_evidence_source_chunk
+        ON concept_evidence (course_id, source_id, chunk_id, chunk_text_hash)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_relations (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            source_concept_id TEXT NOT NULL,
+            target_concept_id TEXT NOT NULL,
+            relation_type TEXT NOT NULL,
+            current_revision INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (id, course_id),
+            UNIQUE (
+                course_id,
+                relation_type,
+                source_concept_id,
+                target_concept_id
+            ),
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+            FOREIGN KEY (source_concept_id, course_id)
+                REFERENCES concepts(id, course_id),
+            FOREIGN KEY (target_concept_id, course_id)
+                REFERENCES concepts(id, course_id),
+            FOREIGN KEY (id, course_id, current_revision)
+                REFERENCES concept_relation_revisions(
+                    relation_id, course_id, revision
+                ) DEFERRABLE INITIALLY DEFERRED,
+            CHECK (length(id) BETWEEN 1 AND 200),
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (source_concept_id != target_concept_id),
+            CHECK (relation_type IN (
+                'prerequisite', 'part_of', 'example_of',
+                'related', 'contrast_with'
+            )),
+            CHECK (
+                relation_type NOT IN ('related', 'contrast_with')
+                OR source_concept_id < target_concept_id
+            ),
+            CHECK (current_revision >= 1)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_relation_revisions (
+            relation_id TEXT NOT NULL,
+            course_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            support_basis TEXT NOT NULL,
+            rationale TEXT NOT NULL,
+            review_status TEXT NOT NULL DEFAULT 'candidate',
+            validity_status TEXT NOT NULL DEFAULT 'current',
+            proposal_origin TEXT NOT NULL DEFAULT 'human',
+            provider TEXT,
+            model TEXT,
+            prompt_protocol TEXT,
+            output_version TEXT,
+            review_actor TEXT,
+            reviewed_at TEXT,
+            review_revision INTEGER,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (relation_id, revision),
+            UNIQUE (relation_id, course_id, revision),
+            FOREIGN KEY (relation_id, course_id)
+                REFERENCES concept_relations(id, course_id) ON DELETE CASCADE
+                DEFERRABLE INITIALLY DEFERRED,
+            CHECK (length(relation_id) BETWEEN 1 AND 200),
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (support_basis IN (
+                'source_asserted', 'pedagogical_inference'
+            )),
+            CHECK (trim(rationale) != ''),
+            CHECK (revision >= 1),
+            CHECK (review_status IN ('candidate', 'accepted', 'rejected')),
+            CHECK (validity_status IN ('current', 'stale', 'tombstoned')),
+            CHECK (proposal_origin IN ('human', 'model', 'import')),
+            CHECK (
+                proposal_origin != 'model'
+                OR (
+                    provider IS NOT NULL AND trim(provider) != ''
+                    AND model IS NOT NULL AND trim(model) != ''
+                    AND prompt_protocol IS NOT NULL
+                    AND trim(prompt_protocol) != ''
+                    AND output_version IS NOT NULL
+                    AND trim(output_version) != ''
+                )
+            ),
+            CHECK (
+                (review_status = 'candidate' AND review_actor IS NULL
+                    AND reviewed_at IS NULL AND review_revision IS NULL)
+                OR
+                (review_status != 'candidate' AND review_actor IS NOT NULL
+                    AND trim(review_actor) != '' AND reviewed_at IS NOT NULL
+                    AND review_revision IS NOT NULL
+                    AND review_revision >= 1)
+            )
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_concept_relations_course_id
+        ON concept_relations (course_id, id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_concept_relation_revisions_course_status
+        ON concept_relation_revisions (
+            course_id,
+            review_status,
+            validity_status,
+            relation_id,
+            revision
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE relation_evidence (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            relation_id TEXT NOT NULL,
+            relation_revision INTEGER NOT NULL,
+            support_role TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            chunk_text_hash TEXT NOT NULL,
+            source_title TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            quote TEXT NOT NULL,
+            locator_json TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (relation_id, relation_revision, ordinal),
+            UNIQUE (
+                relation_id,
+                relation_revision,
+                support_role,
+                source_id,
+                chunk_id,
+                quote
+            ),
+            FOREIGN KEY (relation_id, course_id, relation_revision)
+                REFERENCES concept_relation_revisions(
+                    relation_id, course_id, revision
+                )
+                ON DELETE CASCADE,
+            CHECK (length(id) BETWEEN 1 AND 200),
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (length(source_id) BETWEEN 1 AND 200),
+            CHECK (length(chunk_id) BETWEEN 1 AND 200),
+            CHECK (relation_revision >= 1),
+            CHECK (support_role IN (
+                'relation_assertion', 'source_endpoint', 'target_endpoint'
+            )),
+            CHECK (length(chunk_text_hash) = 64),
+            CHECK (trim(source_title) != ''),
+            CHECK (length(quote) BETWEEN 1 AND 16000),
+            CHECK (trim(quote) != ''),
+            CHECK (json_valid(locator_json)),
+            CHECK (ordinal >= 0)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_relation_evidence_source_chunk
+        ON relation_evidence (course_id, source_id, chunk_id, chunk_text_hash)
+        """
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version=1,
@@ -778,6 +1111,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=8,
         name="notebook_notes",
         apply=_add_notebook_notes,
+    ),
+    Migration(
+        version=9,
+        name="evidence_grounded_concept_graph",
+        apply=_add_evidence_grounded_concept_graph,
     ),
 )
 

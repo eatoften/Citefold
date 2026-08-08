@@ -47,7 +47,7 @@ commit, and remote push are all complete.
 | P0.5 Reliability | Autosave, recoverable tasks, backup/restore, safe desktop lifecycle | Complete |
 | P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Complete |
 | G0 Graph contract and baseline | Relation semantics, evidence rules, evaluation scope, and non-goals are frozen | In progress |
-| G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | Planned |
+| G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | In progress - G1.1 grounded candidate substrate implemented |
 | G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | Planned |
 | G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | Planned |
 | G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | Planned |
@@ -114,6 +114,18 @@ The working rules and maintainer-owned examples live in the
 Draft until the Session 1 review and the remaining G0 freeze conditions pass.
 
 #### G1 - Evidence-grounded graph substrate
+
+Current checkpoint: G1.1 implements additive stable Concept/relation identities,
+immutable candidate revisions, server-snapshotted current Chunk evidence,
+course isolation, canonical symmetric edges, strict support-role bundles,
+atomic SQLite writes, and bounded course-scoped read APIs. It accepts only
+grounded human candidates and deliberately publishes no authoritative graph.
+The implementation and boundary are recorded in the
+[Concept Graph substrate module contract](modules/concept-graph-substrate.md).
+
+G1.1 does **not** satisfy the full G1 gate. Review transitions, aliases,
+merge/retirement workflows, immediate stale-evidence materialization,
+prerequisite-cycle protection, and immutable graph publication remain required.
 
 Deliverables:
 

@@ -73,6 +73,7 @@ from .chat import (
 )
 from .citation_target import CitationTargetResponse
 from .citation_content_response import build_citation_content_response
+from .concept_graph_api import router as concept_graph_router
 from .card_embedding import CardEmbeddingBatchResult, CardEmbeddingStatus
 from .card_relation import (
     CardRelatedCardsResponse,
@@ -1360,6 +1361,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+app.include_router(concept_graph_router)
 
 
 app.add_middleware(
