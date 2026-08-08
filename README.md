@@ -9,6 +9,8 @@
   &nbsp;|&nbsp;
   <a href="docs/roadmap.md"><strong>Product roadmap</strong></a>
   &nbsp;|&nbsp;
+  <a href="docs/project-mastery-plan.md">Learning and mastery plan</a>
+  &nbsp;|&nbsp;
   <a href="docs/productization-log.md">Engineering log</a>
   &nbsp;|&nbsp;
   <a href="docs/Multimodal%20CNN%20ViT%20reader%20study.md">CNN vs ViT report</a>
@@ -38,9 +40,11 @@ Video Course Cards contains two connected components:
   experiments, with versioned protocols, lecture-level splits, dataset hashes,
   sealed evaluation gates, and machine-readable results.
 
-The active direction is a NotebookLM-style, video-course-native product. The
-research controller remains paused while the completed Sources -> Chat ->
-Notes loop is consolidated into a coherent Studio and polished product.
+The active direction is a local-first, video-course-native information
+understanding product. The research controller remains paused. The current
+program builds an evidence-grounded Concept graph and deterministic
+relationship/learning paths on top of the completed Sources -> Chat -> Notes
+foundation before returning to Studio consolidation and product polish.
 
 ## Product status
 
@@ -96,12 +100,16 @@ an explicit publish action turns an exact revision into the stable Source
 Trash, reconciliation, and backup/restore contracts as imported material.
 
 These checkpoints are complete on the productization branch but are **not yet
-a public desktop release**. P1.2 is next: make Notes, Study, Review, Course Map,
-and the other learning artifacts feel like one coherent Studio rather than
-adjacent tools. See the
+a public desktop release**. ADR-0008 now places G0-G4 before P1.2: define a
+canonical Concept/Evidence/Relation model, build one human-reviewed golden
+course graph, implement deterministic traversal and prerequisite ordering, and
+ship stable paths with per-edge evidence. Those G-stage capabilities are a
+roadmap, not an implemented feature claim; the current Explore graph remains a
+sparse CardRelation discovery baseline. See the
 [active roadmap](docs/roadmap.md),
-[Notes decision record](docs/decisions/ADR-0007-notebook-notes-and-derived-sources.md),
-and [append-only engineering log](docs/productization-log.md) for scope,
+[graph decision record](docs/decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md),
+[learning and mastery plan](docs/project-mastery-plan.md), and
+[append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.
 
 ## Results

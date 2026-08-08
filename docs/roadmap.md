@@ -1,6 +1,6 @@
 # Video Course Cards Roadmap
 
-Last updated: 2026-07-28
+Last updated: 2026-08-08
 
 ## Product Direction
 
@@ -25,8 +25,11 @@ section. Existing timestamped cards, FSRS review, Course Map, and graph tools
 remain differentiators rather than the primary navigation model.
 
 Research on reasoning-guided retrieval is paused while this product loop is
-built and hardened. Existing research artifacts remain immutable and may be
-reused only when they satisfy a product requirement and pass product tests.
+built and hardened. The current product priority is an evidence-grounded
+Concept graph and deterministic relationship/learning paths, not a claim that
+graph retrieval already outperforms the Dense Chat baseline. Existing research
+artifacts remain immutable and may be reused only when they satisfy a product
+requirement and pass product tests.
 
 ## Active Productization Program
 
@@ -43,9 +46,144 @@ commit, and remote push are all complete.
 | P0.4 Source-first workspace | A course opens as Sources / Chat / Studio, with advanced tools secondary | Complete |
 | P0.5 Reliability | Autosave, recoverable tasks, backup/restore, safe desktop lifecycle | Complete |
 | P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Complete |
-| P1.2 Studio | Study, Review, and Course Map become a coherent output library | Planned |
-| P1.3 Product polish | Onboarding, previews, search, empty/error states, accessibility, localization | Planned |
-| P1.4 Engineering hardening | Frontend feature slices, shared API client, automated UI tests, performance | Planned |
+| G0 Graph contract and baseline | Relation semantics, evidence rules, evaluation scope, and non-goals are frozen | In progress |
+| G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | Planned |
+| G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | Planned |
+| G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | Planned |
+| G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | Planned |
+| P1.2 Studio | Study, Review, and Course Map become a coherent output library | Deferred until G4 |
+| P1.3 Product polish | Onboarding, previews, search, empty/error states, accessibility, localization | Deferred until G4 |
+| P1.4 Structural hardening | Large frontend slice extraction, shared API-client consolidation, and remaining release optimization | Deferred until G4 except release-blocking work |
+
+### Current sequencing decision
+
+P1.2-P1.4 remain accepted product work, but they are not the active delivery
+sequence. The next program is G0-G4: make the Concept graph evidence-backed,
+deterministic, and measurable before building more Studio outputs on top of it.
+
+This deferral applies to the large structural refactor, not to quality work.
+Every G stage must still include scoped architecture, automated unit/integration
+tests, relevant UI/E2E checks, manual acceptance, documentation, an independent
+commit, and a confirmed remote push. Reliability, maintainability, performance,
+or security work that blocks a G stage or safe release is handled when discovered.
+
+The architecture and alternatives are recorded in
+[ADR-0008](decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md).
+The maintainer's parallel learning requirements are tracked in the
+[project mastery plan](project-mastery-plan.md).
+
+### Active Graph Reliability Program
+
+The existing `CardRelation` force graph is a discovery prototype. It is not a
+canonical Concept graph and must not be presented as a prerequisite planner.
+G0-G4 upgrade the model without discarding the completed Source, Chunk,
+Locator, citation, task, and recovery foundations.
+
+```text
+current evidence foundation
+-> G0 freeze meaning and measurement
+-> G1 persist Concept / Evidence / Relation
+-> G2 build one reviewed golden graph
+-> G3 compute deterministic traces and learning order
+-> G4 ship stable path views with per-edge evidence
+-> resume P1.2-P1.4
+```
+
+#### G0 - Graph contract, baseline, and evaluation freeze
+
+Deliverables:
+
+- freeze `Concept != Card != Topic` and define stable identity plus aliases;
+- fix the direction rule: `A -> B` means A is a prerequisite of B;
+- define relation types, direction/symmetry, evidence support roles, independent
+  provenance axes, `candidate / accepted / rejected` review status, and
+  `current / stale / tombstoned` validity status;
+- register the golden-course scope, annotation protocol, graph metrics,
+  correctness tests, latency budget, artifact hashes, and claim boundaries;
+- preserve the 118-Card/20-edge research audit as a baseline, not a product result;
+- keep learner modeling, Graph-for-all-Chat routing, a database replacement,
+  and learning-outcome claims out of scope.
+
+G0 is complete only when its contract is reviewed, documentation checks pass,
+the seven already verified product-core commits are safely integrated into the
+intended base, and the checkpoint is available on the remote. Local branch
+creation alone is not completion.
+
+#### G1 - Evidence-grounded graph substrate
+
+Deliverables:
+
+- additive `Concept`, alias, ConceptEvidence, typed ConceptRelation, and
+  RelationEvidence schema, store, service, and API layers;
+- course isolation, stable IDs, uniqueness, endpoint integrity, no self-loop,
+  optimistic/idempotent review, and prerequisite cycle protection;
+- immutable graph-version publication, Concept merge/retirement history, and
+  Source/Chunk revision or hash checks that make old evidence ineligible immediately;
+- acceptance rechecks current evidence, uniqueness, revision, and acyclicity in
+  one course-scoped serialized transaction;
+- old Card, Topic, CardRelation, and Explore behavior remains compatible;
+- migration, transaction, concurrency, invalidation, recovery, and API tests.
+
+#### G2 - Human-reviewed golden course graph
+
+Deliverables:
+
+- select one bounded course slice and normalize 12-20 Concepts plus aliases;
+- map supporting Chunks/Cards and annotate 20-35 typed directed/symmetric relations;
+- attach locatable evidence, rationale, and proposal/review provenance to every
+  accepted/current entity and edge;
+- complete a delayed blinded second pass, adjudicate disagreement, version,
+  hash, and freeze the fixture; report a second human review separately if available;
+- freeze a key-Concept inventory and bounded pair judgments, then report the
+  ADR-0008-defined coverage, isolate, exact edge precision/recall, prerequisite
+  direction, agreement, and per-type error measures before making graph claims.
+
+Unsupported edges are removed even when doing so lowers coverage.
+
+#### G3 - Deterministic traversal and path engine
+
+Deliverables:
+
+- filtered N-hop BFS for Local Graph;
+- deterministic BFS for an explainable A-to-B Relationship Trace;
+- prerequisite ancestor closure, cycle detection, topological layers, and one
+  stable Kahn linearization for Learning Path;
+- evidence-bearing DTOs and APIs for every path step;
+- enforce relation/direction filters plus bounded hops/nodes and deterministic truncation;
+- tests for unreachable nodes, multiple equal paths, filters, cycles, duplicate
+  edges, missing endpoints, stable ties, adjacency materialization cost, and
+  `O(V + E)` traversal over a normalized immutable graph version.
+
+Similarity may propose candidates but is not a learning-order edge.
+
+#### G4 - Evidence-first product integration and quality gate
+
+Deliverables:
+
+- retain force layout for overview exploration, while Local, Trace, and Path
+  use stable left-to-right layered layouts;
+- make every node and edge open its rationale and original Source locator;
+- provide candidate review/edit, empty, unreachable, stale, loading, and error states;
+- pass browser E2E, desktop, narrow-screen, keyboard, accessibility,
+  performance, graph-integrity, citation, and complete non-regression checks.
+
+G4 may support the bounded claim that paths on the frozen course graph are
+correct, reproducible, and traceable. It does not establish that the product
+improves learning outcomes or outperforms NotebookLM.
+
+#### Graph quality gates
+
+- 100% of accepted/current Concepts and typed relations have current locatable evidence;
+- 100% of accepted/current relations preserve provenance and rationale;
+- accepted-but-stale revisions remain auditable but never enter an authoritative path;
+- zero self-loop, duplicate, cross-course, missing-endpoint, or accepted
+  prerequisite-cycle violations;
+- identical inputs on one graph version return identical ordered node/edge IDs
+  and canonical result hash, excluding volatile transport metadata;
+- every golden-fixture path step opens its recorded Source location;
+- candidate-generation quality is measured separately and no model proposal
+  becomes accepted truth automatically;
+- Dense Chat retrieval, citations, and abstention remain a protected baseline.
 
 ### P0.4 completion summary
 
@@ -195,9 +333,9 @@ answer-to-Note capture, deletion, Undo, and Recovery restore at desktop and
 narrow widths with no horizontal overflow or console errors.
 
 The complete decision and invariants are recorded in
-[ADR-0007](decisions/ADR-0007-notebook-notes-and-derived-sources.md). P1.2 is
-the next gate: turn Notes, Study, Review, Course Map, and the existing Studio
-tools into one coherent output library.
+[ADR-0007](decisions/ADR-0007-notebook-notes-and-derived-sources.md). At the
+time of P1.1 completion, P1.2 was the next planned gate. ADR-0008 now defers
+P1.2 until G4 is accepted.
 
 ### Stage gates
 
@@ -212,7 +350,9 @@ Every stage records:
 
 The append-only implementation record is
 [`docs/productization-log.md`](productization-log.md). Cross-stage,
-hard-to-reverse decisions live under [`docs/decisions`](decisions).
+hard-to-reverse decisions live under [`docs/decisions`](decisions). Product
+delivery and the maintainer's personal ownership are tracked independently in
+the [`project mastery plan`](project-mastery-plan.md).
 
 The product separates complementary structures that serve different learning needs:
 
@@ -298,6 +438,10 @@ desktop application with a packaged backend sidecar.
 
 The graph remains a discovery tool. It is not used as the curriculum hierarchy
 or as the review scheduler.
+
+This completed baseline is the input to G0-G4. It is not evidence that
+canonical Concept identity, evidence-grounded relations, or deterministic
+learning paths already exist.
 
 ## Milestone 23: Knowledge Card V2 (Completed)
 
@@ -600,6 +744,9 @@ Planned measurements:
 
 Evaluation should use a small versioned benchmark course plus structured user
 feedback rather than relying on visual demos alone.
+
+G4 includes a bounded graph-quality gate only. It does not complete this
+broader product-evaluation program or establish educational effectiveness.
 
 ## Milestone 34: Feedback Dataset And Agentic Learning Loop (Deferred)
 
