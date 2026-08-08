@@ -8,6 +8,7 @@ import os
 import platform
 import subprocess
 import threading
+import unicodedata
 from pathlib import Path
 from typing import get_args
 
@@ -644,7 +645,12 @@ def test_public_config_schema_rejects_source_content_fields() -> None:
         "artifact_role": "golden_graph_pdf_parser_config",
         "extraction_mode": "pypdf_plain_text_v1",
         "normalization": "unicode_nfkc_lf_v1",
+        "reader_strict": False,
+        "ocr_policy": "disabled",
+        "blank_detection": "unicode_whitespace_only_v1",
+        "page_failure_policy": "record_and_continue_v1",
         "encrypted_pdf_policy": "reject",
+        "timeout_scope": "whole_asset_worker_wall_clock_v1",
         "max_pdf_bytes": 1,
         "max_pages": 1,
         "max_page_utf8_bytes": 1,
@@ -852,6 +858,7 @@ def test_dependency_snapshot_rejects_casefold_duplicate_packages() -> None:
                 "schema_version": 1,
                 "artifact_role": "golden_graph_dependency_snapshot",
                 "python_version": platform.python_version(),
+                "unicode_database_version": unicodedata.unidata_version,
                 "packages": [
                     {"name": "pypdf", "version": "6.14.2"},
                     {"name": "PyPDF", "version": "999.0.0"},
@@ -1597,7 +1604,12 @@ def _synthetic_protocol(
         "artifact_role": "golden_graph_pdf_parser_config",
         "extraction_mode": "pypdf_plain_text_v1",
         "normalization": "unicode_nfkc_lf_v1",
+        "reader_strict": False,
+        "ocr_policy": "disabled",
+        "blank_detection": "unicode_whitespace_only_v1",
+        "page_failure_policy": "record_and_continue_v1",
         "encrypted_pdf_policy": "reject",
+        "timeout_scope": "whole_asset_worker_wall_clock_v1",
         "max_pdf_bytes": 64 * 1024 * 1024,
         "max_pages": 10_000,
         "max_page_utf8_bytes": 64 * 1024 * 1024,
@@ -1608,8 +1620,10 @@ def _synthetic_protocol(
         "schema_version": 1,
         "artifact_role": "golden_graph_utf8_chunker_config",
         "algorithm": "utf8_sliding_window_v1",
+        "utf8_boundary_policy": "codepoint_safe_max_end_forward_start_v1",
         "max_chunk_utf8_bytes": 200,
         "overlap_utf8_bytes": 10,
+        "max_chunks": 1_000,
         "cross_page_chunks": False,
         "page_coverage_policy": "complete_union_overlap_allowed-v1",
     }
@@ -1659,6 +1673,7 @@ def _synthetic_protocol(
         "schema_version": 1,
         "artifact_role": "golden_graph_dependency_snapshot",
         "python_version": platform.python_version(),
+        "unicode_database_version": unicodedata.unidata_version,
         "packages": [
             {"name": "project-source", "version": "repository-v1"},
             {"name": "pypdf", "version": pypdf_version},

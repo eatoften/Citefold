@@ -35,7 +35,12 @@ class PdfParserConfigV1(StrictBindingModel):
     artifact_role: Literal["golden_graph_pdf_parser_config"]
     extraction_mode: Literal["pypdf_plain_text_v1"]
     normalization: Literal["unicode_nfkc_lf_v1"]
+    reader_strict: Literal[False]
+    ocr_policy: Literal["disabled"]
+    blank_detection: Literal["unicode_whitespace_only_v1"]
+    page_failure_policy: Literal["record_and_continue_v1"]
     encrypted_pdf_policy: Literal["reject"]
+    timeout_scope: Literal["whole_asset_worker_wall_clock_v1"]
     max_pdf_bytes: int = Field(gt=0, le=512 * 1024 * 1024)
     max_pages: int = Field(gt=0, le=10_000)
     max_page_utf8_bytes: int = Field(gt=0, le=64 * 1024 * 1024)
@@ -57,8 +62,10 @@ class Utf8ChunkerConfigV1(StrictBindingModel):
     schema_version: Literal[1]
     artifact_role: Literal["golden_graph_utf8_chunker_config"]
     algorithm: Literal["utf8_sliding_window_v1"]
-    max_chunk_utf8_bytes: int = Field(gt=0, le=2 * 1024 * 1024)
+    utf8_boundary_policy: Literal["codepoint_safe_max_end_forward_start_v1"]
+    max_chunk_utf8_bytes: int = Field(ge=4, le=2 * 1024 * 1024)
     overlap_utf8_bytes: int = Field(ge=0, le=2 * 1024 * 1024)
+    max_chunks: int = Field(gt=0, le=1_000)
     cross_page_chunks: Literal[False]
     page_coverage_policy: Literal["complete_union_overlap_allowed-v1"]
 
@@ -87,6 +94,7 @@ class DependencySnapshot(StrictBindingModel):
     schema_version: Literal[1]
     artifact_role: Literal["golden_graph_dependency_snapshot"]
     python_version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
+    unicode_database_version: str = Field(pattern=r"^\d+\.\d+\.\d+$")
     packages: JsonArrayTuple[DependencyPackage] = Field(
         min_length=1,
         max_length=2_000,

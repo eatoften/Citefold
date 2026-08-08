@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 import tomllib
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
@@ -665,6 +666,10 @@ def _validate_projection(
         raise GoldenGraphProtocolError(
             "Dependency snapshot Python version differs from the freeze runtime"
         )
+    if dependencies.unicode_database_version != unicodedata.unidata_version:
+        raise GoldenGraphProtocolError(
+            "Dependency snapshot Unicode database differs from the freeze runtime"
+        )
     acquisition = protocol.acquisition
     catalog_identity = (catalog.corpus_id, catalog.asset_id, catalog.raw_asset_sha256)
     expected_identity = (
@@ -714,6 +719,8 @@ def _validate_projection(
         raise GoldenGraphProtocolError("Chunk manifest tool identity mismatch")
     if chunks.page_coverage_policy != chunker_config.page_coverage_policy:
         raise GoldenGraphProtocolError("Chunk manifest coverage policy mismatch")
+    if len(chunks.chunks) > chunker_config.max_chunks:
+        raise GoldenGraphProtocolError("Chunk manifest exceeds configured Chunk limit")
     page_ids = {
         page.logical_page_id: (page.page_number, page.semantic_utf8_bytes)
         for page in catalog.pages
