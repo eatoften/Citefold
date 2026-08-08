@@ -5,9 +5,9 @@ from uuid import uuid4
 
 from app.card_embedding_text import build_card_embedding_text
 from app.card_relation_store import list_card_relations_for_course
+from app.db import get_db_path
 from app.job_store import list_jobs_for_course
 from app.knowledge_card_store import list_cards_for_course
-from app.settings import get_app_path_settings
 
 from .io import sha256_file, sha256_value
 from .schemas import (
@@ -29,7 +29,14 @@ def snapshot_course_corpus(
     if not normalized_course_id:
         raise ValueError("course_id is required.")
 
-    resolved_database = (database_path or get_app_path_settings().db_path).resolve()
+    resolved_database = get_db_path().resolve()
+    if (
+        database_path is not None
+        and database_path.resolve() != resolved_database
+    ):
+        raise ValueError(
+            "database_path must match the database configured for app stores."
+        )
     if not resolved_database.is_file():
         raise FileNotFoundError(f"SQLite database does not exist: {resolved_database}")
 

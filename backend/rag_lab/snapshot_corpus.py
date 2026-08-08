@@ -5,6 +5,8 @@ import json
 from collections.abc import Sequence
 from pathlib import Path
 
+from app.db import configure_db
+
 from .corpus import snapshot_course_corpus
 from .io import write_model_atomic
 
@@ -22,6 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.database is not None:
+        configure_db(args.database.resolve())
     snapshot = snapshot_course_corpus(
         args.course_id,
         snapshot_id=args.snapshot_id,
