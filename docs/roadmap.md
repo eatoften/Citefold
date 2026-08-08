@@ -91,6 +91,19 @@ current evidence foundation
 
 #### G0 - Graph contract, baseline, and evaluation freeze
 
+Current checkpoint: the
+[public-course benchmark contract](evaluation/public-course-benchmark.md) and
+[acquisition module](modules/public-course-benchmark-acquisition.md) register
+eight commit/hash-pinned CS336 Spring 2025 slide decks, physical
+authoring/development/sealed partitions, a fail-closed downloader, and a
+separate CC0 counterfactual trust fixture. No slide PDF is committed and no
+quality result is claimed. CS61B remains an external-only robustness track
+because a course-wide redistribution license has not been established.
+
+G0 is still open: G0.2 must freeze the exact page ranges, parser/chunker and
+Source/Chunk artifact identities, human label lineage, runner, prompts/models,
+seeds, tolerances, and sealed-use ledger before any held-out result is opened.
+
 Deliverables:
 
 - freeze `Concept != Card != Topic` and define stable identity plus aliases;

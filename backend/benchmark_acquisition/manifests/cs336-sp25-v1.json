@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "corpus_id": "cs336-sp25-v1",
+  "registered_at": "2026-08-08",
+  "course": {
+    "institution": "Stanford University",
+    "course_code": "CS336",
+    "title": "Language Modeling from Scratch",
+    "term": "Spring 2025"
+  },
+  "attribution": "Stanford University, CS336 Spring 2025; upstream copyright 2025 Stanford University.",
+  "source_repository": {
+    "url": "https://github.com/stanford-cs336/spring2025-lectures",
+    "slug": "stanford-cs336/spring2025-lectures",
+    "commit_sha": "b98b08a98d9d47a69bbdcb4e96a58aa48ee4d13b",
+    "license_spdx": "MIT",
+    "license_url": "https://raw.githubusercontent.com/stanford-cs336/spring2025-lectures/b98b08a98d9d47a69bbdcb4e96a58aa48ee4d13b/LICENSE",
+    "license_blob_sha1": "49d9c744c8de093674f7b12bb5f532fdc08f00a2",
+    "license_sha256": "b3ccacaf9286910f22ba98681601f426288297f17004699f99d9fdd5f7432751"
+  },
+  "acquisition": {
+    "default_output_directory": "backend/data/public_course_benchmarks/cs336-sp25-v1",
+    "allowed_hosts": [
+      "raw.githubusercontent.com"
+    ],
+    "timeout_seconds": 60,
+    "asset_deadline_seconds": 120,
+    "max_asset_bytes": 16777216,
+    "max_assets": 8,
+    "max_total_bytes": 50331648
+  },
+  "assets": [
+    {
+      "asset_id": "lecture-03-architecture",
+      "title": "Lecture 3 - Architecture",
+      "partition": "authoring",
+      "upstream_path": "nonexecutable/2025 Lecture 3 - architecture.pdf",
+      "canonical_url": "https://raw.githubusercontent.com/stanford-cs336/spring2025-lectures/b98b08a98d9d47a69bbdcb4e96a58aa48ee4d13b/nonexecutable/2025%20Lecture%203%20-%20architecture.pdf",
+      "output_filename": "lecture-03-architecture.pdf",
+      "byte_size": 5277140,
+      "media_type": "application/pdf",
+      "accepted_content_types": [
+        "application/pdf",
+        "application/octet-stream"
+      ],
+      "git_blob_sha1": "6af1285ef8417425f13a80a5c9f4e15c9c067865",
+      "sha256": "3692b3d25b5605e70930abc81d63241c71c136dfb573029d4544420925e0f9c4",
+      "license_spdx": "MIT",
+      "redistribution_allowed": false
+    },
+    {
+      "asset_id": "lecture-04-moes",
+      "title": "Lecture 4 - Mixture of Experts",
+      "partition": "development",
+      "upstream_path": "nonexecutable/2025 Lecture 4 - MoEs.pdf",
+      "canonical_url": "https://raw.githubusercontent.com/stanford-cs336/spring2025-lectures/b98b08a98d9d47a69bbdcb4e96a58aa48ee4d13b/nonexecutable/2025%20Lecture%204%20-%20MoEs.pdf",
+      "output_filename": "lecture-04-moes.pdf",
+      "byte_size": 4677130,
+      "media_type": "application/pdf",
+      "accepted_content_types": [
+        "application/pdf",
+        "application/octet-stream"
+      ],
+      "git_blob_sha1": "bb40bb1d8de695941e25900592c5375e549d3d28",
+      "sha256": "b62ba6416f04c4473834fffa19119317e78542a6b8dc94a5e816790643cb0c4f",
+      "license_spdx": "MIT",
+      "redistribution_allowed": false
+    },
+    {
+      "asset_id": "lecture-05-gpus",
+      "title": "Lecture 5 - GPUs",
+      "partition": "authoring",
+      "upstream_path": "nonexecutable/2025 Lecture 5 - GPUs.pdf",
+      "canonical_url": "https://raw.githubusercontent.com/stanford-cs336/spring2025-lectures/b98b08a98d9d47a69bbdcb4e96a58aa48ee4d13b/nonexecutable/2025%20Lecture%205%20-%20GPUs.pdf",
+      "output_filename": "lecture-05-gpus.pdf",
+      "byte_size": 4766673,
+      "media_type": "application/pdf",
+      "accepted_content_types": [
+        "application/pdf",
+        "application/octet-stream"
+      ],
+      "git_blob_sha1": "420b38ad5c0aa6ee9f28166bd3c45f4ca8638134",
+      "sha256": "ff25621de3d3d462a534070a209a8efac1b8410e3da58de08f764e33482bb6ba",
+      "license_spdx": "MIT",
+      "redistribution_allowed": false
+    },
+    {
+      "asset_id": "lecture-07-parallelism-basics",
+      "title": "Lecture 7 - Parallelism Basics",
+      "partition": "development",
+      "upstream_path": "nonexecutable/2025 Lecture 7 - Parallelism basics.pdf",
+      "canonical_url": "https://raw.githubusercontent.com/stanford-cs336/spring2025-lectures/b98b08a98d9d47a69bbdcb4e96a58aa48ee4d13b/nonexecutable/2025%20Lecture%207%20-%20Parallelism%20basics.pdf",
+      "output_filename": "lecture-07-parallelism-basics.pdf",
+      "byte_size": 5004408,
+      "media_type": "application/pdf",
+      "accepted_content_types": [
+        "application/pdf",
+        "application/octet-stream"
+      ],
+      "git_blob_sha1": "5b4f6528e65646e950fb01aa7ddf64bdc84b2e72",
+      "sha256": "c1868d601380a62d87cbacb91589114e46e3e88e47577d9308dde1788c9cc09a",
+      "license_spdx": "MIT",
+      "redistribution_allowed": false
+    },
+    {
+      "asset_id": "lecture-09-scaling-laws-basics",
+      "title": "Lecture 9 - Scaling Laws Basics",
+      "partition": "authoring",
+      "upstream_path": "nonexecutable/2025 Lecture 9 - Scaling laws basics.pdf",
+      "canonical_url": "https://raw.githubusercontent.com/stanford-cs336/spring2025-lectures/b98b08a98d9d47a69bbdcb4e96a58aa48ee4d13b/nonexecutable/2025%20Lecture%209%20-%20Scaling%20laws%20basics.pdf",
+      "output_filename": "lecture-09-scaling-laws-basics.pdf",
+      "byte_size": 6014047,
+      "media_type": "application/pdf",
+      "accepted_content_types": [
+        "application/pdf",
+        "application/octet-stream"
+      ],
+      "git_blob_sha1": "b26208c2992e9bb9dfee8eb0424784f08e5564a3",
+      "sha256": "89f1e78e7c040a463a2f3a22025bcca9836ca1ecdbee88b398b780835e5bf7ce",
+      "license_spdx": "MIT",
+      "redistribution_allowed": false
+    },
+    {
+      "asset_id": "lecture-11-scaling-details",
+      "title": "Lecture 11 - Scaling Details",
+      "partition": "sealed_transfer",
+      "upstream_path": "nonexecutable/2025 Lecture 11 - Scaling details.pdf",
+      "canonical_url": "https://raw.githubusercontent.com/stanford-cs336/spring2025-lectures/b98b08a98d9d47a69bbdcb4e96a58aa48ee4d13b/nonexecutable/2025%20Lecture%2011%20-%20Scaling%20details.pdf",
+      "output_filename": "lecture-11-scaling-details.pdf",
+      "byte_size": 6265218,
+      "media_type": "application/pdf",
+      "accepted_content_types": [
+        "application/pdf",
+        "application/octet-stream"
+      ],
+      "git_blob_sha1": "511d24081a82a64df66702e1e46d3b610acf30f9",
+      "sha256": "9aab7ba7abb0059170c2626291f7ff4b6f5c81bc6448a52945143008bcc9b887",
+      "license_spdx": "MIT",
+      "redistribution_allowed": false
+    },
+    {
+      "asset_id": "lecture-15-rlhf-alignment",
+      "title": "Lecture 15 - RLHF Alignment",
+      "partition": "authoring",
+      "upstream_path": "nonexecutable/2025 Lecture 15 - RLHF Alignment.pdf",
+      "canonical_url": "https://raw.githubusercontent.com/stanford-cs336/spring2025-lectures/b98b08a98d9d47a69bbdcb4e96a58aa48ee4d13b/nonexecutable/2025%20Lecture%2015%20-%20RLHF%20Alignment.pdf",
+      "output_filename": "lecture-15-rlhf-alignment.pdf",
+      "byte_size": 6626049,
+      "media_type": "application/pdf",
+      "accepted_content_types": [
+        "application/pdf",
+        "application/octet-stream"
+      ],
+      "git_blob_sha1": "0d62a0e50e8c27d83c427ddeb5efd1ed366f7f81",
+      "sha256": "d16bdb0f22702aba773cb76883b2c9e501c05ebd9e955e403ebbaebe544ece60",
+      "license_spdx": "MIT",
+      "redistribution_allowed": false
+    },
+    {
+      "asset_id": "lecture-16-rlvr",
+      "title": "Lecture 16 - RLVR",
+      "partition": "sealed_transfer",
+      "upstream_path": "nonexecutable/2025 Lecture 16 - RLVR.pdf",
+      "canonical_url": "https://raw.githubusercontent.com/stanford-cs336/spring2025-lectures/b98b08a98d9d47a69bbdcb4e96a58aa48ee4d13b/nonexecutable/2025%20Lecture%2016%20-%20RLVR.pdf",
+      "output_filename": "lecture-16-rlvr.pdf",
+      "byte_size": 7079571,
+      "media_type": "application/pdf",
+      "accepted_content_types": [
+        "application/pdf",
+        "application/octet-stream"
+      ],
+      "git_blob_sha1": "2152e1187a17c595767241550c8558c20e4a4fcc",
+      "sha256": "6d789153852144d687bd9b068d5e5b5717ea99fd60d8febe8c8b06b6aa86439f",
+      "license_spdx": "MIT",
+      "redistribution_allowed": false
+    }
+  ]
+}

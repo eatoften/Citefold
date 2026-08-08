@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "fixture_id": "counterfactual-mini-course-v1",
+  "artifact_role": "ingestible_source",
+  "title": "The Orin Relay Handbook",
+  "authorship": "Original fictional fixture authored for Video Course Cards",
+  "license_spdx": "CC0-1.0",
+  "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "purpose": "Detect answers based on model priors instead of supplied evidence, and test deterministic citation and refusal behavior.",
+  "sources": [
+    {
+      "source_id": "orin-relay-overview",
+      "title": "Orin Relay: States and Routing",
+      "sections": [
+        {
+          "locator": "section-1",
+          "heading": "Luma states",
+          "text": "An Orin relay counts luma pulses in groups. Exactly three pulses place the relay in the amber state. Every other positive pulse count places it in the violet state. A relay with no observed pulse remains clear."
+        },
+        {
+          "locator": "section-2",
+          "heading": "Packet routes",
+          "text": "The fictional Kestrel rule sends blue packets through the south channel and red packets through the north channel. Green packets are unsupported and must be refused rather than assigned a channel."
+        }
+      ]
+    },
+    {
+      "source_id": "orin-relay-safety",
+      "title": "Orin Relay: Gate Safety",
+      "sections": [
+        {
+          "locator": "section-1",
+          "heading": "Merin gate",
+          "text": "A Merin gate may open only after a Tavo checksum is validated. Amber state alone never authorizes the gate. If checksum evidence is absent, the safe action is to keep the gate closed."
+        },
+        {
+          "locator": "section-2",
+          "heading": "Noral drift",
+          "text": "One clockwise alignment reduces noral drift by two quants. One counterclockwise alignment increases it by one quant. These changes are applied in the order recorded by the relay."
+        }
+      ]
+    }
+  ]
+}

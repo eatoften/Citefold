@@ -119,6 +119,14 @@ discovery baseline. See the
 [append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.
 
+Evaluation is also staged rather than retrofitted after implementation. The
+[public-course benchmark contract](docs/evaluation/public-course-benchmark.md)
+registers hash-pinned CS336 Spring 2025 slides, isolated authoring/development/
+sealed partitions, a fail-closed acquisition boundary, and a separate CC0
+counterfactual trust fixture. It currently reports **no accuracy result**:
+parser/chunker identity, human labels, runner, model/prompt identity, and the
+sealed-use ledger must be frozen in G0.2 before resume-quality metrics exist.
+
 ## Target architecture: one evidence backbone, two consumers
 
 > **Partially implemented target architecture, not an end-to-end feature

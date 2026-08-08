@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "fixture_id": "counterfactual-mini-course-v1",
+  "artifact_role": "gold_labels_and_questions",
+  "source_artifact": {
+    "filename": "counterfactual-mini-course-v1.source.json",
+    "sha256": "e59f6e3ec2f4264fde3bd90f1e146e7b4b8baca0bc5626fd62e4c16a0da525bc"
+  },
+  "span_hash_contract": "sha256 of the exact UTF-8 quote bytes with no normalization",
+  "claim_matching_contract": {
+    "mode": "structured_required_claims",
+    "normalization": [
+      "unicode_nfkc",
+      "casefold",
+      "collapse_whitespace",
+      "strip_terminal_punctuation"
+    ],
+    "extra_supported_claims_allowed": true,
+    "unsupported_claims_allowed": false
+  },
+  "relation_ontology": [
+    "prerequisite",
+    "part_of",
+    "example_of",
+    "related",
+    "contrast_with"
+  ],
+  "gold_concepts": [
+    {
+      "concept_id": "luma-pulse-count",
+      "preferred_name": "luma pulse count",
+      "short_definition": "The number of fictional luma pulses observed by an Orin relay.",
+      "evidence": [
+        {
+          "source_id": "orin-relay-overview",
+          "locator": "section-1",
+          "exact_quote": "Exactly three pulses place the relay in the amber state.",
+          "span_sha256": "3d348806141bbe49c78ed866e3ab24b8290b8d3e9c72d316a4374ad666b5518f"
+        }
+      ]
+    },
+    {
+      "concept_id": "amber-state",
+      "preferred_name": "amber state",
+      "short_definition": "The fictional relay state caused by observing exactly three luma pulses.",
+      "evidence": [
+        {
+          "source_id": "orin-relay-overview",
+          "locator": "section-1",
+          "exact_quote": "Exactly three pulses place the relay in the amber state.",
+          "span_sha256": "3d348806141bbe49c78ed866e3ab24b8290b8d3e9c72d316a4374ad666b5518f"
+        }
+      ]
+    },
+    {
+      "concept_id": "tavo-checksum",
+      "preferred_name": "Tavo checksum",
+      "short_definition": "A fictional checksum whose validation is required before a Merin gate may open.",
+      "evidence": [
+        {
+          "source_id": "orin-relay-safety",
+          "locator": "section-1",
+          "exact_quote": "A Merin gate may open only after a Tavo checksum is validated.",
+          "span_sha256": "83e432650198a5de04bd55e40b23681c28aac0987dcb007d57e2a6618cc20d2d"
+        }
+      ]
+    },
+    {
+      "concept_id": "merin-gate-opening",
+      "preferred_name": "Merin gate opening",
+      "short_definition": "The event of a fictional Merin gate opening after its safety prerequisite is satisfied.",
+      "evidence": [
+        {
+          "source_id": "orin-relay-safety",
+          "locator": "section-1",
+          "exact_quote": "A Merin gate may open only after a Tavo checksum is validated.",
+          "span_sha256": "83e432650198a5de04bd55e40b23681c28aac0987dcb007d57e2a6618cc20d2d"
+        }
+      ]
+    }
+  ],
+  "gold_relations": [
+    {
+      "relation_id": "relation-luma-amber",
+      "source_concept_id": "amber-state",
+      "relation_type": "related",
+      "target_concept_id": "luma-pulse-count",
+      "support_basis": "source_asserted",
+      "rationale": "The source directly states that a particular luma pulse count determines the amber state.",
+      "evidence": [
+        {
+          "support_role": "relation_assertion",
+          "source_id": "orin-relay-overview",
+          "locator": "section-1",
+          "exact_quote": "Exactly three pulses place the relay in the amber state.",
+          "span_sha256": "3d348806141bbe49c78ed866e3ab24b8290b8d3e9c72d316a4374ad666b5518f"
+        }
+      ]
+    },
+    {
+      "relation_id": "relation-tavo-merin",
+      "source_concept_id": "tavo-checksum",
+      "relation_type": "prerequisite",
+      "target_concept_id": "merin-gate-opening",
+      "support_basis": "pedagogical_inference",
+      "rationale": "Understanding the checksum requirement is a pedagogical prerequisite for understanding when gate opening is permitted.",
+      "evidence": [
+        {
+          "support_role": "source_endpoint",
+          "source_id": "orin-relay-safety",
+          "locator": "section-1",
+          "exact_quote": "A Merin gate may open only after a Tavo checksum is validated.",
+          "span_sha256": "83e432650198a5de04bd55e40b23681c28aac0987dcb007d57e2a6618cc20d2d"
+        },
+        {
+          "support_role": "target_endpoint",
+          "source_id": "orin-relay-safety",
+          "locator": "section-1",
+          "exact_quote": "A Merin gate may open only after a Tavo checksum is validated.",
+          "span_sha256": "83e432650198a5de04bd55e40b23681c28aac0987dcb007d57e2a6618cc20d2d"
+        }
+      ]
+    }
+  ],
+  "gold_questions": [
+    {
+      "question_id": "cf-answerable-1",
+      "question": "Which state follows exactly three luma pulses?",
+      "answerable": true,
+      "response_contract": "answer_with_supported_claims",
+      "refusal_reason": null,
+      "expected_claims": [
+        {
+          "claim_id": "claim-three-pulses-amber",
+          "required": true,
+          "subject": "relay after exactly three luma pulses",
+          "predicate": "has state",
+          "object": "amber state",
+          "allowed_subject_forms": ["relay after three luma pulses"],
+          "allowed_predicate_forms": ["enters", "is in"],
+          "allowed_object_forms": ["amber"]
+        }
+      ],
+      "citation_contract": {
+        "required": true,
+        "allow_additional_supported_citations": true,
+        "required_evidence": [
+          {
+            "source_id": "orin-relay-overview",
+            "locator": "section-1",
+            "exact_quote": "Exactly three pulses place the relay in the amber state.",
+            "span_sha256": "3d348806141bbe49c78ed866e3ab24b8290b8d3e9c72d316a4374ad666b5518f"
+          }
+        ]
+      }
+    },
+    {
+      "question_id": "cf-answerable-2",
+      "question": "A relay is amber but has no validated Tavo checksum. May its Merin gate open?",
+      "answerable": true,
+      "response_contract": "answer_with_supported_claims",
+      "refusal_reason": null,
+      "expected_claims": [
+        {
+          "claim_id": "claim-gate-stays-closed",
+          "required": true,
+          "subject": "Merin gate",
+          "predicate": "must remain",
+          "object": "closed",
+          "allowed_subject_forms": ["gate"],
+          "allowed_predicate_forms": ["may not open", "cannot open"],
+          "allowed_object_forms": ["not open"]
+        },
+        {
+          "claim_id": "claim-checksum-required",
+          "required": true,
+          "subject": "validated Tavo checksum",
+          "predicate": "is prerequisite for",
+          "object": "Merin gate opening",
+          "allowed_subject_forms": ["Tavo checksum validation"],
+          "allowed_predicate_forms": ["is required before"],
+          "allowed_object_forms": ["opening the Merin gate", "gate opening"]
+        }
+      ],
+      "citation_contract": {
+        "required": true,
+        "allow_additional_supported_citations": true,
+        "required_evidence": [
+          {
+            "source_id": "orin-relay-safety",
+            "locator": "section-1",
+            "exact_quote": "A Merin gate may open only after a Tavo checksum is validated.",
+            "span_sha256": "83e432650198a5de04bd55e40b23681c28aac0987dcb007d57e2a6618cc20d2d"
+          }
+        ]
+      }
+    },
+    {
+      "question_id": "cf-refusal-1",
+      "question": "Which channel receives a green packet?",
+      "answerable": false,
+      "response_contract": "refuse",
+      "refusal_reason": "explicitly_unsupported_by_source",
+      "expected_claims": [],
+      "citation_contract": {
+        "required": true,
+        "allow_additional_supported_citations": false,
+        "required_evidence": [
+          {
+            "source_id": "orin-relay-overview",
+            "locator": "section-2",
+            "exact_quote": "Green packets are unsupported and must be refused rather than assigned a channel.",
+            "span_sha256": "bbd43b61b04ab1401ea95892a905a5a3a6057e76c9b0808c8fba9995b2a9d97f"
+          }
+        ]
+      }
+    },
+    {
+      "question_id": "cf-refusal-2",
+      "question": "Who invented the first Orin relay?",
+      "answerable": false,
+      "response_contract": "refuse",
+      "refusal_reason": "absent_from_registered_sources",
+      "expected_claims": [],
+      "citation_contract": {
+        "required": false,
+        "allow_additional_supported_citations": false,
+        "required_evidence": []
+      }
+    }
+  ]
+}

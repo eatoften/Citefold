@@ -2668,3 +2668,104 @@ not embedded in its own content.
 G1.2 adds review/currentness transitions, aliases and merge/retirement history,
 prerequisite acyclicity, and immutable accepted graph publication. Only a
 published graph version may become input to deterministic G3 traversal.
+
+## G0.1 - License-aware public benchmark acquisition
+
+**Status:** Complete as an acquisition slice; G0 evaluation freeze remains in progress
+
+**Date:** 2026-08-08
+
+**Branch:** `codex/concept-graph-foundation`
+
+### User outcome
+
+The repository now has a reproducible, reviewable way to identify and acquire
+public course material for later graph, path, retrieval, citation, and refusal
+evaluation. External bytes, development labels, and sealed labels are kept
+separate, and the checkpoint makes no premature accuracy claim.
+
+### Scope and non-goals
+
+Delivered scope:
+
+- a strict manifest for all eight CS336 Spring 2025 PDFs in the official
+  lecture repository at one upstream commit, including URL, byte size, Git
+  blob identity, SHA-256, attribution, license identity, and partition;
+- authoring, development, and sealed-transfer partitions with sealed download
+  disabled by default and physical directory separation;
+- bounded HTTPS acquisition with exact host/redirect, header, size, count,
+  aggregate, PDF-magic, deadline, content-hash, and no-overwrite checks;
+- rejection of traversal, reserved names, symlinks, Windows reparse points,
+  executable or mismatched existing files, and unsafe parent components;
+- a self-authored CC0 counterfactual mini-course whose ingestible Source and
+  gold labels are physically separated, independently hashed, and linked by
+  exact Source identity;
+- structured Concept/relation, citation, claim, and refusal contracts checked
+  against the production graph ontology.
+
+This slice does not parse or annotate CS336, open sealed labels, run a model,
+or report quality. It is not evidence that public material was absent from a
+foundation model's training data. CS61B is registered only as a future
+external robustness source; no course-wide redistribution license was found,
+so its slides, videos, assignments, and excerpts are not vendored.
+
+### Decisions and technology
+
+The acquisition manifest owns byte identity and rights metadata; a later G0.2
+evaluation manifest owns page ranges, parser/chunker versions, derived Source
+artifacts, labels, prompts/models, runner, seeds, and tolerances. Keeping these
+contracts separate prevents a downloader change from silently changing the
+evaluation protocol and prevents labels from entering the ingestible corpus.
+
+The implementation uses only Python standard-library networking, hashing,
+filesystem, and JSON primitives plus typed immutable records. Downloads are
+streamed into a same-directory temporary file, verified, and published without
+overwrite. Hash equality establishes identity, not parser safety or license
+coverage; downstream PDF parsing remains an untrusted-input boundary.
+
+### Problems encountered and resolutions
+
+- Resolving an explicit CLI output path before validation could erase evidence
+  that it was a symlink. The CLI now passes the original path and validation
+  walks existing components with `lstat` before and after creation.
+- Windows junctions are directory reparse points rather than ordinary POSIX
+  symlinks. File and directory checks now reject the reparse attribute at the
+  pre-open, open-handle, and post-open boundaries.
+- A copied relation enum could drift from production, and symmetric gold could
+  disagree with stored canonical order. Cross-module tests close the ontology
+  set, while the strict fixture loader enforces canonical endpoints.
+- A first prerequisite label related checksum validation to the `Merin gate`
+  entity rather than the atomic `Merin gate opening` concept. The gold concept
+  and question were corrected, and the edge is explicitly a pedagogical
+  inference with evidence matching both endpoint Concepts.
+- Public availability was initially too easy to conflate with redistribution
+  safety. PDFs remain gitignored; the manifest pins the upstream MIT license
+  but conservatively marks every asset `redistribution_allowed=false` because
+  individual slides may contain third-party figures.
+
+### Verification
+
+- offline benchmark acquisition/fixture slice: 21 passed, 2 skipped in
+  22.93 seconds;
+- the two skips are permission-dependent file/directory symlink creation on
+  the current Windows account; independent simulated reparse-point checks pass;
+- Python compilation, scoped diff checking, whitespace checks, strict fixture
+  loading, and both SHA-256 sidecars pass;
+- no test performs a network request and no downloaded PDF is committed.
+
+### Git checkpoint
+
+Independent commit subject:
+
+```text
+feat(eval): register public course benchmark
+```
+
+The immutable SHA is reported after the commit is created and pushed.
+
+### Next gate
+
+G0.2 builds and freezes the parser/chunker/label/runner manifest and a bounded
+Lecture 3 annotation bundle before G2 automation or sealed measurement. The
+sealed transfer assets remain unopened until model, prompts, thresholds, and
+scoring rules are fixed.
