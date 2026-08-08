@@ -3,20 +3,30 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from sqlite3 import Connection, Row
+from uuid import uuid4
 
 from .concept_graph import (
     Concept,
+    ConceptAlias,
     ConceptEvidence,
+    ConceptRevisionEdit,
     ConceptRelation,
     ConceptRelationSummary,
     ConceptSummary,
     EvidenceReferenceCreate,
+    GraphMarkStaleRequest,
+    GraphReviewRequest,
+    RelationEndpointRevisionBinding,
     RelationEvidence,
     RelationEvidenceReferenceCreate,
+    RelationReviewRequest,
+    RelationRevisionEdit,
+    normalize_alias_key,
 )
 from .course_source import hash_source_chunk_text
 from .db import connect, ensure_db
 from .source_projection_identity import canonical_source_locator_json
+from .job import utc_now
 
 
 class ConceptGraphStoreError(RuntimeError):
@@ -44,6 +54,30 @@ class RelationEvidenceDriftError(ConceptGraphStoreError):
 
 
 class DuplicateRelationError(ConceptGraphStoreError):
+    pass
+
+
+class GraphRevisionConflictError(ConceptGraphStoreError):
+    pass
+
+
+class GraphReviewTransitionError(ConceptGraphStoreError):
+    pass
+
+
+class GraphOperationReuseError(ConceptGraphStoreError):
+    pass
+
+
+class PrerequisiteCycleError(ConceptGraphStoreError):
+    pass
+
+
+class GraphEntityNotFoundError(ConceptGraphStoreError):
+    pass
+
+
+class GraphEvidenceStaleError(ConceptGraphStoreError):
     pass
 
 
@@ -96,15 +130,31 @@ def create_concept_candidate(
     concept: Concept,
     evidence_requests: list[EvidenceReferenceCreate],
     evidence_ids: list[str],
+    alias_ids: list[str] | None = None,
+    alias_names: list[str] | None = None,
 ) -> Concept:
     if len(evidence_requests) != len(evidence_ids):
         raise ValueError("Every Concept evidence reference needs an id.")
+
+    if alias_ids is None:
+        alias_ids = []
+    if alias_names is None:
+        alias_names = []
+    if len(alias_names) != len(alias_ids):
+        raise ValueError("Every Concept alias needs an id.")
 
     ensure_db()
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         _insert_concept_identity(conn, concept)
         _insert_concept_revision(conn, concept)
+        aliases = _build_aliases(
+            concept,
+            alias_names,
+            alias_ids,
+        )
+        for alias in aliases:
+            _insert_concept_alias(conn, alias)
         evidence = [
             _snapshot_concept_evidence(
                 conn,
@@ -117,8 +167,11 @@ def create_concept_candidate(
         ]
         for item in evidence:
             _insert_concept_evidence(conn, item)
-
-    return concept.model_copy(update={"evidence": evidence})
+        row = _select_concept_revision(
+            conn, concept.course_id, concept.id, concept.revision
+        )
+        assert row is not None
+        return _load_concept(conn, row)
 
 
 def create_relation_candidate(
@@ -136,6 +189,7 @@ def create_relation_candidate(
         _require_relation_identity_available(conn, relation)
         _insert_relation_identity(conn, relation)
         _insert_relation_revision(conn, relation)
+        _bind_relation_to_current_endpoints(conn, relation)
         evidence = [
             _snapshot_relation_evidence(
                 conn,
@@ -149,8 +203,535 @@ def create_relation_candidate(
         _require_relation_support(relation, evidence, endpoint_evidence)
         for item in evidence:
             _insert_relation_evidence(conn, item)
+        row = _select_relation_revision(
+            conn, relation.course_id, relation.id, relation.revision
+        )
+        assert row is not None
+        return _load_relation(conn, row)
 
-    return relation.model_copy(update={"evidence": evidence})
+
+def edit_concept_revision(
+    course_id: str,
+    concept_id: str,
+    request: ConceptRevisionEdit,
+    request_hash: str,
+) -> Concept:
+    ensure_db()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        replay = _replay_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            request_hash=request_hash,
+            kind="concept_edit",
+            entity_type="concept",
+            entity_id=concept_id,
+        )
+        if replay is not None:
+            return _load_concept_revision_or_raise(
+                conn, course_id, concept_id, replay
+            )
+        current = _require_current_concept_row(conn, course_id, concept_id)
+        _require_expected_revision(current, request.expected_revision)
+        if current["identity_status"] != "active":
+            raise GraphReviewTransitionError(
+                "Only an active Concept can be edited."
+            )
+
+        now = utc_now()
+        revision = int(current["revision"]) + 1
+        concept = Concept(
+            id=concept_id,
+            course_id=course_id,
+            revision=revision,
+            preferred_name=request.preferred_name,
+            short_definition=request.short_definition,
+            identity_status="active",
+            review_status="candidate",
+            validity_status="current",
+            proposal_origin="human",
+            created_at=now,
+            updated_at=now,
+        )
+        _insert_concept_revision(conn, concept)
+        aliases = _build_aliases(
+            concept,
+            request.aliases,
+            [uuid4().hex for _ in request.aliases],
+        )
+        for alias in aliases:
+            _insert_concept_alias(conn, alias)
+        evidence = [
+            _snapshot_concept_evidence(
+                conn,
+                concept=concept,
+                request=item,
+                evidence_id=uuid4().hex,
+                ordinal=ordinal,
+            )
+            for ordinal, item in enumerate(request.evidence)
+        ]
+        for item in evidence:
+            _insert_concept_evidence(conn, item)
+        _stale_incident_relations(
+            conn,
+            course_id=course_id,
+            concept_id=concept_id,
+            now=now,
+        )
+        _advance_concept_head(
+            conn, course_id, concept_id, request.expected_revision, revision, now
+        )
+        _record_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            kind="concept_edit",
+            request_hash=request_hash,
+            actor=request.actor,
+            reason=request.reason,
+            entity_type="concept",
+            entity_id=concept_id,
+            result_revision=revision,
+            created_at=now,
+        )
+        row = _select_concept_revision(conn, course_id, concept_id, revision)
+        assert row is not None
+        return _load_concept(conn, row)
+
+
+def review_concept_revision(
+    course_id: str,
+    concept_id: str,
+    request: GraphReviewRequest,
+    request_hash: str,
+) -> Concept:
+    ensure_db()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        replay = _replay_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            request_hash=request_hash,
+            kind="concept_review",
+            entity_type="concept",
+            entity_id=concept_id,
+        )
+        if replay is not None:
+            return _load_concept_revision_or_raise(
+                conn, course_id, concept_id, replay
+            )
+        current = _require_current_concept_row(conn, course_id, concept_id)
+        _require_expected_revision(current, request.expected_revision)
+        if current["review_status"] != "candidate":
+            raise GraphReviewTransitionError(
+                "Only a candidate Concept can be reviewed."
+            )
+        if request.decision == "accept":
+            if current["validity_status"] != "current":
+                raise GraphReviewTransitionError(
+                    "Only a current Concept candidate can be accepted."
+                )
+            _require_current_concept_evidence(
+                conn, concept_id, int(current["revision"])
+            )
+
+        now = utc_now()
+        revision = int(current["revision"]) + 1
+        concept = _copy_concept_revision(
+            current,
+            revision=revision,
+            review_status=(
+                "accepted" if request.decision == "accept" else "rejected"
+            ),
+            review_actor=request.actor,
+            reviewed_at=now,
+            review_revision=int(current["revision"]),
+            now=now,
+        )
+        _insert_concept_revision(conn, concept)
+        _copy_concept_children(
+            conn,
+            concept=concept,
+            source_revision=int(current["revision"]),
+        )
+        _stale_incident_relations(
+            conn,
+            course_id=course_id,
+            concept_id=concept_id,
+            now=now,
+        )
+        _advance_concept_head(
+            conn, course_id, concept_id, request.expected_revision, revision, now
+        )
+        _record_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            kind="concept_review",
+            request_hash=request_hash,
+            actor=request.actor,
+            reason=request.reason,
+            entity_type="concept",
+            entity_id=concept_id,
+            result_revision=revision,
+            created_at=now,
+        )
+        row = _select_concept_revision(conn, course_id, concept_id, revision)
+        assert row is not None
+        return _load_concept(conn, row)
+
+
+def mark_concept_revision_stale(
+    course_id: str,
+    concept_id: str,
+    request: GraphMarkStaleRequest,
+    request_hash: str,
+) -> Concept:
+    ensure_db()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        replay = _replay_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            request_hash=request_hash,
+            kind="concept_mark_stale",
+            entity_type="concept",
+            entity_id=concept_id,
+        )
+        if replay is not None:
+            return _load_concept_revision_or_raise(
+                conn, course_id, concept_id, replay
+            )
+        current = _require_current_concept_row(conn, course_id, concept_id)
+        _require_expected_revision(current, request.expected_revision)
+        if current["validity_status"] != "current":
+            raise GraphReviewTransitionError(
+                "Only a current Concept revision can be marked stale."
+            )
+        now = utc_now()
+        revision = int(current["revision"]) + 1
+        concept = _copy_concept_revision(
+            current,
+            revision=revision,
+            validity_status="stale",
+            now=now,
+        )
+        _insert_concept_revision(conn, concept)
+        _copy_concept_children(
+            conn,
+            concept=concept,
+            source_revision=int(current["revision"]),
+        )
+        _stale_incident_relations(
+            conn,
+            course_id=course_id,
+            concept_id=concept_id,
+            now=now,
+        )
+        _advance_concept_head(
+            conn, course_id, concept_id, request.expected_revision, revision, now
+        )
+        _record_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            kind="concept_mark_stale",
+            request_hash=request_hash,
+            actor=request.actor,
+            reason=request.reason,
+            entity_type="concept",
+            entity_id=concept_id,
+            result_revision=revision,
+            created_at=now,
+        )
+        row = _select_concept_revision(conn, course_id, concept_id, revision)
+        assert row is not None
+        return _load_concept(conn, row)
+
+
+def edit_relation_revision(
+    course_id: str,
+    relation_id: str,
+    request: RelationRevisionEdit,
+    request_hash: str,
+) -> ConceptRelation:
+    ensure_db()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        replay = _replay_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            request_hash=request_hash,
+            kind="relation_edit",
+            entity_type="relation",
+            entity_id=relation_id,
+        )
+        if replay is not None:
+            return _load_relation_revision_or_raise(
+                conn, course_id, relation_id, replay
+            )
+        current = _require_current_relation_row(conn, course_id, relation_id)
+        _require_expected_revision(current, request.expected_revision)
+        endpoint_evidence = _require_expected_relation_endpoints(
+            conn,
+            current,
+            request.expected_source_concept_revision,
+            request.expected_target_concept_revision,
+            require_accepted=False,
+        )
+        now = utc_now()
+        revision = int(current["revision"]) + 1
+        relation = ConceptRelation(
+            id=relation_id,
+            course_id=course_id,
+            revision=revision,
+            source_concept_id=current["source_concept_id"],
+            target_concept_id=current["target_concept_id"],
+            relation_type=current["relation_type"],
+            support_basis=request.support_basis,
+            rationale=request.rationale,
+            review_status="candidate",
+            validity_status="current",
+            proposal_origin="human",
+            created_at=now,
+            updated_at=now,
+        )
+        _insert_relation_revision(conn, relation)
+        evidence = [
+            _snapshot_relation_evidence(
+                conn,
+                relation=relation,
+                request=item,
+                evidence_id=uuid4().hex,
+                ordinal=ordinal,
+            )
+            for ordinal, item in enumerate(request.evidence)
+        ]
+        _require_relation_support(relation, evidence, endpoint_evidence)
+        for item in evidence:
+            _insert_relation_evidence(conn, item)
+        _insert_relation_endpoint_binding(
+            conn,
+            relation,
+            request.expected_source_concept_revision,
+            request.expected_target_concept_revision,
+            now,
+        )
+        _advance_relation_head(
+            conn, course_id, relation_id, request.expected_revision, revision, now
+        )
+        _record_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            kind="relation_edit",
+            request_hash=request_hash,
+            actor=request.actor,
+            reason=request.reason,
+            entity_type="relation",
+            entity_id=relation_id,
+            result_revision=revision,
+            created_at=now,
+        )
+        row = _select_relation_revision(conn, course_id, relation_id, revision)
+        assert row is not None
+        return _load_relation(conn, row)
+
+
+def review_relation_revision(
+    course_id: str,
+    relation_id: str,
+    request: RelationReviewRequest,
+    request_hash: str,
+) -> ConceptRelation:
+    ensure_db()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        replay = _replay_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            request_hash=request_hash,
+            kind="relation_review",
+            entity_type="relation",
+            entity_id=relation_id,
+        )
+        if replay is not None:
+            return _load_relation_revision_or_raise(
+                conn, course_id, relation_id, replay
+            )
+        current = _require_current_relation_row(conn, course_id, relation_id)
+        _require_expected_revision(current, request.expected_revision)
+        if current["review_status"] != "candidate":
+            raise GraphReviewTransitionError(
+                "Only a candidate relation can be reviewed."
+            )
+        binding = _get_relation_endpoint_binding(
+            conn, relation_id, int(current["revision"])
+        )
+        if binding is None:
+            if request.decision == "accept":
+                raise GraphReviewTransitionError(
+                    "A legacy relation without endpoint revision binding "
+                    "must be edited and regrounded before acceptance."
+                )
+        elif (
+            binding.source_concept_revision
+            != request.expected_source_concept_revision
+            or binding.target_concept_revision
+            != request.expected_target_concept_revision
+        ):
+            raise GraphRevisionConflictError(
+                "The reviewed endpoint revisions no longer match the "
+                "relation candidate binding."
+            )
+        evidence = _list_relation_revision_evidence(
+            conn, relation_id, int(current["revision"])
+        )
+        if request.decision == "accept":
+            endpoint_evidence = _require_expected_relation_endpoints(
+                conn,
+                current,
+                request.expected_source_concept_revision,
+                request.expected_target_concept_revision,
+                require_accepted=True,
+            )
+            if current["validity_status"] != "current":
+                raise GraphReviewTransitionError(
+                    "Only a current relation candidate can be accepted."
+                )
+            _require_current_relation_evidence(evidence)
+            relation_for_support = _row_to_relation(current, evidence)
+            _require_relation_support(
+                relation_for_support, evidence, endpoint_evidence
+            )
+            if current["relation_type"] == "prerequisite":
+                _require_no_prerequisite_cycle(
+                    conn,
+                    course_id=course_id,
+                    relation_id=relation_id,
+                    source_concept_id=str(current["source_concept_id"]),
+                    target_concept_id=str(current["target_concept_id"]),
+                )
+
+        now = utc_now()
+        revision = int(current["revision"]) + 1
+        relation = _copy_relation_revision(
+            current,
+            revision=revision,
+            review_status=(
+                "accepted" if request.decision == "accept" else "rejected"
+            ),
+            review_actor=request.actor,
+            reviewed_at=now,
+            review_revision=int(current["revision"]),
+            now=now,
+        )
+        _insert_relation_revision(conn, relation)
+        _copy_relation_evidence(
+            conn,
+            relation=relation,
+            source_revision=int(current["revision"]),
+        )
+        if request.decision == "accept":
+            assert binding is not None
+        _copy_relation_binding(
+            conn,
+            relation=relation,
+            source_revision=int(current["revision"]),
+        )
+        _advance_relation_head(
+            conn, course_id, relation_id, request.expected_revision, revision, now
+        )
+        _record_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            kind="relation_review",
+            request_hash=request_hash,
+            actor=request.actor,
+            reason=request.reason,
+            entity_type="relation",
+            entity_id=relation_id,
+            result_revision=revision,
+            created_at=now,
+        )
+        row = _select_relation_revision(conn, course_id, relation_id, revision)
+        assert row is not None
+        return _load_relation(conn, row)
+
+
+def mark_relation_revision_stale(
+    course_id: str,
+    relation_id: str,
+    request: GraphMarkStaleRequest,
+    request_hash: str,
+) -> ConceptRelation:
+    ensure_db()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        replay = _replay_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            request_hash=request_hash,
+            kind="relation_mark_stale",
+            entity_type="relation",
+            entity_id=relation_id,
+        )
+        if replay is not None:
+            return _load_relation_revision_or_raise(
+                conn, course_id, relation_id, replay
+            )
+        current = _require_current_relation_row(conn, course_id, relation_id)
+        _require_expected_revision(current, request.expected_revision)
+        if current["validity_status"] != "current":
+            raise GraphReviewTransitionError(
+                "Only a current relation revision can be marked stale."
+            )
+        now = utc_now()
+        revision = int(current["revision"]) + 1
+        relation = _copy_relation_revision(
+            current,
+            revision=revision,
+            validity_status="stale",
+            now=now,
+        )
+        _insert_relation_revision(conn, relation)
+        _copy_relation_evidence(
+            conn,
+            relation=relation,
+            source_revision=int(current["revision"]),
+        )
+        _copy_relation_binding(
+            conn,
+            relation=relation,
+            source_revision=int(current["revision"]),
+        )
+        _advance_relation_head(
+            conn, course_id, relation_id, request.expected_revision, revision, now
+        )
+        _record_operation(
+            conn,
+            course_id=course_id,
+            operation_id=request.operation_id,
+            kind="relation_mark_stale",
+            request_hash=request_hash,
+            actor=request.actor,
+            reason=request.reason,
+            entity_type="relation",
+            entity_id=relation_id,
+            result_revision=revision,
+            created_at=now,
+        )
+        row = _select_relation_revision(conn, course_id, relation_id, revision)
+        assert row is not None
+        return _load_relation(conn, row)
 
 
 def get_concept(course_id: str, concept_id: str) -> Concept | None:
@@ -163,12 +744,23 @@ def get_concept(course_id: str, concept_id: str) -> Concept | None:
         ).fetchone()
         if row is None:
             return None
-        evidence = _list_concept_revision_evidence(
+        return _load_concept(conn, row)
+
+
+def get_concept_revision(
+    course_id: str,
+    concept_id: str,
+    revision: int,
+) -> Concept | None:
+    ensure_db()
+    with connect() as conn:
+        row = _select_concept_revision(
             conn,
+            course_id,
             concept_id,
-            int(row["revision"]),
+            revision,
         )
-    return _row_to_concept(row, evidence)
+        return _load_concept(conn, row) if row is not None else None
 
 
 def list_concept_summaries_for_course(
@@ -214,12 +806,23 @@ def get_relation(
         ).fetchone()
         if row is None:
             return None
-        evidence = _list_relation_revision_evidence(
+        return _load_relation(conn, row)
+
+
+def get_relation_revision(
+    course_id: str,
+    relation_id: str,
+    revision: int,
+) -> ConceptRelation | None:
+    ensure_db()
+    with connect() as conn:
+        row = _select_relation_revision(
             conn,
+            course_id,
             relation_id,
-            int(row["revision"]),
+            revision,
         )
-    return _row_to_relation(row, evidence)
+        return _load_relation(conn, row) if row is not None else None
 
 
 def list_relation_summaries_for_course(
@@ -255,12 +858,868 @@ def list_relation_summaries_for_course(
 def clear_concept_graph() -> None:
     ensure_db()
     with connect() as conn:
+        conn.execute("DELETE FROM concept_graph_operations")
+        conn.execute("DELETE FROM relation_endpoint_revisions")
         conn.execute("DELETE FROM relation_evidence")
         conn.execute("DELETE FROM concept_relation_revisions")
         conn.execute("DELETE FROM concept_relations")
+        conn.execute("DELETE FROM concept_aliases")
         conn.execute("DELETE FROM concept_evidence")
         conn.execute("DELETE FROM concept_revisions")
         conn.execute("DELETE FROM concepts")
+
+
+def _build_aliases(
+    concept: Concept,
+    names: list[str],
+    alias_ids: list[str],
+) -> list[ConceptAlias]:
+    return [
+        ConceptAlias(
+            id=alias_ids[ordinal],
+            course_id=concept.course_id,
+            concept_id=concept.id,
+            concept_revision=concept.revision,
+            display_text=name,
+            normalized_text=normalize_alias_key(name),
+            ordinal=ordinal,
+            created_at=concept.created_at,
+        )
+        for ordinal, name in enumerate(names)
+    ]
+
+
+def _insert_concept_alias(conn: Connection, alias: ConceptAlias) -> None:
+    conn.execute(
+        """
+        INSERT INTO concept_aliases (
+            id, course_id, concept_id, concept_revision, display_text,
+            normalized_text, ordinal, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            alias.id,
+            alias.course_id,
+            alias.concept_id,
+            alias.concept_revision,
+            alias.display_text,
+            alias.normalized_text,
+            alias.ordinal,
+            _datetime_to_text(alias.created_at),
+        ),
+    )
+
+
+def _list_concept_aliases(
+    conn: Connection,
+    concept_id: str,
+    revision: int,
+) -> list[ConceptAlias]:
+    rows = conn.execute(
+        """
+        SELECT * FROM concept_aliases
+        WHERE concept_id = ? AND concept_revision = ?
+        ORDER BY ordinal, id
+        """,
+        (concept_id, revision),
+    ).fetchall()
+    return [
+        ConceptAlias(
+            id=row["id"],
+            course_id=row["course_id"],
+            concept_id=row["concept_id"],
+            concept_revision=row["concept_revision"],
+            display_text=row["display_text"],
+            normalized_text=row["normalized_text"],
+            ordinal=row["ordinal"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+        for row in rows
+    ]
+
+
+def _bind_relation_to_current_endpoints(
+    conn: Connection,
+    relation: ConceptRelation,
+) -> RelationEndpointRevisionBinding:
+    rows = conn.execute(
+        """
+        SELECT id, current_revision
+        FROM concepts
+        WHERE course_id = ? AND id IN (?, ?)
+        """,
+        (
+            relation.course_id,
+            relation.source_concept_id,
+            relation.target_concept_id,
+        ),
+    ).fetchall()
+    revisions = {str(row["id"]): int(row["current_revision"]) for row in rows}
+    if set(revisions) != {
+        relation.source_concept_id,
+        relation.target_concept_id,
+    }:
+        raise RelationEndpointNotFoundError(
+            "Both relation endpoints must exist in the selected course."
+        )
+    return _insert_relation_endpoint_binding(
+        conn,
+        relation,
+        revisions[relation.source_concept_id],
+        revisions[relation.target_concept_id],
+        relation.created_at,
+    )
+
+
+def _insert_relation_endpoint_binding(
+    conn: Connection,
+    relation: ConceptRelation,
+    source_revision: int,
+    target_revision: int,
+    created_at: datetime,
+) -> RelationEndpointRevisionBinding:
+    binding = RelationEndpointRevisionBinding(
+        relation_id=relation.id,
+        course_id=relation.course_id,
+        relation_revision=relation.revision,
+        source_concept_id=relation.source_concept_id,
+        source_concept_revision=source_revision,
+        target_concept_id=relation.target_concept_id,
+        target_concept_revision=target_revision,
+        created_at=created_at,
+    )
+    conn.execute(
+        """
+        INSERT INTO relation_endpoint_revisions (
+            relation_id, course_id, relation_revision,
+            source_concept_id, source_concept_revision,
+            target_concept_id, target_concept_revision, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            binding.relation_id,
+            binding.course_id,
+            binding.relation_revision,
+            binding.source_concept_id,
+            binding.source_concept_revision,
+            binding.target_concept_id,
+            binding.target_concept_revision,
+            _datetime_to_text(binding.created_at),
+        ),
+    )
+    return binding
+
+
+def _get_relation_endpoint_binding(
+    conn: Connection,
+    relation_id: str,
+    revision: int,
+) -> RelationEndpointRevisionBinding | None:
+    row = conn.execute(
+        """
+        SELECT * FROM relation_endpoint_revisions
+        WHERE relation_id = ? AND relation_revision = ?
+        """,
+        (relation_id, revision),
+    ).fetchone()
+    if row is None:
+        return None
+    return RelationEndpointRevisionBinding(
+        relation_id=row["relation_id"],
+        course_id=row["course_id"],
+        relation_revision=row["relation_revision"],
+        source_concept_id=row["source_concept_id"],
+        source_concept_revision=row["source_concept_revision"],
+        target_concept_id=row["target_concept_id"],
+        target_concept_revision=row["target_concept_revision"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def _select_concept_revision(
+    conn: Connection,
+    course_id: str,
+    concept_id: str,
+    revision: int,
+) -> Row | None:
+    return conn.execute(
+        _CONCEPT_REVISION_SELECT
+        + " WHERE concepts.course_id = ? AND concepts.id = ? "
+        + "AND revisions.revision = ?",
+        (course_id, concept_id, revision),
+    ).fetchone()
+
+
+def _select_relation_revision(
+    conn: Connection,
+    course_id: str,
+    relation_id: str,
+    revision: int,
+) -> Row | None:
+    return conn.execute(
+        _RELATION_REVISION_SELECT
+        + " WHERE relations.course_id = ? AND relations.id = ? "
+        + "AND revisions.revision = ?",
+        (course_id, relation_id, revision),
+    ).fetchone()
+
+
+def _require_current_concept_row(
+    conn: Connection,
+    course_id: str,
+    concept_id: str,
+) -> Row:
+    row = conn.execute(
+        _CONCEPT_CURRENT_SELECT
+        + " WHERE concepts.course_id = ? AND concepts.id = ?",
+        (course_id, concept_id),
+    ).fetchone()
+    if row is None:
+        raise GraphEntityNotFoundError(
+            "Concept not found in the selected course."
+        )
+    return row
+
+
+def _require_current_relation_row(
+    conn: Connection,
+    course_id: str,
+    relation_id: str,
+) -> Row:
+    row = conn.execute(
+        _RELATION_CURRENT_SELECT
+        + " WHERE relations.course_id = ? AND relations.id = ?",
+        (course_id, relation_id),
+    ).fetchone()
+    if row is None:
+        raise GraphEntityNotFoundError(
+            "Concept relation not found in the selected course."
+        )
+    return row
+
+
+def _require_expected_revision(row: Row, expected_revision: int) -> None:
+    if int(row["revision"]) != expected_revision:
+        raise GraphRevisionConflictError(
+            "The expected revision is no longer current."
+        )
+
+
+def _copy_concept_revision(
+    row: Row,
+    *,
+    revision: int,
+    now: datetime,
+    **changes: object,
+) -> Concept:
+    values: dict[str, object] = {
+        "id": row["id"],
+        "course_id": row["course_id"],
+        "revision": revision,
+        "preferred_name": row["preferred_name"],
+        "short_definition": row["short_definition"],
+        "identity_status": row["identity_status"],
+        "merged_into_concept_id": row["merged_into_concept_id"],
+        "review_status": row["review_status"],
+        "validity_status": row["validity_status"],
+        "proposal_origin": row["proposal_origin"],
+        "provider": row["provider"],
+        "model": row["model"],
+        "prompt_protocol": row["prompt_protocol"],
+        "output_version": row["output_version"],
+        "review_actor": row["review_actor"],
+        "reviewed_at": _datetime_from_text(row["reviewed_at"]),
+        "review_revision": row["review_revision"],
+        "created_at": now,
+        "updated_at": now,
+    }
+    values.update(changes)
+    return Concept(**values)
+
+
+def _copy_relation_revision(
+    row: Row,
+    *,
+    revision: int,
+    now: datetime,
+    **changes: object,
+) -> ConceptRelation:
+    values: dict[str, object] = {
+        "id": row["id"],
+        "course_id": row["course_id"],
+        "revision": revision,
+        "source_concept_id": row["source_concept_id"],
+        "target_concept_id": row["target_concept_id"],
+        "relation_type": row["relation_type"],
+        "support_basis": row["support_basis"],
+        "rationale": row["rationale"],
+        "review_status": row["review_status"],
+        "validity_status": row["validity_status"],
+        "proposal_origin": row["proposal_origin"],
+        "provider": row["provider"],
+        "model": row["model"],
+        "prompt_protocol": row["prompt_protocol"],
+        "output_version": row["output_version"],
+        "review_actor": row["review_actor"],
+        "reviewed_at": _datetime_from_text(row["reviewed_at"]),
+        "review_revision": row["review_revision"],
+        "created_at": now,
+        "updated_at": now,
+    }
+    values.update(changes)
+    return ConceptRelation(**values)
+
+
+def _copy_concept_children(
+    conn: Connection,
+    *,
+    concept: Concept,
+    source_revision: int,
+) -> None:
+    for source in _list_concept_aliases(conn, concept.id, source_revision):
+        _insert_concept_alias(
+            conn,
+            source.model_copy(
+                update={
+                    "id": uuid4().hex,
+                    "concept_revision": concept.revision,
+                }
+            ),
+        )
+    for source in _list_concept_revision_evidence(
+        conn, concept.id, source_revision
+    ):
+        _insert_concept_evidence(
+            conn,
+            source.model_copy(
+                update={
+                    "id": uuid4().hex,
+                    "concept_revision": concept.revision,
+                }
+            ),
+        )
+
+
+def _copy_relation_evidence(
+    conn: Connection,
+    *,
+    relation: ConceptRelation,
+    source_revision: int,
+) -> None:
+    for source in _list_relation_revision_evidence(
+        conn, relation.id, source_revision
+    ):
+        _insert_relation_evidence(
+            conn,
+            source.model_copy(
+                update={
+                    "id": uuid4().hex,
+                    "relation_revision": relation.revision,
+                }
+            ),
+        )
+
+
+def _copy_relation_binding(
+    conn: Connection,
+    *,
+    relation: ConceptRelation,
+    source_revision: int,
+) -> None:
+    source = _get_relation_endpoint_binding(
+        conn, relation.id, source_revision
+    )
+    if source is None:
+        return
+    _insert_relation_endpoint_binding(
+        conn,
+        relation,
+        source.source_concept_revision,
+        source.target_concept_revision,
+        source.created_at,
+    )
+
+
+def _advance_concept_head(
+    conn: Connection,
+    course_id: str,
+    concept_id: str,
+    expected_revision: int,
+    revision: int,
+    now: datetime,
+) -> None:
+    result = conn.execute(
+        """
+        UPDATE concepts SET current_revision = ?, updated_at = ?
+        WHERE id = ? AND course_id = ? AND current_revision = ?
+        """,
+        (
+            revision,
+            _datetime_to_text(now),
+            concept_id,
+            course_id,
+            expected_revision,
+        ),
+    )
+    if result.rowcount != 1:
+        raise GraphRevisionConflictError(
+            "The expected Concept revision is no longer current."
+        )
+
+
+def _advance_relation_head(
+    conn: Connection,
+    course_id: str,
+    relation_id: str,
+    expected_revision: int,
+    revision: int,
+    now: datetime,
+) -> None:
+    result = conn.execute(
+        """
+        UPDATE concept_relations SET current_revision = ?, updated_at = ?
+        WHERE id = ? AND course_id = ? AND current_revision = ?
+        """,
+        (
+            revision,
+            _datetime_to_text(now),
+            relation_id,
+            course_id,
+            expected_revision,
+        ),
+    )
+    if result.rowcount != 1:
+        raise GraphRevisionConflictError(
+            "The expected relation revision is no longer current."
+        )
+
+
+def _stale_incident_relations(
+    conn: Connection,
+    *,
+    course_id: str,
+    concept_id: str,
+    now: datetime,
+) -> None:
+    rows = conn.execute(
+        _RELATION_CURRENT_SELECT
+        + " WHERE relations.course_id = ? "
+        + "AND (relations.source_concept_id = ? "
+        + "OR relations.target_concept_id = ?)",
+        (course_id, concept_id, concept_id),
+    ).fetchall()
+    for row in rows:
+        if row["validity_status"] != "current":
+            continue
+        source_revision = int(row["revision"])
+        relation = _copy_relation_revision(
+            row,
+            revision=source_revision + 1,
+            validity_status="stale",
+            now=now,
+        )
+        _insert_relation_revision(conn, relation)
+        _copy_relation_evidence(
+            conn, relation=relation, source_revision=source_revision
+        )
+        _copy_relation_binding(
+            conn, relation=relation, source_revision=source_revision
+        )
+        _advance_relation_head(
+            conn,
+            course_id,
+            relation.id,
+            source_revision,
+            relation.revision,
+            now,
+        )
+
+
+def _record_operation(
+    conn: Connection,
+    *,
+    course_id: str,
+    operation_id: str,
+    kind: str,
+    request_hash: str,
+    actor: str,
+    reason: str,
+    entity_type: str,
+    entity_id: str,
+    result_revision: int,
+    created_at: datetime,
+) -> None:
+    result_json = json.dumps(
+        {
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "revision": result_revision,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    conn.execute(
+        """
+        INSERT INTO concept_graph_operations (
+            course_id, operation_id, kind, request_hash, actor, reason,
+            entity_type, entity_id, result_revision, result_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            course_id,
+            operation_id,
+            kind,
+            request_hash,
+            actor,
+            reason,
+            entity_type,
+            entity_id,
+            result_revision,
+            result_json,
+            _datetime_to_text(created_at),
+        ),
+    )
+
+
+def _replay_operation(
+    conn: Connection,
+    *,
+    course_id: str,
+    operation_id: str,
+    request_hash: str,
+    kind: str,
+    entity_type: str,
+    entity_id: str,
+) -> int | None:
+    row = conn.execute(
+        """
+        SELECT kind, request_hash, entity_type, entity_id, result_revision,
+               result_json
+        FROM concept_graph_operations
+        WHERE course_id = ? AND operation_id = ?
+        """,
+        (course_id, operation_id),
+    ).fetchone()
+    if row is None:
+        return None
+    if (
+        row["request_hash"] != request_hash
+        or row["kind"] != kind
+        or row["entity_type"] != entity_type
+        or row["entity_id"] != entity_id
+    ):
+        raise GraphOperationReuseError(
+            "This operation id was already used for a different request."
+        )
+    try:
+        receipt = json.loads(row["result_json"])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Stored graph operation receipt is invalid.") from exc
+    if receipt != {
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "revision": int(row["result_revision"]),
+    }:
+        raise RuntimeError("Stored graph operation receipt is inconsistent.")
+    return int(row["result_revision"])
+
+
+def _require_current_concept_evidence(
+    conn: Connection,
+    concept_id: str,
+    revision: int,
+) -> list[ConceptEvidence]:
+    evidence = _list_concept_revision_evidence(conn, concept_id, revision)
+    if not evidence:
+        raise GraphReviewTransitionError(
+            "A Concept needs evidence before it can be accepted or bound."
+        )
+    if not all(item.projection_is_current for item in evidence):
+        raise GraphEvidenceStaleError(
+            "Concept evidence is no longer current."
+        )
+    return evidence
+
+
+def _require_current_relation_evidence(
+    evidence: list[RelationEvidence],
+) -> None:
+    if not evidence:
+        raise GraphReviewTransitionError(
+            "A relation needs evidence before it can be accepted."
+        )
+    if not all(item.projection_is_current for item in evidence):
+        raise GraphEvidenceStaleError(
+            "Relation evidence is no longer current."
+        )
+
+
+def _require_expected_relation_endpoints(
+    conn: Connection,
+    relation_row: Row,
+    expected_source_revision: int,
+    expected_target_revision: int,
+    *,
+    require_accepted: bool,
+) -> dict[str, list[EvidenceFingerprint]]:
+    course_id = str(relation_row["course_id"])
+    expected = {
+        str(relation_row["source_concept_id"]): expected_source_revision,
+        str(relation_row["target_concept_id"]): expected_target_revision,
+    }
+    rows = conn.execute(
+        _CONCEPT_CURRENT_SELECT
+        + " WHERE concepts.course_id = ? AND concepts.id IN (?, ?)",
+        (
+            course_id,
+            relation_row["source_concept_id"],
+            relation_row["target_concept_id"],
+        ),
+    ).fetchall()
+    by_id = {str(row["id"]): row for row in rows}
+    if set(by_id) != set(expected):
+        raise RelationEndpointNotFoundError(
+            "Both relation endpoints must exist in the selected course."
+        )
+    result: dict[str, list[EvidenceFingerprint]] = {}
+    for concept_id, expected_revision in expected.items():
+        row = by_id[concept_id]
+        if int(row["revision"]) != expected_revision:
+            raise GraphRevisionConflictError(
+                "The expected endpoint revision is no longer current."
+            )
+        if (
+            row["identity_status"] != "active"
+            or row["validity_status"] != "current"
+            or row["review_status"] == "rejected"
+        ):
+            raise GraphReviewTransitionError(
+                "Relation endpoints must be active current Concepts."
+            )
+        if require_accepted and row["review_status"] != "accepted":
+            raise GraphReviewTransitionError(
+                "Accepted relations require accepted endpoint Concepts."
+            )
+        evidence = _require_current_concept_evidence(
+            conn, concept_id, expected_revision
+        )
+        result[concept_id] = [_evidence_fingerprint(item) for item in evidence]
+    return result
+
+
+def _require_no_prerequisite_cycle(
+    conn: Connection,
+    *,
+    course_id: str,
+    relation_id: str,
+    source_concept_id: str,
+    target_concept_id: str,
+) -> None:
+    rows = conn.execute(
+        """
+        SELECT identities.id, identities.source_concept_id,
+               identities.target_concept_id
+        FROM concept_relations AS identities
+        INNER JOIN concept_relation_revisions AS revisions
+            ON revisions.relation_id = identities.id
+           AND revisions.course_id = identities.course_id
+           AND revisions.revision = identities.current_revision
+        WHERE identities.course_id = ?
+          AND identities.relation_type = 'prerequisite'
+          AND revisions.review_status = 'accepted'
+          AND revisions.validity_status = 'current'
+          AND identities.id != ?
+        """,
+        (course_id, relation_id),
+    ).fetchall()
+    adjacency: dict[str, set[str]] = {}
+    for row in rows:
+        adjacency.setdefault(str(row["source_concept_id"]), set()).add(
+            str(row["target_concept_id"])
+        )
+    adjacency.setdefault(source_concept_id, set()).add(target_concept_id)
+
+    stack = [target_concept_id]
+    visited: set[str] = set()
+    while stack:
+        current = stack.pop()
+        if current == source_concept_id:
+            raise PrerequisiteCycleError(
+                "Accepting this prerequisite relation would create a cycle."
+            )
+        if current in visited:
+            continue
+        visited.add(current)
+        stack.extend(adjacency.get(current, ()))
+
+
+def _load_concept_revision_or_raise(
+    conn: Connection,
+    course_id: str,
+    concept_id: str,
+    revision: int,
+) -> Concept:
+    row = _select_concept_revision(conn, course_id, concept_id, revision)
+    if row is None:
+        raise RuntimeError("Stored Concept operation result is missing.")
+    return _load_concept(conn, row)
+
+
+def _load_relation_revision_or_raise(
+    conn: Connection,
+    course_id: str,
+    relation_id: str,
+    revision: int,
+) -> ConceptRelation:
+    row = _select_relation_revision(conn, course_id, relation_id, revision)
+    if row is None:
+        raise RuntimeError("Stored relation operation result is missing.")
+    return _load_relation(conn, row)
+
+
+def _load_concept(conn: Connection, row: Row) -> Concept:
+    revision = int(row["revision"])
+    concept = _row_to_concept(
+        row,
+        _list_concept_revision_evidence(conn, str(row["id"]), revision),
+    )
+    aliases = _list_concept_aliases(conn, str(row["id"]), revision)
+    return _decorate_concept(
+        concept.model_copy(update={"aliases": aliases}),
+        is_current_revision=revision == int(row["head_revision"]),
+    )
+
+
+def _decorate_concept(
+    concept: Concept,
+    *,
+    is_current_revision: bool,
+) -> Concept:
+    reasons: list[str] = []
+    if not is_current_revision:
+        reasons.append("not_current_revision")
+    if concept.identity_status != "active":
+        reasons.append("identity_not_active")
+    if concept.review_status != "accepted":
+        reasons.append("review_not_accepted")
+    if concept.validity_status != "current":
+        reasons.append("validity_not_current")
+    if not concept.evidence:
+        reasons.append("evidence_missing")
+    evidence_current = bool(concept.evidence) and all(
+        item.projection_is_current for item in concept.evidence
+    )
+    if concept.evidence and not evidence_current:
+        reasons.append("evidence_not_current")
+    return concept.model_copy(
+        update={
+            "is_current_revision": is_current_revision,
+            "evidence_current": evidence_current,
+            "eligible_for_publication": not reasons,
+            "currentness_reasons": reasons,
+        }
+    )
+
+
+def _load_relation(conn: Connection, row: Row) -> ConceptRelation:
+    revision = int(row["revision"])
+    evidence = _list_relation_revision_evidence(
+        conn, str(row["id"]), revision
+    )
+    binding = _get_relation_endpoint_binding(conn, str(row["id"]), revision)
+    relation = _row_to_relation(row, evidence).model_copy(
+        update={"endpoint_binding": binding}
+    )
+    endpoint_concepts: dict[str, Concept] = {}
+    for concept_id in (
+        relation.source_concept_id,
+        relation.target_concept_id,
+    ):
+        endpoint_row = conn.execute(
+            _CONCEPT_CURRENT_SELECT
+            + " WHERE concepts.course_id = ? AND concepts.id = ?",
+            (relation.course_id, concept_id),
+        ).fetchone()
+        if endpoint_row is not None:
+            endpoint_concepts[concept_id] = _load_concept(conn, endpoint_row)
+    return _decorate_relation(
+        relation,
+        is_current_revision=revision == int(row["head_revision"]),
+        endpoint_concepts=endpoint_concepts,
+    )
+
+
+def _decorate_relation(
+    relation: ConceptRelation,
+    *,
+    is_current_revision: bool,
+    endpoint_concepts: dict[str, Concept],
+) -> ConceptRelation:
+    reasons: list[str] = []
+    if not is_current_revision:
+        reasons.append("not_current_revision")
+    if relation.review_status != "accepted":
+        reasons.append("review_not_accepted")
+    if relation.validity_status != "current":
+        reasons.append("validity_not_current")
+    if not relation.evidence:
+        reasons.append("relation_evidence_missing")
+    evidence_current = bool(relation.evidence) and all(
+        item.projection_is_current for item in relation.evidence
+    )
+    if relation.evidence and not evidence_current:
+        reasons.append("relation_evidence_not_current")
+
+    roles = {item.support_role for item in relation.evidence}
+    roles_valid = (
+        roles == {"relation_assertion"}
+        if relation.support_basis == "source_asserted"
+        else roles == {"source_endpoint", "target_endpoint"}
+    )
+    if relation.evidence and not roles_valid:
+        reasons.append("support_roles_invalid")
+
+    binding = relation.endpoint_binding
+    endpoint_revisions_current = False
+    if binding is None:
+        reasons.append("legacy_endpoint_binding")
+    else:
+        source = endpoint_concepts.get(relation.source_concept_id)
+        target = endpoint_concepts.get(relation.target_concept_id)
+        binding_identity_matches = (
+            binding.course_id == relation.course_id
+            and binding.source_concept_id == relation.source_concept_id
+            and binding.target_concept_id == relation.target_concept_id
+        )
+        if not binding_identity_matches:
+            reasons.append("endpoint_binding_identity_mismatch")
+        endpoint_revisions_current = (
+            binding_identity_matches
+            and source is not None
+            and target is not None
+            and source.revision == binding.source_concept_revision
+            and target.revision == binding.target_concept_revision
+        )
+        if not endpoint_revisions_current:
+            reasons.append("endpoint_revision_mismatch")
+        if (
+            source is None
+            or target is None
+            or not source.eligible_for_publication
+            or not target.eligible_for_publication
+        ):
+            reasons.append("endpoint_not_publishable")
+    return relation.model_copy(
+        update={
+            "is_current_revision": is_current_revision,
+            "evidence_current": evidence_current,
+            "endpoint_revisions_current": endpoint_revisions_current,
+            "eligible_for_publication": not reasons,
+            "currentness_reasons": reasons,
+        }
+    )
 
 
 def _insert_concept_identity(conn: Connection, concept: Concept) -> None:
@@ -605,20 +2064,11 @@ def _require_relation_endpoints(
 
     result: dict[str, list[EvidenceFingerprint]] = {}
     for concept_id, row in valid_rows.items():
-        evidence_rows = conn.execute(
-            """
-            SELECT source_id, chunk_id, chunk_text_hash, quote, locator_json,
-                   projection_generation_id
-            FROM concept_evidence
-            WHERE course_id = ?
-              AND concept_id = ?
-              AND concept_revision = ?
-            """,
-            (relation.course_id, concept_id, row["revision"]),
-        ).fetchall()
+        evidence = _require_current_concept_evidence(
+            conn, concept_id, int(row["revision"])
+        )
         result[concept_id] = [
-            _row_evidence_fingerprint(item)
-            for item in evidence_rows
+            _evidence_fingerprint(item) for item in evidence
         ]
     return result
 
@@ -954,6 +2404,7 @@ _CONCEPT_CURRENT_SELECT = """
 SELECT
     concepts.id,
     concepts.course_id,
+    concepts.current_revision AS head_revision,
     concepts.current_revision AS revision,
     revisions.preferred_name,
     revisions.short_definition,
@@ -992,6 +2443,7 @@ SELECT
     relations.source_concept_id,
     relations.target_concept_id,
     relations.relation_type,
+    relations.current_revision AS head_revision,
     relations.current_revision AS revision,
     revisions.support_basis,
     revisions.rationale,
@@ -1018,4 +2470,75 @@ INNER JOIN concept_relation_revisions AS revisions
     ON revisions.relation_id = relations.id
    AND revisions.course_id = relations.course_id
    AND revisions.revision = relations.current_revision
+"""
+
+
+_CONCEPT_REVISION_SELECT = """
+SELECT
+    concepts.id,
+    concepts.course_id,
+    concepts.current_revision AS head_revision,
+    revisions.revision AS revision,
+    revisions.preferred_name,
+    revisions.short_definition,
+    revisions.identity_status,
+    revisions.merged_into_concept_id,
+    revisions.review_status,
+    revisions.validity_status,
+    revisions.proposal_origin,
+    revisions.provider,
+    revisions.model,
+    revisions.prompt_protocol,
+    revisions.output_version,
+    revisions.review_actor,
+    revisions.reviewed_at,
+    revisions.review_revision,
+    revisions.created_at AS revision_created_at,
+    revisions.updated_at AS revision_updated_at,
+    (
+        SELECT COUNT(*)
+        FROM concept_evidence
+        WHERE concept_evidence.concept_id = concepts.id
+          AND concept_evidence.concept_revision = revisions.revision
+    ) AS evidence_count
+FROM concepts
+INNER JOIN concept_revisions AS revisions
+    ON revisions.concept_id = concepts.id
+   AND revisions.course_id = concepts.course_id
+"""
+
+
+_RELATION_REVISION_SELECT = """
+SELECT
+    relations.id,
+    relations.course_id,
+    relations.source_concept_id,
+    relations.target_concept_id,
+    relations.relation_type,
+    relations.current_revision AS head_revision,
+    revisions.revision AS revision,
+    revisions.support_basis,
+    revisions.rationale,
+    revisions.review_status,
+    revisions.validity_status,
+    revisions.proposal_origin,
+    revisions.provider,
+    revisions.model,
+    revisions.prompt_protocol,
+    revisions.output_version,
+    revisions.review_actor,
+    revisions.reviewed_at,
+    revisions.review_revision,
+    revisions.created_at AS revision_created_at,
+    revisions.updated_at AS revision_updated_at,
+    (
+        SELECT COUNT(*)
+        FROM relation_evidence
+        WHERE relation_evidence.relation_id = relations.id
+          AND relation_evidence.relation_revision = revisions.revision
+    ) AS evidence_count
+FROM concept_relations AS relations
+INNER JOIN concept_relation_revisions AS revisions
+    ON revisions.relation_id = relations.id
+   AND revisions.course_id = relations.course_id
 """

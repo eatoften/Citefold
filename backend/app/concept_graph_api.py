@@ -9,9 +9,14 @@ from .concept_graph import (
     Concept,
     ConceptCreate,
     ConceptPage,
+    ConceptRevisionEdit,
     ConceptRelation,
     ConceptRelationCreate,
     ConceptRelationPage,
+    GraphMarkStaleRequest,
+    GraphReviewRequest,
+    RelationReviewRequest,
+    RelationRevisionEdit,
 )
 
 
@@ -73,6 +78,76 @@ def get_course_concept(
         _raise_http_error(exc)
 
 
+@router.get(
+    "/courses/{course_id}/concepts/{concept_id}/revisions/{revision}",
+    response_model=Concept,
+)
+def get_course_concept_revision(
+    course_id: ResourceId,
+    concept_id: ResourceId,
+    revision: int = Path(ge=1),
+) -> Concept:
+    try:
+        return concept_graph_service.get_course_concept_revision(
+            course_id,
+            concept_id,
+            revision,
+        )
+    except concept_graph_service.ConceptGraphServiceError as exc:
+        _raise_http_error(exc)
+
+
+@router.patch(
+    "/courses/{course_id}/concepts/{concept_id}",
+    response_model=Concept,
+)
+def edit_course_concept(
+    course_id: ResourceId,
+    concept_id: ResourceId,
+    request: ConceptRevisionEdit,
+) -> Concept:
+    try:
+        return concept_graph_service.edit_course_concept(
+            course_id, concept_id, request
+        )
+    except concept_graph_service.ConceptGraphServiceError as exc:
+        _raise_http_error(exc)
+
+
+@router.post(
+    "/courses/{course_id}/concepts/{concept_id}/review",
+    response_model=Concept,
+)
+def review_course_concept(
+    course_id: ResourceId,
+    concept_id: ResourceId,
+    request: GraphReviewRequest,
+) -> Concept:
+    try:
+        return concept_graph_service.review_course_concept(
+            course_id, concept_id, request
+        )
+    except concept_graph_service.ConceptGraphServiceError as exc:
+        _raise_http_error(exc)
+
+
+@router.post(
+    "/courses/{course_id}/concepts/{concept_id}/mark-stale",
+    response_model=Concept,
+)
+def mark_course_concept_stale(
+    course_id: ResourceId,
+    concept_id: ResourceId,
+    request: GraphMarkStaleRequest,
+) -> Concept:
+    try:
+        return concept_graph_service.mark_course_concept_stale(
+            course_id, concept_id, request
+        )
+    except concept_graph_service.ConceptGraphServiceError as exc:
+        _raise_http_error(exc)
+
+
 @router.post(
     "/courses/{course_id}/concept-relations",
     response_model=ConceptRelation,
@@ -127,6 +202,77 @@ def get_course_concept_relation(
         _raise_http_error(exc)
 
 
+@router.get(
+    (
+        "/courses/{course_id}/concept-relations/{relation_id}/"
+        "revisions/{revision}"
+    ),
+    response_model=ConceptRelation,
+)
+def get_course_concept_relation_revision(
+    course_id: ResourceId,
+    relation_id: ResourceId,
+    revision: int = Path(ge=1),
+) -> ConceptRelation:
+    try:
+        return concept_graph_service.get_course_relation_revision(
+            course_id, relation_id, revision
+        )
+    except concept_graph_service.ConceptGraphServiceError as exc:
+        _raise_http_error(exc)
+
+
+@router.patch(
+    "/courses/{course_id}/concept-relations/{relation_id}",
+    response_model=ConceptRelation,
+)
+def edit_course_concept_relation(
+    course_id: ResourceId,
+    relation_id: ResourceId,
+    request: RelationRevisionEdit,
+) -> ConceptRelation:
+    try:
+        return concept_graph_service.edit_course_relation(
+            course_id, relation_id, request
+        )
+    except concept_graph_service.ConceptGraphServiceError as exc:
+        _raise_http_error(exc)
+
+
+@router.post(
+    "/courses/{course_id}/concept-relations/{relation_id}/review",
+    response_model=ConceptRelation,
+)
+def review_course_concept_relation(
+    course_id: ResourceId,
+    relation_id: ResourceId,
+    request: RelationReviewRequest,
+) -> ConceptRelation:
+    try:
+        return concept_graph_service.review_course_relation(
+            course_id, relation_id, request
+        )
+    except concept_graph_service.ConceptGraphServiceError as exc:
+        _raise_http_error(exc)
+
+
+@router.post(
+    "/courses/{course_id}/concept-relations/{relation_id}/mark-stale",
+    response_model=ConceptRelation,
+)
+def mark_course_concept_relation_stale(
+    course_id: ResourceId,
+    relation_id: ResourceId,
+    request: GraphMarkStaleRequest,
+) -> ConceptRelation:
+    try:
+        return concept_graph_service.mark_course_relation_stale(
+            course_id, relation_id, request
+        )
+    except concept_graph_service.ConceptGraphServiceError as exc:
+        _raise_http_error(exc)
+
+
 def _raise_http_error(
     exc: concept_graph_service.ConceptGraphServiceError,
 ) -> None:
@@ -155,6 +301,12 @@ def _raise_http_error(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),
+        ) from exc
+    if isinstance(exc, concept_graph_service.ConceptGraphBusyError):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+            headers={"Retry-After": "1"},
         ) from exc
     raise HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

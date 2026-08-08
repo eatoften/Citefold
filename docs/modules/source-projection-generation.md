@@ -3,7 +3,7 @@
 - **Program:** G1.2a
 - **Status:** implemented; full backend/frontend verification complete
 - **Depends on:** [G1.1 candidate substrate](concept-graph-substrate.md)
-- **Next slice:** G1.2b review/CAS lifecycle
+- **Next slice:** G1.2b review/CAS lifecycle (implemented)
 
 ## Responsibility
 
@@ -108,8 +108,9 @@ assigned generation.
 
 ## Deliberate boundary
 
-G1.2a does not add review transitions, append-only edit operations, aliases,
-merge/retirement, relation endpoint revision binding, cycle checks, graph
-publication, path algorithms, LLM candidate generation, or UI. Those remain
-separate checkpoints so projection identity cannot be confused with semantic
-review state.
+G1.2a itself does not own review transitions. G1.2b now consumes this
+projection identity for append-only edit/review/stale operations, aliases,
+relation endpoint revision binding, synchronous incident invalidation, and
+the prerequisite acceptance guard. Merge/retirement, graph publication, path
+algorithms, LLM candidate generation, and UI remain later checkpoints so
+projection identity cannot be confused with semantic review state.

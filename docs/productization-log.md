@@ -2891,6 +2891,162 @@ The immutable SHA is reported after the commit is created and pushed.
 
 G1.2b adds idempotent operation records, append-only Concept/relation review
 revisions, aliases, exact endpoint-revision bindings, and query-time
-publication eligibility. G1.2c then owns merge/retirement invalidation and the
-transactional prerequisite cycle guard before G1.3 publishes immutable graph
-versions.
+publication eligibility. The transactional prerequisite cycle guard was pulled
+into G1.2b because accepting an unchecked prerequisite would violate draft
+integrity; G1.2c then owns merge/retirement before G1.3 publishes immutable
+graph versions.
+
+## G1.2b - Revisioned Concept Graph review lifecycle
+
+**Status:** Complete as a bounded G1.2 slice; G1.2c and initial-create reliability remain open
+
+**Date:** 2026-08-09
+
+**Branch:** `codex/concept-graph-foundation`
+
+### User outcome
+
+A grounded Concept or Relation candidate can now be edited, reviewed,
+rejected, or marked stale without overwriting history. Every post-create
+revision mutation is attributable, retry-safe, compare-and-swap protected, and
+readable by historical revision. Accepted draft objects expose whether their
+saved evidence and exact endpoint revisions are still eligible for later graph
+publication.
+
+This is a reliable draft lifecycle, not a published Concept Graph or a path
+feature. Merge/retirement, initial-create receipts, immutable graph versions,
+automatic candidate generation, G2 labels, G3 traversal, and G4 UI remain
+separate gates.
+
+### Delivered scope
+
+- additive schema v11 adds revision-owned aliases, exact Relation endpoint
+  revision bindings, a course-scoped operation ledger, incident-edge indexes,
+  and guards against operation-receipt, endpoint-binding, or stable Relation
+  identity mutation;
+- Concept and Relation edit/review/mark-stale operations append complete
+  revisions and child snapshots instead of updating the reviewed row;
+- historical GET endpoints return the immutable revision while recomputing
+  current eligibility against today's Source projection and entity heads;
+- every post-create mutation carries an opaque `operation_id`, expected head
+  revision, actor, reason, and canonical request hash;
+- identical operation replay returns the stored result, changed reuse returns
+  `409`, and concurrent different operations cannot both advance one head;
+- new Relation candidates bind the exact current Concept revisions;
+  acceptance additionally requires the request to name that same binding and
+  both endpoints to remain active, accepted, current, and fully grounded;
+- every Concept or Relation evidence item must still match its Source
+  generation, Chunk hash, typed Locator, Source type, and exact quote before
+  acceptance;
+- every Concept head transition synchronously appends a stale revision for
+  each incident current Relation in the same transaction;
+- prerequisite acceptance performs the cycle check under the same serialized
+  write transaction and conservatively includes stored accepted/current edges
+  even when a Source deletion makes one dynamically ineligible;
+- SQLite BUSY/LOCKED exhaustion maps to `503` with bounded retry guidance;
+  malformed transitions map to `422`, conflicts to `409`, and unexpected
+  persistence faults return a safe `500` without SQL or local paths.
+
+### Decisions and technology
+
+SQLite `BEGIN IMMEDIATE` is the correctness boundary, not only a performance
+choice. It obtains the course workspace's single writer slot before replay,
+head reads, evidence validation, cycle detection, revision inserts, incident
+invalidation, head CAS, and operation receipt. This makes two racing graph
+decisions serializable while WAL continues to permit readers.
+
+The operation receipt is a bounded canonical JSON object. Its SHA-256 request
+hash covers protocol version, actual route template, course, entity kind/ID,
+operation kind, and the normalized Pydantic request. SQLite JSON1 triggers
+validate exact receipt keys/types and their referenced revision; a separate
+trigger prevents in-place receipt edits. Python reloads the historical result
+and recomputes dynamic eligibility instead of caching a stale response DTO.
+
+Relation endpoint binding belongs to the Relation revision, not its stable
+identity. Stable IDs express continuity; bound revision IDs express exactly
+what a reviewer saw. Rejection may preserve a stale or legacy candidate
+without asserting current truth. Acceptance never silently rebinds: a legacy
+candidate must first be edited/regrounded.
+
+Unicode aliases use NFKC normalization, collapsed whitespace, and case-folding
+for per-revision uniqueness while preserving display text. Aliases are not
+globally unique because real course vocabulary can be ambiguous.
+
+### Problems encountered and resolutions
+
+- The first Relation reject path revalidated endpoint revisions as current.
+  After a Concept changed, the synchronously stale candidate could therefore
+  never be rejected. Rejection now verifies its stored binding but reserves
+  current endpoint/evidence validation for acceptance.
+- Initial receipt validation used `json_extract(...) != value`. SQLite's
+  three-valued logic let missing keys produce `NULL` and bypass a trigger.
+  The contract now validates JSON key types, uses fail-closed identity
+  comparisons, requires exactly three keys, and has a direct `{}` regression
+  test.
+- Endpoint-binding rows and stable Relation endpoints were initially
+  updateable. Immutable update triggers now prevent historical rebinding, and
+  the read model independently reports `endpoint_binding_identity_mismatch`
+  if storage is corrupted.
+- The first concurrency test started two application lifespans, whose startup
+  reconciliation changed shared Source state. The final test drives two
+  service calls with independent SQLite connections, a start barrier, and a
+  deliberately held first transaction; it proves that one request remains
+  blocked until the serialized writer commits.
+- A cycle test initially covered only sequential requests. The final suite
+  races opposite prerequisite acceptances and requires exactly one accepted
+  direction, one operation receipt, no extra revision, clean foreign keys, and
+  a successful SQLite quick check.
+- The first rollback assertion checked only stable heads. Fault injection now
+  also proves that revisions, aliases, evidence, endpoint bindings, incident
+  Relation revisions, and operation rows leave no partial records.
+- The canonical request hash originally named fictional `/edit` routes. It now
+  records the actual PATCH route templates so the audit protocol matches the
+  public API.
+
+### Verification
+
+- independent adversarial review: no remaining P0/P1 findings;
+- dedicated lifecycle and v11 migration suite: **18 passed**;
+- graph API/store/migration/currentness compatibility selection: **42 passed**;
+- full backend: **764 passed, 3 skipped**; one existing upstream Starlette
+  deprecation warning;
+- full frontend: **27 files, 214 tests passed**, plus ESLint and production
+  TypeScript/Vite build;
+- Python compilation and `git diff --check`: passed.
+
+The three backend skips remain environment-dependent path/symlink cases. The
+frontend build retains the already documented 588.23 kB main-chunk warning;
+this backend slice did not increase that bundle.
+
+### Known debt and claim boundary
+
+The initial G1.1 Concept/Relation POST endpoints do not yet have a create
+receipt. A lost Concept-create response can produce a semantic duplicate, and
+a Relation retry currently receives the uniqueness conflict rather than the
+first result. Before the G1/release reliability gate, create needs a separate
+`client_request_id + canonical request hash + stable entity receipt` contract
+because there is no prior revision to CAS. Until that lands, the project may
+claim idempotent **post-create revisions**, not idempotent graph creation.
+
+`concept_graph_store.py` has also grown beyond 2,300 lines. Its transactional
+boundary is deliberate, but mutation orchestration, evidence validation, and
+read-model decoration should be split behind the same store facade before or
+around G1.3. Automatic incident-stale revisions are causally inferable from
+the root Concept operation but do not yet carry an independent cause field;
+that is an auditability enhancement, not a hidden correctness claim.
+
+### Git checkpoint
+
+Independent commit subject:
+
+```text
+feat(graph): add revisioned review lifecycle
+```
+
+The immutable SHA is reported after the commit is created and pushed.
+
+### Next gate
+
+G1.2c implements Concept merge/retirement with dual-head CAS, redirect and
+dependency rules, and atomic incident invalidation. The initial-create receipt
+debt must close before immutable G1.3 publication is treated as release-ready.

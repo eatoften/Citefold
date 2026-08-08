@@ -47,7 +47,7 @@ commit, and remote push are all complete.
 | P0.5 Reliability | Autosave, recoverable tasks, backup/restore, safe desktop lifecycle | Complete |
 | P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Complete |
 | G0 Graph contract and baseline | Relation semantics, evidence rules, evaluation scope, and non-goals are frozen | In progress |
-| G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | In progress - G1.1 candidates and G1.2a projection generations implemented |
+| G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | In progress - G1.1 candidates plus G1.2a/G1.2b projection and review lifecycle implemented |
 | G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | Planned |
 | G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | Planned |
 | G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | Planned |
@@ -145,9 +145,21 @@ remains auditable but requires regrounding. See the
 [Source projection generation module](modules/source-projection-generation.md)
 and [draft lifecycle contract](modules/concept-graph-draft-lifecycle.md).
 
-G1.1/G1.2a do **not** satisfy the full G1 gate. Review transitions, aliases,
-merge/retirement workflows, immediate stale-evidence materialization,
-prerequisite-cycle protection, and immutable graph publication remain required.
+G1.2b adds append-only Concept/relation edit, review, reject, and stale
+revisions; normalized revision-owned aliases; exact endpoint-revision
+bindings; historical reads with dynamic eligibility; and course-scoped
+idempotent post-create operations. `BEGIN IMMEDIATE` plus head CAS serializes
+review races. Concept head changes stale every incident current relation in the
+same transaction, while prerequisite acceptance rejects both existing and
+concurrently proposed cycles. Busy locks return a bounded `503`; unexpected
+persistence errors fail as a safe `500`.
+
+G1.1/G1.2a/G1.2b do **not** satisfy the full G1 gate. Merge/retirement,
+idempotent initial Concept/relation creation, immutable graph publication, and
+the remaining full-G1 release checks are still required. Initial create uses a
+separate contract because it has no prior head revision; before release it
+needs a client request ID, canonical request hash, and stored entity receipt.
+Until then, the project must not claim that every graph write is idempotent.
 
 Deliverables:
 

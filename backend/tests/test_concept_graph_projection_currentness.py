@@ -15,7 +15,7 @@ from app.concept_graph import (
 )
 from app.concept_graph_store import (
     EvidenceChunkNotFoundError,
-    RelationEvidenceDriftError,
+    GraphEvidenceStaleError,
     create_concept_candidate,
     create_relation_candidate,
     get_concept,
@@ -362,7 +362,9 @@ def test_locator_drift_then_revert_never_revives_old_graph_evidence() -> None:
         created_at=now,
         updated_at=now,
     )
-    with pytest.raises(RelationEvidenceDriftError):
+    # G1.2b now fails before relation support comparison because endpoint
+    # evidence from an obsolete projection is not bindable at all.
+    with pytest.raises(GraphEvidenceStaleError):
         create_relation_candidate(
             inference,
             [

@@ -110,8 +110,12 @@ staged implementation program, not an end-to-end feature claim. G1.1 provides
 a course-scoped, evidence-grounded store and API for human Concept and relation
 candidates. G1.2a adds non-reusable Source projection generations, so a
 reviewed evidence address cannot silently become current again after its text,
-Locator, ordering, type, or chunker contract drifts and later reverts.
-Review/acceptance, immutable published graph versions, automatic Understanding,
+Locator, ordering, type, or chunker contract drifts and later reverts. G1.2b
+adds append-only edit/review/stale revisions, normalized aliases, exact
+Relation-to-Concept revision bindings, idempotent post-create operations,
+historical reads, atomic incident-relation invalidation, and a transactional
+prerequisite cycle guard. Merge/retirement, idempotent initial candidate
+creation, immutable published graph versions, automatic Understanding,
 deterministic paths, and the evidence-first graph UI remain roadmap work; the
 current Explore graph is still a sparse CardRelation discovery baseline. See the
 [active roadmap](docs/roadmap.md),
@@ -135,7 +139,8 @@ sealed-use ledger must be frozen in G0.2 before resume-quality metrics exist.
 > **Partially implemented target architecture, not an end-to-end feature
 > claim.** The Source-to-Chat path implements much of the evidence backbone,
 > G1.1 persists grounded human Concept/relation candidates on that backbone,
-> and G1.2a versions their Source projections. The current automatic Card
+> G1.2a versions their Source projections, and G1.2b provides their reviewable
+> draft lifecycle. The current automatic Card
 > pipeline still reads video
 > `TranscriptChunk` objects directly; no candidate is an accepted graph fact;
 > and Explore still renders a Card-to-Card `CardRelation` graph.

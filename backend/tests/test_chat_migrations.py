@@ -263,8 +263,8 @@ def test_grounded_chat_migration_preserves_v1_data_and_has_no_fk_dependency(
     with _connect(db_path) as conn:
         completed = apply_migrations(conn)
 
-        assert completed == [2, 3, 4, 5, 6, 7, 8, 9, 10]
-        assert latest_schema_version() == 10
+        assert completed == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        assert latest_schema_version() == 11
         assert CHAT_TABLES.issubset(_table_names(conn))
         assert conn.execute(
             "SELECT title FROM sources WHERE id = 'job:video-1'"
@@ -298,6 +298,7 @@ def test_grounded_chat_migration_preserves_v1_data_and_has_no_fk_dependency(
             (8, "notebook_notes"),
             (9, "evidence_grounded_concept_graph"),
             (10, "source_projection_generation"),
+            (11, "concept_graph_review_lifecycle"),
         ]
         _insert_conversation(
             conn,
@@ -510,14 +511,14 @@ def test_grounded_chat_migration_is_idempotent_and_backed_up(
     backup_path = prepare_migration_backup(db_path)
 
     assert backup_path is not None
-    assert ".pre-migration-v10-" in backup_path.name
+    assert ".pre-migration-v11-" in backup_path.name
     with _connect(backup_path) as backup:
         assert backup.execute("PRAGMA quick_check").fetchone()[0] == "ok"
         assert CHAT_TABLES.isdisjoint(_table_names(backup))
         assert backup.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 1
 
     with _connect(db_path) as conn:
-        assert apply_migrations(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10]
+        assert apply_migrations(conn) == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         _insert_conversation(conn)
         assert apply_migrations(conn) == []
         assert conn.execute(
@@ -570,7 +571,7 @@ def test_v3_aligns_an_already_applied_v2_without_losing_turns(
             status="abstained",
         )
 
-        assert apply_migrations(conn) == [3, 4, 5, 6, 7, 8, 9, 10]
+        assert apply_migrations(conn) == [3, 4, 5, 6, 7, 8, 9, 10, 11]
 
         turn = conn.execute(
             """

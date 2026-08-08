@@ -1236,6 +1236,261 @@ def _add_source_projection_generation(conn: sqlite3.Connection) -> None:
     )
 
 
+def _add_concept_graph_review_lifecycle(
+    conn: sqlite3.Connection,
+) -> None:
+    conn.execute(
+        """
+        CREATE TABLE concept_aliases (
+            id TEXT PRIMARY KEY,
+            course_id TEXT NOT NULL,
+            concept_id TEXT NOT NULL,
+            concept_revision INTEGER NOT NULL,
+            display_text TEXT NOT NULL,
+            normalized_text TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (concept_id, concept_revision, ordinal),
+            UNIQUE (concept_id, concept_revision, normalized_text),
+            FOREIGN KEY (concept_id, course_id, concept_revision)
+                REFERENCES concept_revisions(
+                    concept_id, course_id, revision
+                ) ON DELETE CASCADE,
+            CHECK (length(id) BETWEEN 1 AND 200),
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (length(concept_id) BETWEEN 1 AND 200),
+            CHECK (concept_revision >= 1),
+            CHECK (length(display_text) BETWEEN 1 AND 200),
+            CHECK (trim(display_text) != ''),
+            CHECK (length(normalized_text) BETWEEN 1 AND 200),
+            CHECK (trim(normalized_text) != ''),
+            CHECK (ordinal >= 0)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_concept_aliases_lookup
+        ON concept_aliases (
+            course_id, normalized_text, concept_id, concept_revision
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE relation_endpoint_revisions (
+            relation_id TEXT NOT NULL,
+            course_id TEXT NOT NULL,
+            relation_revision INTEGER NOT NULL,
+            source_concept_id TEXT NOT NULL,
+            source_concept_revision INTEGER NOT NULL,
+            target_concept_id TEXT NOT NULL,
+            target_concept_revision INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (relation_id, relation_revision),
+            UNIQUE (relation_id, course_id, relation_revision),
+            FOREIGN KEY (relation_id, course_id, relation_revision)
+                REFERENCES concept_relation_revisions(
+                    relation_id, course_id, revision
+                ) ON DELETE CASCADE,
+            FOREIGN KEY (
+                source_concept_id, course_id, source_concept_revision
+            )
+                REFERENCES concept_revisions(
+                    concept_id, course_id, revision
+                ),
+            FOREIGN KEY (
+                target_concept_id, course_id, target_concept_revision
+            )
+                REFERENCES concept_revisions(
+                    concept_id, course_id, revision
+                ),
+            CHECK (length(relation_id) BETWEEN 1 AND 200),
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (relation_revision >= 1),
+            CHECK (length(source_concept_id) BETWEEN 1 AND 200),
+            CHECK (source_concept_revision >= 1),
+            CHECK (length(target_concept_id) BETWEEN 1 AND 200),
+            CHECK (target_concept_revision >= 1),
+            CHECK (source_concept_id != target_concept_id)
+        )
+        """
+    )
+    endpoint_contract = """
+        NOT EXISTS (
+            SELECT 1
+            FROM concept_relations AS relation_identity
+            WHERE relation_identity.id = NEW.relation_id
+              AND relation_identity.course_id = NEW.course_id
+              AND relation_identity.source_concept_id = NEW.source_concept_id
+              AND relation_identity.target_concept_id = NEW.target_concept_id
+        )
+    """
+    conn.execute(
+        f"""
+        CREATE TRIGGER relation_endpoint_identity_insert
+        BEFORE INSERT ON relation_endpoint_revisions
+        WHEN {endpoint_contract}
+        BEGIN
+            SELECT RAISE(ABORT, 'relation endpoint identity mismatch');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER relation_endpoint_identity_update
+        BEFORE UPDATE ON relation_endpoint_revisions
+        BEGIN
+            SELECT RAISE(ABORT, 'relation endpoint binding is immutable');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_relation_endpoint_source_revision
+        ON relation_endpoint_revisions (
+            course_id, source_concept_id, source_concept_revision,
+            relation_id, relation_revision
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_relation_endpoint_target_revision
+        ON relation_endpoint_revisions (
+            course_id, target_concept_id, target_concept_revision,
+            relation_id, relation_revision
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_graph_operations (
+            course_id TEXT NOT NULL,
+            operation_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id TEXT NOT NULL,
+            result_revision INTEGER NOT NULL,
+            result_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (course_id, operation_id),
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (length(operation_id) BETWEEN 1 AND 100),
+            CHECK (kind IN (
+                'concept_edit', 'concept_review', 'concept_mark_stale',
+                'relation_edit', 'relation_review', 'relation_mark_stale'
+            )),
+            CHECK (length(request_hash) = 64),
+            CHECK (request_hash NOT GLOB '*[^0-9a-f]*'),
+            CHECK (length(actor) BETWEEN 1 AND 200),
+            CHECK (trim(actor) != ''),
+            CHECK (length(reason) BETWEEN 1 AND 4000),
+            CHECK (trim(reason) != ''),
+            CHECK (entity_type IN ('concept', 'relation')),
+            CHECK (
+                (entity_type = 'concept' AND kind IN (
+                    'concept_edit', 'concept_review', 'concept_mark_stale'
+                ))
+                OR
+                (entity_type = 'relation' AND kind IN (
+                    'relation_edit', 'relation_review',
+                    'relation_mark_stale'
+                ))
+            ),
+            CHECK (length(entity_id) BETWEEN 1 AND 200),
+            CHECK (result_revision >= 1),
+            CHECK (json_valid(result_json)),
+            CHECK (length(result_json) BETWEEN 2 AND 4096)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_concept_graph_operations_entity
+        ON concept_graph_operations (
+            course_id, entity_type, entity_id, result_revision
+        )
+        """
+    )
+    operation_result_contract = """
+        json_valid(NEW.result_json) != 1
+        OR json_type(NEW.result_json) != 'object'
+        OR json_type(NEW.result_json, '$.entity_type') != 'text'
+        OR json_type(NEW.result_json, '$.entity_id') != 'text'
+        OR json_type(NEW.result_json, '$.revision') != 'integer'
+        OR json_extract(NEW.result_json, '$.entity_type') IS NOT NEW.entity_type
+        OR json_extract(NEW.result_json, '$.entity_id') IS NOT NEW.entity_id
+        OR json_extract(NEW.result_json, '$.revision') IS NOT NEW.result_revision
+        OR (SELECT COUNT(*) FROM json_each(NEW.result_json)) != 3
+        OR (
+            NEW.entity_type = 'concept'
+            AND NOT EXISTS (
+                SELECT 1 FROM concept_revisions
+                WHERE concept_revisions.course_id = NEW.course_id
+                  AND concept_revisions.concept_id = NEW.entity_id
+                  AND concept_revisions.revision = NEW.result_revision
+            )
+        )
+        OR
+        (
+            NEW.entity_type = 'relation'
+            AND NOT EXISTS (
+                SELECT 1 FROM concept_relation_revisions
+                WHERE concept_relation_revisions.course_id = NEW.course_id
+                  AND concept_relation_revisions.relation_id = NEW.entity_id
+                  AND concept_relation_revisions.revision = NEW.result_revision
+            )
+        )
+    """
+    conn.execute(
+        f"""
+        CREATE TRIGGER concept_graph_operation_result_insert
+        BEFORE INSERT ON concept_graph_operations
+        WHEN {operation_result_contract}
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid Concept graph operation result');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER concept_graph_operation_immutable_update
+        BEFORE UPDATE ON concept_graph_operations
+        BEGIN
+            SELECT RAISE(ABORT, 'Concept graph operation is immutable');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_concept_relations_source_incident
+        ON concept_relations (course_id, source_concept_id, id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_concept_relations_target_incident
+        ON concept_relations (course_id, target_concept_id, id)
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER concept_relation_identity_immutable_update
+        BEFORE UPDATE OF course_id, source_concept_id,
+            target_concept_id, relation_type
+        ON concept_relations
+        BEGIN
+            SELECT RAISE(ABORT, 'Concept relation identity is immutable');
+        END
+        """
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version=1,
@@ -1286,6 +1541,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=10,
         name="source_projection_generation",
         apply=_add_source_projection_generation,
+    ),
+    Migration(
+        version=11,
+        name="concept_graph_review_lifecycle",
+        apply=_add_concept_graph_review_lifecycle,
     ),
 )
 

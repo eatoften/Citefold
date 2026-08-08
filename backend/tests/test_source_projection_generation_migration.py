@@ -15,7 +15,7 @@ from app.source_projection_identity import (
 
 
 NOW = "2026-08-08T00:00:00+00:00"
-V9_AND_V10 = MIGRATIONS[8:]
+V9_AND_V10 = MIGRATIONS[8:10]
 
 
 def _create_v9_projection_database(

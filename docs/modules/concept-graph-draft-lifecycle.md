@@ -1,7 +1,7 @@
 # Concept Graph Draft Lifecycle
 
 - **Program:** G1.2
-- **Status:** G1.2a implemented; G1.2b/G1.2c pending
+- **Status:** G1.2a and G1.2b implemented; G1.2c pending
 - **Depends on:** [G1.1 candidate substrate](concept-graph-substrate.md)
 - **Projection identity:** [G1.2a Source generations](source-projection-generation.md)
 - **Architecture owner:** [ADR-0008](../decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md)
@@ -67,12 +67,14 @@ relation revision
 ```
 
 Changing either Concept head makes the relation revision ineligible. An edit,
-merge, or retirement appends stale revisions for every incident relation in
-the same write transaction rather than waiting for a cleanup job.
+reground, review transition, or explicit stale transition appends stale
+revisions for every incident current relation in the same write transaction
+rather than waiting for a cleanup job. G1.2c applies the same primitive to
+merge and retirement.
 
 ## Revision and operation contract
 
-Every mutation carries:
+Every post-create revision mutation carries:
 
 ```text
 operation_id
@@ -136,6 +138,16 @@ relation identity. Accepting `A prerequisite B` additionally rejects the
 transaction if the current accepted draft already contains a path `B => A`.
 This internal cycle guard protects data integrity; it is not the G3 path API.
 
+Every new or edited relation candidate stores its exact endpoint binding.
+Relation review requests repeat both endpoint revisions, and acceptance
+requires them to equal both the stored candidate binding and the current
+eligible Concept heads. Review never silently rebinds a candidate. A legacy
+candidate with no binding must be edited/regrounded before acceptance; it may
+still be rejected because rejection records a judgment about the preserved
+candidate rather than asserting current endpoint truth. A bound stale
+candidate may likewise be rejected against its saved endpoint revisions even
+after either endpoint head advances.
+
 ## Aliases, merge, and retirement
 
 Aliases are a complete revision-owned snapshot. Each stores display text and a
@@ -178,18 +190,46 @@ trusts a cached eligibility flag; G1.3 rechecks the complete snapshot.
 | temporary SQLite write-lock exhaustion | `503` with bounded retry guidance |
 | unexpected persistence failure | safe `500` without SQL or local paths |
 
+### Implemented G1.2b HTTP surface
+
+```text
+GET   /courses/{course_id}/concepts/{concept_id}/revisions/{revision}
+PATCH /courses/{course_id}/concepts/{concept_id}
+POST  /courses/{course_id}/concepts/{concept_id}/review
+POST  /courses/{course_id}/concepts/{concept_id}/mark-stale
+
+GET   /courses/{course_id}/concept-relations/{relation_id}/revisions/{revision}
+PATCH /courses/{course_id}/concept-relations/{relation_id}
+POST  /courses/{course_id}/concept-relations/{relation_id}/review
+POST  /courses/{course_id}/concept-relations/{relation_id}/mark-stale
+```
+
+Mutation request bodies forbid unknown fields. The operation hash uses
+canonical JSON over protocol version, actual route template, course, entity
+kind/ID, operation kind, and the complete validated request. Operation IDs are
+opaque trimmed strings (maximum 100 characters); their internal whitespace is
+not rewritten.
+
 ## Implementation slices
 
 1. **G1.2a projection identity:** Source generation/manifest, evidence snapshot,
    legacy-stale policy, and drift/revert tests.
 2. **G1.2b review core:** operation ledger, Concept/relation CAS revisions,
-   aliases, endpoint bindings, historical reads, and currentness DTOs.
-3. **G1.2c normalization integrity:** merge/retirement, synchronous incident
-   invalidation, prerequisite cycle guard, concurrency and recovery tests.
+   aliases, endpoint bindings, historical reads, currentness DTOs, synchronous
+   incident invalidation for implemented head changes, prerequisite cycle
+   guard, concurrency, busy-lock, idempotency, and rollback recovery tests.
+3. **G1.2c normalization integrity:** merge/retirement and reuse of the proven
+   incident-invalidation primitive for those identity transitions.
 
 Each slice receives an independent commit and remote CI result. G1.2 is not
-complete until all three slices pass full compatibility tests and this module
-is marked complete.
+complete until G1.2c passes full compatibility tests and this module is marked
+complete. G1.2b does not implement merge/retirement, immutable publication,
+G2 fixtures/evaluation, G3 paths, G4 UI, or LLM candidate generation.
+The G1.1 initial Concept/relation create endpoints also remain outside this
+operation ledger: they do not yet accept an idempotent client request ID or
+persist a create receipt. Closing that reliability debt requires a separate
+create hash/entity-receipt contract without `expected_revision`; this slice
+does not retrofit it implicitly.
 
 ## Required adversarial tests
 
