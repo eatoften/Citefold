@@ -29,10 +29,24 @@ from app.course_source import (
 from app.course_source_store import replace_source_projection
 from app.db import connect
 from app.job import utc_now
+from app.source_asset import SourceAsset
+from app.source_asset_store import create_source_asset
 
 
 def _grounding_fixture() -> tuple[str, CourseSourceChunk]:
     course = create_video_course(CourseCreate(title="Store contract"))
+    create_source_asset(
+        SourceAsset(
+            id="stack-notes",
+            course_id=course.id,
+            asset_type="text",
+            original_filename="Stack notes",
+            stored_path="stack-notes.txt",
+            size_bytes=1,
+            sha256="a" * 64,
+            extraction_status="ready",
+        )
+    )
     text = "A stack follows last-in, first-out order."
     chunk = CourseSourceChunk(
         id="source_unit:stack-section",
@@ -183,6 +197,11 @@ def test_current_read_uses_only_current_revision_evidence() -> None:
     assert current.revision == 2
     assert current.preferred_name == "LIFO stack"
     assert [item.quote for item in current.evidence] == ["A stack"]
+    assert current.evidence[0].projection_generation_id is None
+    assert current.evidence[0].projection_is_current is False
+    assert "legacy_projection_generation" in (
+        current.evidence[0].projection_currentness_reasons
+    )
     with connect() as conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM concept_revisions WHERE concept_id = ?",
@@ -285,6 +304,8 @@ def test_relation_current_read_preserves_old_revision_evidence() -> None:
     assert current.revision == 2
     assert current.rationale == "Revised rationale."
     assert [item.quote for item in current.evidence] == ["first-out order"]
+    assert current.evidence[0].projection_generation_id is None
+    assert current.evidence[0].projection_is_current is False
     with connect() as conn:
         assert conn.execute(
             """

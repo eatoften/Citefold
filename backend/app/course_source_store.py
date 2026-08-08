@@ -5,8 +5,17 @@ from collections import defaultdict
 from datetime import datetime
 from sqlite3 import Row
 
-from .course_source import CourseSource, CourseSourceChunk
+from .course_source import (
+    CourseSource,
+    CourseSourceChunk,
+    hash_source_chunk_text,
+)
 from .db import connect, ensure_db
+from .source_projection_identity import (
+    ProjectionManifestChunk,
+    build_projection_manifest_hash,
+    select_projection_generation_id,
+)
 
 
 def _datetime_to_text(value: datetime | None) -> str | None:
@@ -37,6 +46,8 @@ def _row_to_source(row: Row) -> CourseSource:
             if "indexed_chunk_count" in keys
             else 0
         ),
+        projection_generation_id=row["projection_generation_id"],
+        projection_manifest_hash=row["projection_manifest_hash"],
         size_bytes=row["size_bytes"],
         mime_type=row["mime_type"],
         metadata=json.loads(row["metadata_json"]),
@@ -76,8 +87,13 @@ def replace_course_source_projection(
     for chunk in chunks:
         chunks_by_source[chunk.source_id].append(chunk)
     source_ids = {source.id for source in sources}
+    if len(source_ids) != len(sources):
+        raise ValueError("Source projection ids must be unique.")
+    if set(chunks_by_source) - source_ids:
+        raise ValueError("Source chunk belongs to an unknown source.")
 
     with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         existing_rows = conn.execute(
             "SELECT id FROM sources WHERE course_id = ?",
             (course_id,),
@@ -90,8 +106,7 @@ def replace_course_source_projection(
             source_chunks = chunks_by_source.get(source.id, [])
             if any(chunk.source_id != source.id for chunk in source_chunks):
                 raise ValueError("Source chunk belongs to a different source.")
-            _upsert_source(conn, source)
-            _replace_source_chunks(conn, source, source_chunks)
+            _replace_projection(conn, source, source_chunks)
 
         removed_source_ids = existing_source_ids - source_ids
         _delete_sources(conn, removed_source_ids)
@@ -103,6 +118,7 @@ def replace_source_projection(
 ) -> None:
     ensure_db()
     with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         replace_source_projection_in_connection(conn, source, chunks)
 
 
@@ -115,8 +131,7 @@ def replace_source_projection_in_connection(
 
     if any(chunk.source_id != source.id for chunk in chunks):
         raise ValueError("Source chunk belongs to a different source.")
-    _upsert_source(conn, source)
-    _replace_source_chunks(conn, source, chunks)
+    _replace_projection(conn, source, chunks)
 
 
 def list_sources_for_course(course_id: str) -> list[CourseSource]:
@@ -422,16 +437,122 @@ def recover_active_source_indexes(*, error_message: str) -> int:
     return cursor.rowcount
 
 
-def _upsert_source(conn, source: CourseSource) -> None:
+def _replace_projection(
+    conn,
+    source: CourseSource,
+    chunks: list[CourseSourceChunk],
+) -> None:
+    expected_source_id = {
+        "video_job": f"job:{source.origin_id}",
+        "source_asset": f"asset:{source.origin_id}",
+        "notebook_note": f"note:{source.origin_id}",
+    }[source.origin_type]
+    if source.id != expected_source_id:
+        raise ValueError("Source id does not match its origin identity.")
+    if any(not chunk.is_active for chunk in chunks):
+        raise ValueError(
+            "Replacement projections accept active Source chunks only."
+        )
+    chunk_ids = [chunk.id for chunk in chunks]
+    if len(chunk_ids) != len(set(chunk_ids)):
+        raise ValueError("Source projection chunk ids must be unique.")
+    ordinals = [chunk.ordinal for chunk in chunks]
+    if len(ordinals) != len(set(ordinals)):
+        raise ValueError("Source projection chunk ordinals must be unique.")
+    if any(
+        hash_source_chunk_text(chunk.text) != chunk.text_hash
+        for chunk in chunks
+    ):
+        raise ValueError("Source chunk text hash does not match its text.")
+    if chunk_ids:
+        placeholders = ",".join("?" for _ in chunk_ids)
+        conflicting_owner = conn.execute(
+            f"""
+            SELECT id, source_id
+            FROM source_chunks
+            WHERE id IN ({placeholders}) AND source_id != ?
+            LIMIT 1
+            """,
+            [*chunk_ids, source.id],
+        ).fetchone()
+        if conflicting_owner is not None:
+            raise ValueError(
+                "A Source chunk id cannot move between Sources."
+            )
+
+    manifest_hash = build_projection_manifest_hash(
+        source_id=source.id,
+        source_type=source.source_type,
+        chunks=(
+            ProjectionManifestChunk(
+                id=chunk.id,
+                chunk_type=chunk.chunk_type,
+                ordinal=chunk.ordinal,
+                text_hash=chunk.text_hash,
+                locator=chunk.locator,
+                chunker_version=chunk.chunker_version,
+            )
+            for chunk in chunks
+        ),
+    )
+    current = conn.execute(
+        """
+        SELECT origin_type, origin_id, projection_generation_id,
+               projection_manifest_hash
+        FROM sources
+        WHERE id = ?
+        """,
+        (source.id,),
+    ).fetchone()
+    if current is not None and (
+        current["origin_type"] != source.origin_type
+        or current["origin_id"] != source.origin_id
+    ):
+        raise ValueError("A Source id cannot move between origin roots.")
+    generation_id = select_projection_generation_id(
+        current_generation_id=(
+            str(current["projection_generation_id"])
+            if current is not None
+            and current["projection_generation_id"] is not None
+            else None
+        ),
+        current_manifest_hash=(
+            str(current["projection_manifest_hash"])
+            if current is not None
+            and current["projection_manifest_hash"] is not None
+            else None
+        ),
+        next_manifest_hash=manifest_hash,
+    )
+    _upsert_source(
+        conn,
+        source,
+        projection_generation_id=generation_id,
+        projection_manifest_hash=manifest_hash,
+    )
+    _replace_source_chunks(conn, source, chunks)
+
+
+def _upsert_source(
+    conn,
+    source: CourseSource,
+    *,
+    projection_generation_id: str,
+    projection_manifest_hash: str,
+) -> None:
     conn.execute(
         """
         INSERT INTO sources (
             id, course_id, origin_type, origin_id, source_type, title,
             content_status, index_status, index_generation, index_model,
-            index_dimension,
+            index_dimension, projection_generation_id,
+            projection_manifest_hash,
             enabled, size_bytes, mime_type, metadata_json, error_message,
             index_error, created_at, updated_at, indexed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (
+            ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?
+        )
         ON CONFLICT(id) DO UPDATE SET
             course_id = excluded.course_id,
             origin_type = excluded.origin_type,
@@ -439,6 +560,8 @@ def _upsert_source(conn, source: CourseSource) -> None:
             source_type = excluded.source_type,
             title = excluded.title,
             content_status = excluded.content_status,
+            projection_generation_id = excluded.projection_generation_id,
+            projection_manifest_hash = excluded.projection_manifest_hash,
             size_bytes = excluded.size_bytes,
             mime_type = excluded.mime_type,
             metadata_json = excluded.metadata_json,
@@ -457,6 +580,8 @@ def _upsert_source(conn, source: CourseSource) -> None:
             source.index_status,
             source.index_model,
             source.index_dimension,
+            projection_generation_id,
+            projection_manifest_hash,
             int(source.enabled),
             source.size_bytes,
             source.mime_type,
@@ -497,6 +622,19 @@ def _replace_source_chunks(
         index_generation_row is not None
         and index_generation_row["index_generation"] is not None
     )
+    # Release the partial unique ordinal index before an atomic reorder. The
+    # transaction either reactivates the complete next projection or rolls
+    # this temporary state back.
+    conn.execute(
+        """
+        UPDATE source_chunks
+        SET is_active = 0
+        WHERE source_id = ? AND is_active = 1
+        """,
+        (source.id,),
+    )
+    removed_chunk_ids = set(existing_hashes) - set(next_hashes)
+    _delete_chunks(conn, removed_chunk_ids)
 
     for chunk in chunks:
         conn.execute(
@@ -538,9 +676,6 @@ def _replace_source_chunks(
                 _datetime_to_text(chunk.updated_at),
             ),
         )
-
-    removed_chunk_ids = set(existing_hashes) - set(next_hashes)
-    _delete_chunks(conn, removed_chunk_ids)
 
     if source.content_status != "ready" or not chunks:
         conn.execute(

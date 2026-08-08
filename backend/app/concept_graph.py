@@ -163,6 +163,13 @@ class SourceEvidenceSnapshot(BaseModel):
     source_id: str = Field(min_length=1, max_length=200)
     chunk_id: str = Field(min_length=1, max_length=200)
     chunk_text_hash: str = Field(min_length=64, max_length=64)
+    projection_generation_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    projection_is_current: bool = False
+    projection_currentness_reasons: list[str] = Field(default_factory=list)
     source_title: str = Field(min_length=1)
     source_type: SourceAssetType
     quote: str = Field(min_length=1, max_length=16_000)

@@ -9,6 +9,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .source_projection_identity import (
+    ProjectionManifestChunk,
+    build_projection_manifest_hash,
+    select_projection_generation_id,
+)
+
 
 MigrationCallable = Callable[[sqlite3.Connection], None]
 
@@ -1071,6 +1077,165 @@ def _add_evidence_grounded_concept_graph(
     )
 
 
+def _add_source_projection_generation(conn: sqlite3.Connection) -> None:
+    chunk_rows = conn.execute(
+        "SELECT id, text, text_hash FROM source_chunks ORDER BY id"
+    ).fetchall()
+    for chunk_row in chunk_rows:
+        expected_hash = hashlib.sha256(
+            str(chunk_row["text"]).encode("utf-8")
+        ).hexdigest()
+        if str(chunk_row["text_hash"]) != expected_hash:
+            raise RuntimeError(
+                "Source projection migration found a mismatched Chunk hash."
+            )
+    duplicate_ordinal = conn.execute(
+        """
+        SELECT source_id, ordinal
+        FROM source_chunks
+        WHERE is_active = 1
+        GROUP BY source_id, ordinal
+        HAVING COUNT(*) > 1
+        LIMIT 1
+        """
+    ).fetchone()
+    if duplicate_ordinal is not None:
+        raise RuntimeError(
+            "Source projection migration found duplicate active ordinals."
+        )
+
+    conn.execute(
+        "ALTER TABLE sources ADD COLUMN projection_generation_id TEXT"
+    )
+    conn.execute(
+        "ALTER TABLE sources ADD COLUMN projection_manifest_hash TEXT"
+    )
+    conn.execute(
+        "ALTER TABLE concept_evidence "
+        "ADD COLUMN projection_generation_id TEXT"
+    )
+    conn.execute(
+        "ALTER TABLE relation_evidence "
+        "ADD COLUMN projection_generation_id TEXT"
+    )
+
+    source_rows = conn.execute(
+        "SELECT id, source_type FROM sources ORDER BY id"
+    ).fetchall()
+    for source_row in source_rows:
+        chunk_rows = conn.execute(
+            """
+            SELECT id, chunk_type, ordinal, text_hash, locator_json,
+                   chunker_version
+            FROM source_chunks
+            WHERE source_id = ? AND is_active = 1
+            ORDER BY ordinal, id
+            """,
+            (source_row["id"],),
+        ).fetchall()
+        manifest_hash = build_projection_manifest_hash(
+            source_id=str(source_row["id"]),
+            source_type=str(source_row["source_type"]),
+            chunks=(
+                ProjectionManifestChunk(
+                    id=str(chunk_row["id"]),
+                    chunk_type=str(chunk_row["chunk_type"]),
+                    ordinal=int(chunk_row["ordinal"]),
+                    text_hash=str(chunk_row["text_hash"]),
+                    locator=str(chunk_row["locator_json"]),
+                    chunker_version=str(chunk_row["chunker_version"]),
+                )
+                for chunk_row in chunk_rows
+            ),
+        )
+        generation_id = select_projection_generation_id(
+            current_generation_id=None,
+            current_manifest_hash=None,
+            next_manifest_hash=manifest_hash,
+        )
+        conn.execute(
+            """
+            UPDATE sources
+            SET projection_generation_id = ?, projection_manifest_hash = ?
+            WHERE id = ?
+            """,
+            (generation_id, manifest_hash, source_row["id"]),
+        )
+
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX idx_sources_projection_generation
+        ON sources (projection_generation_id)
+        WHERE projection_generation_id IS NOT NULL
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX idx_source_chunks_active_ordinal
+        ON source_chunks (source_id, ordinal)
+        WHERE is_active = 1
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_concept_evidence_projection_generation
+        ON concept_evidence (
+            course_id, source_id, projection_generation_id
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_relation_evidence_projection_generation
+        ON relation_evidence (
+            course_id, source_id, projection_generation_id
+        )
+        """
+    )
+
+    incomplete_sources = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM sources
+        WHERE projection_generation_id IS NULL
+           OR projection_manifest_hash IS NULL
+           OR length(projection_manifest_hash) != 64
+        """
+    ).fetchone()[0]
+    if incomplete_sources:
+        raise RuntimeError(
+            "Source projection generation migration left incomplete rows."
+        )
+    projection_contract = """
+        NEW.projection_generation_id IS NULL
+        OR length(trim(NEW.projection_generation_id)) NOT BETWEEN 1 AND 200
+        OR NEW.projection_manifest_hash IS NULL
+        OR length(NEW.projection_manifest_hash) != 64
+        OR NEW.projection_manifest_hash GLOB '*[^0-9a-f]*'
+    """
+    conn.execute(
+        f"""
+        CREATE TRIGGER sources_projection_identity_insert
+        BEFORE INSERT ON sources
+        WHEN {projection_contract}
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid Source projection identity');
+        END
+        """
+    )
+    conn.execute(
+        f"""
+        CREATE TRIGGER sources_projection_identity_update
+        BEFORE UPDATE OF projection_generation_id, projection_manifest_hash
+        ON sources
+        WHEN {projection_contract}
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid Source projection identity');
+        END
+        """
+    )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version=1,
@@ -1116,6 +1281,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=9,
         name="evidence_grounded_concept_graph",
         apply=_add_evidence_grounded_concept_graph,
+    ),
+    Migration(
+        version=10,
+        name="source_projection_generation",
+        apply=_add_source_projection_generation,
     ),
 )
 

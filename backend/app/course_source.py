@@ -125,6 +125,16 @@ class CourseSource(BaseModel):
     enabled: bool = True
     chunk_count: int = Field(default=0, ge=0)
     indexed_chunk_count: int = Field(default=0, ge=0)
+    projection_generation_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+    )
+    projection_manifest_hash: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+    )
     size_bytes: int | None = Field(default=None, ge=0)
     mime_type: str | None = None
     metadata: dict[str, object] = Field(default_factory=dict)

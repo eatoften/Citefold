@@ -100,16 +100,24 @@ def _insert_grounding_source() -> None:
             INSERT INTO sources (
                 id, course_id, origin_type, origin_id, source_type, title,
                 content_status, index_status, index_generation, index_model,
-                index_dimension, enabled, size_bytes, mime_type,
+                index_dimension, projection_generation_id,
+                projection_manifest_hash, enabled, size_bytes, mime_type,
                 metadata_json, error_message, index_error,
                 created_at, updated_at, indexed_at
             ) VALUES (
                 ?, ?, 'source_asset', 'grounding', 'text', 'Grounding notes',
-                'ready', 'not_indexed', NULL, NULL, NULL, 1, 100,
+                'ready', 'not_indexed', NULL, NULL, NULL, ?, ?, 1, 100,
                 'text/plain', '{}', NULL, NULL, ?, ?, NULL
             )
             """,
-            (SOURCE_ID, COURSE_ID, NOW.isoformat(), NOW.isoformat()),
+            (
+                SOURCE_ID,
+                COURSE_ID,
+                "grounding-generation",
+                "c" * 64,
+                NOW.isoformat(),
+                NOW.isoformat(),
+            ),
         )
         conn.execute(
             """
@@ -441,6 +449,8 @@ def test_explicit_promotion_refresh_reconcile_and_trash_lifecycle() -> None:
     assert first_result["source"]["origin_type"] == "notebook_note"
     assert first_result["source"]["origin_id"] == note["id"]
     assert first_result["source"]["index_status"] == "not_indexed"
+    assert first_result["source"]["projection_generation_id"]
+    assert len(first_result["source"]["projection_manifest_hash"]) == 64
     snapshot_one = first_result["snapshot"]
     chunks_one = list_source_chunks(first_result["source"]["id"])
     assert chunks_one
@@ -454,6 +464,9 @@ def test_explicit_promotion_refresh_reconcile_and_trash_lifecycle() -> None:
     ).json()
     assert replay["replayed"] is True
     assert replay["snapshot"]["id"] == snapshot_one["id"]
+    assert replay["source"]["projection_generation_id"] == (
+        first_result["source"]["projection_generation_id"]
+    )
 
     updated = client.patch(
         f"/courses/{COURSE_ID}/notes/{note['id']}",
@@ -482,6 +495,9 @@ def test_explicit_promotion_refresh_reconcile_and_trash_lifecycle() -> None:
     assert refreshed.status_code == 200
     refreshed_result = refreshed.json()
     assert refreshed_result["snapshot"]["id"] != snapshot_one["id"]
+    assert refreshed_result["source"]["projection_generation_id"] != (
+        first_result["source"]["projection_generation_id"]
+    )
     assert refreshed_result["note"]["published_revision"] == 2
     chunks_two = list_source_chunks(first_result["source"]["id"])
     assert chunks_two[0].locator.snapshot_id == (
@@ -493,6 +509,9 @@ def test_explicit_promotion_refresh_reconcile_and_trash_lifecycle() -> None:
     reconciled = get_source(f"note:{note['id']}")
     assert reconciled is not None
     assert reconciled.metadata["note_revision"] == 2
+    assert reconciled.projection_generation_id == (
+        refreshed_result["source"]["projection_generation_id"]
+    )
 
     draft_id = f"notebook-note:{note['id']}"
     put_draft(
@@ -1136,7 +1155,7 @@ def test_workspace_backup_contains_v8_note_lineage(tmp_path: Path) -> None:
         db_path=get_db_path(),
         data_dir=tmp_path,
     )
-    assert backup.schema_version == 9
+    assert backup.schema_version == 10
     extracted_db = tmp_path / "extracted.sqlite3"
     with ZipFile(backup.path) as archive:
         extracted_db.write_bytes(archive.read(DATABASE_ARCHIVE_PATH))
@@ -1230,6 +1249,9 @@ def test_workspace_backup_restore_round_trip_preserves_published_chat_note(
     assert republished_response.status_code == 200
     changed_snapshot_id = republished_response.json()["snapshot"]["id"]
     assert changed_snapshot_id != snapshot_id
+    assert republished_response.json()["source"][
+        "projection_generation_id"
+    ] != backup_source.projection_generation_id
     assert client.delete(
         f"/courses/{COURSE_ID}/notes/{note_id}?expected_revision=2"
     ).status_code == 204
@@ -1294,6 +1316,12 @@ def test_workspace_backup_restore_round_trip_preserves_published_chat_note(
     assert restored_source.source_type == backup_source.source_type
     assert restored_source.title == backup_source.title
     assert restored_source.metadata == backup_source.metadata
+    assert restored_source.projection_generation_id == (
+        backup_source.projection_generation_id
+    )
+    assert restored_source.projection_manifest_hash == (
+        backup_source.projection_manifest_hash
+    )
     assert restored_source.metadata["note_revision"] == 1
     assert restored_source.metadata["snapshot_id"] == snapshot_id
 

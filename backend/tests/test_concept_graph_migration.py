@@ -8,7 +8,9 @@ import pytest
 from app.migrations import MIGRATIONS, Migration, apply_migrations
 
 
-GRAPH_MIGRATION = (MIGRATIONS[-1],)
+GRAPH_MIGRATION = tuple(
+    migration for migration in MIGRATIONS if migration.version == 9
+)
 NOW = "2026-08-08T00:00:00+00:00"
 
 
@@ -118,7 +120,7 @@ def test_v9_migration_failure_rolls_back_schema_and_ledger(
         conn.execute("CREATE TABLE courses (id TEXT PRIMARY KEY)")
 
         def create_graph_then_fail(active_conn: sqlite3.Connection) -> None:
-            MIGRATIONS[-1].apply(active_conn)
+            GRAPH_MIGRATION[0].apply(active_conn)
             active_conn.execute("CREATE TABLE graph_partial_write (id TEXT)")
             raise RuntimeError("injected v9 failure")
 

@@ -117,6 +117,8 @@ function sourceFor(value: NotebookNote): CourseSource {
     enabled: true,
     chunk_count: 1,
     indexed_chunk_count: 0,
+    projection_generation_id: 'generation-1',
+    projection_manifest_hash: 'a'.repeat(64),
     size_bytes: null,
     mime_type: 'text/markdown',
     metadata: {},

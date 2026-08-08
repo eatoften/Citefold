@@ -1248,6 +1248,25 @@ def test_v4_video_fingerprint_migrates_v3_database_and_backup(
         conn.execute(
             "CREATE TABLE jobs (id TEXT PRIMARY KEY, video_path TEXT NOT NULL)"
         )
+        conn.executescript(
+            """
+            CREATE TABLE sources (
+                id TEXT PRIMARY KEY,
+                source_type TEXT NOT NULL
+            );
+            CREATE TABLE source_chunks (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                chunk_type TEXT NOT NULL,
+                ordinal INTEGER NOT NULL,
+                text TEXT NOT NULL,
+                text_hash TEXT NOT NULL,
+                locator_json TEXT NOT NULL,
+                chunker_version TEXT NOT NULL,
+                is_active INTEGER NOT NULL
+            );
+            """
+        )
         conn.execute(
             """
             CREATE TABLE schema_migrations (
@@ -1269,7 +1288,7 @@ def test_v4_video_fingerprint_migrates_v3_database_and_backup(
 
     backup = prepare_migration_backup(db_path)
     assert backup is not None
-    assert ".pre-migration-v9-" in backup.name
+    assert ".pre-migration-v10-" in backup.name
     with sqlite3.connect(backup) as conn:
         backup_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(jobs)")
@@ -1278,7 +1297,7 @@ def test_v4_video_fingerprint_migrates_v3_database_and_backup(
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        assert apply_migrations(conn) == [4, 5, 6, 7, 8, 9]
+        assert apply_migrations(conn) == [4, 5, 6, 7, 8, 9, 10]
         columns = {
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(jobs)")

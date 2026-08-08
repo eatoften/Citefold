@@ -38,6 +38,8 @@ function source(
     enabled: true,
     chunk_count: 1,
     indexed_chunk_count: 1,
+    projection_generation_id: 'generation-1',
+    projection_manifest_hash: 'a'.repeat(64),
     size_bytes: 1024,
     mime_type: 'video/mp4',
     metadata: {},

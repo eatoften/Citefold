@@ -97,6 +97,8 @@ export type CourseSource = {
   enabled: boolean
   chunk_count: number
   indexed_chunk_count: number
+  projection_generation_id: string | null
+  projection_manifest_hash: string | null
   size_bytes: number | null
   mime_type: string | null
   metadata: Record<string, unknown>

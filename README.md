@@ -106,15 +106,18 @@ desktop release**. ADR-0008 places G0-G4 before P1.2: define a
 canonical Concept/Evidence/Relation model, build one human-reviewed golden
 course graph, implement deterministic traversal and prerequisite ordering, and
 ship stable paths with per-edge evidence. Those G-stage capabilities are a
-staged implementation program, not an end-to-end feature claim. G1.1 now
-provides a course-scoped, evidence-grounded store and API for human Concept and
-relation candidates. Review/acceptance, immutable published graph versions,
-automatic Understanding, deterministic paths, and the evidence-first graph UI
-remain roadmap work; the current Explore graph is still a sparse CardRelation
-discovery baseline. See the
+staged implementation program, not an end-to-end feature claim. G1.1 provides
+a course-scoped, evidence-grounded store and API for human Concept and relation
+candidates. G1.2a adds non-reusable Source projection generations, so a
+reviewed evidence address cannot silently become current again after its text,
+Locator, ordering, type, or chunker contract drifts and later reverts.
+Review/acceptance, immutable published graph versions, automatic Understanding,
+deterministic paths, and the evidence-first graph UI remain roadmap work; the
+current Explore graph is still a sparse CardRelation discovery baseline. See the
 [active roadmap](docs/roadmap.md),
 [graph decision record](docs/decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md),
 [G1 substrate contract](docs/modules/concept-graph-substrate.md),
+[Source projection generation contract](docs/modules/source-projection-generation.md),
 [learning and mastery plan](docs/project-mastery-plan.md), and
 [append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.
@@ -131,8 +134,9 @@ sealed-use ledger must be frozen in G0.2 before resume-quality metrics exist.
 
 > **Partially implemented target architecture, not an end-to-end feature
 > claim.** The Source-to-Chat path implements much of the evidence backbone,
-> and G1.1 persists grounded human Concept/relation candidates on that
-> backbone. The current automatic Card pipeline still reads video
+> G1.1 persists grounded human Concept/relation candidates on that backbone,
+> and G1.2a versions their Source projections. The current automatic Card
+> pipeline still reads video
 > `TranscriptChunk` objects directly; no candidate is an accepted graph fact;
 > and Explore still renders a Card-to-Card `CardRelation` graph.
 

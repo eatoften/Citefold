@@ -2769,3 +2769,128 @@ G0.2 builds and freezes the parser/chunker/label/runner manifest and a bounded
 Lecture 3 annotation bundle before G2 automation or sealed measurement. The
 sealed transfer assets remain unopened until model, prompts, thresholds, and
 scoring rules are fixed.
+
+## G1.2a - Non-reusable Source projection generations
+
+**Status:** Complete as a bounded G1.2 slice; draft review lifecycle remains in progress
+
+**Date:** 2026-08-08
+
+**Branch:** `codex/concept-graph-foundation`
+
+### User outcome
+
+Concept and relation evidence can now distinguish one exact derived Source
+projection from a later projection that happens to return to the same text.
+Evidence reads report whether their saved generation is still eligible and
+why it became stale, while preserving the historical quote and Locator.
+
+### Why this slice exists
+
+G1.1 saved Chunk text hash and Locator, but those fields did not encode a
+monotonic publication event. A projection could move `A -> B -> A`, causing old
+human-reviewed evidence to appear current again without re-review. Relation
+review and immutable graph publication would be unsound if built on that
+identity model, so Source generation is a prerequisite rather than a later
+optimization.
+
+### Delivered scope
+
+- schema v10 stores an opaque projection generation and canonical manifest
+  hash on every Source and snapshots the generation on new Concept/relation
+  evidence;
+- one canonical manifest covers contract version, stable Source ID/type, and
+  ordered Chunk ID/type/ordinal/text hash/typed Locator/chunker version;
+- identical consecutive publication retains its generation, while every
+  changed publication receives a new UUID and `A -> B -> A` never reuses A's
+  first generation;
+- video, document, Note, and whole-course reconciliation share one projection
+  store boundary; Note snapshot publication shares the caller's transaction;
+- currentness checks active course and origin root, ready Source, generation,
+  same-Source active Chunk, actual text hash, Source type, canonical Locator,
+  and exact quote, returning stable bounded reason codes;
+- migration validates historical text hashes and ordinal uniqueness, assigns
+  Source identities, and intentionally leaves v9 graph evidence generation
+  null and ineligible until regrounded;
+- frontend Source contracts expose the new identity without adding a new user
+  workflow.
+
+This slice does not implement review/CAS, aliases, merge/retirement, relation
+endpoint revision binding, prerequisite-cycle protection, graph publication,
+paths, model proposals, or graph UI.
+
+### Decisions and technology
+
+The manifest is deterministic compact JSON with typed Pydantic Locator
+normalization and SHA-256. The generation is random and non-reusable rather
+than derived from the manifest hash; only an identical *consecutive* publish
+keeps the existing UUID. This preserves drift history while still making
+idempotent reconciliation cheap.
+
+SQLite `BEGIN IMMEDIATE` serializes replacement. A partial unique index guards
+active `(source_id, ordinal)` pairs, triggers require a valid Source identity,
+and a unique generation index catches accidental ID reuse. Chunk replacement
+uses a two-phase deactivate/delete/upsert sequence so retained IDs can swap
+ordinals or shift after a front insertion without violating the unique index
+in an intermediate state. Retained embeddings survive; removed Chunk
+embeddings are deleted in the same transaction.
+
+Whole-workspace restore intentionally restores the backed-up generation IDs
+with the matching evidence because it swaps an exact historical database
+snapshot. That is distinct from republishing a projection in the same
+workspace. Video/document root creation and derived projection sync remain two
+workflow steps; only projection publication itself is the atomic evidence
+boundary.
+
+### Problems encountered and resolutions
+
+- Ready Source rows survive ordinary soft deletion. Currentness now verifies
+  the active Job, SourceAsset, or NotebookNote root and course, so deleted
+  material cannot ground a new candidate; unchanged restore can re-enable it.
+- A caller-supplied 64-character hash was previously trusted. Replacement and
+  migration now recompute SHA-256 from exact UTF-8 Chunk text and fail closed.
+- `ON CONFLICT(id)` could reparent a globally stable Chunk ID to another
+  Source. Ownership is checked before mutation and cross-Source replacement
+  rolls back.
+- Duplicate ordinals made ordering ambiguous. Store validation plus a partial
+  unique index reject them.
+- The first unique-index implementation rejected a valid ordinal swap because
+  one old row temporarily occupied the target ordinal. Two-phase replacement
+  frees the Source's active ordinal namespace inside the transaction before
+  publishing the complete next projection.
+- Migration and runtime initially normalized Locators differently. Both now
+  pass through the same discriminated `SourceLocator` contract and canonical
+  JSON serializer.
+
+### Verification
+
+- independent adversarial review: all P0/P1 findings closed; final two-phase
+  replacement spot review approved the checkpoint;
+- dedicated manifest/generation/migration/currentness focused suite: 23 passed;
+- related backend compatibility selection: 198 passed, 1 skipped;
+- full backend: **746 passed, 3 skipped**, one existing upstream Starlette
+  deprecation warning, 297.85 seconds;
+- full frontend: **27 files, 214 tests passed**, plus ESLint and production
+  TypeScript/Vite build;
+- Python compilation, `uv lock --check`, and `git diff --check`: passed.
+
+The three skips are environment-dependent symlink/path cases. The production
+build retains the already documented 588.23 kB main-chunk optimization warning.
+
+### Git checkpoint
+
+Independent commit subject:
+
+```text
+feat(evidence): version source projections
+```
+
+The immutable SHA is reported after the commit is created and pushed.
+
+### Next gate
+
+G1.2b adds idempotent operation records, append-only Concept/relation review
+revisions, aliases, exact endpoint-revision bindings, and query-time
+publication eligibility. G1.2c then owns merge/retirement invalidation and the
+transactional prerequisite cycle guard before G1.3 publishes immutable graph
+versions.

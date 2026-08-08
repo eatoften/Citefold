@@ -14,7 +14,9 @@ from .concept_graph import (
     RelationEvidence,
     RelationEvidenceReferenceCreate,
 )
+from .course_source import hash_source_chunk_text
 from .db import connect, ensure_db
+from .source_projection_identity import canonical_source_locator_json
 
 
 class ConceptGraphStoreError(RuntimeError):
@@ -45,7 +47,41 @@ class DuplicateRelationError(ConceptGraphStoreError):
     pass
 
 
-EvidenceFingerprint = tuple[str, str, str, str, str]
+EvidenceFingerprint = tuple[str, str, str, str, str, str | None]
+
+
+def _source_root_is_current_sql(source_alias: str) -> str:
+    return f"""
+    (
+        EXISTS (
+            SELECT 1 FROM courses
+            WHERE courses.id = {source_alias}.course_id
+              AND courses.deleted_at IS NULL
+        )
+        AND (
+        ({source_alias}.origin_type = 'video_job' AND EXISTS (
+            SELECT 1 FROM jobs
+            WHERE jobs.id = {source_alias}.origin_id
+              AND jobs.course_id = {source_alias}.course_id
+              AND jobs.deleted_at IS NULL
+        ))
+        OR
+        ({source_alias}.origin_type = 'source_asset' AND EXISTS (
+            SELECT 1 FROM source_assets
+            WHERE source_assets.id = {source_alias}.origin_id
+              AND source_assets.course_id = {source_alias}.course_id
+              AND source_assets.deleted_at IS NULL
+        ))
+        OR
+        ({source_alias}.origin_type = 'notebook_note' AND EXISTS (
+            SELECT 1 FROM notebook_notes
+            WHERE notebook_notes.id = {source_alias}.origin_id
+              AND notebook_notes.course_id = {source_alias}.course_id
+              AND notebook_notes.deleted_at IS NULL
+        ))
+        )
+    )
+    """
 
 
 def _datetime_to_text(value: datetime | None) -> str | None:
@@ -287,9 +323,9 @@ def _insert_concept_evidence(
         """
         INSERT INTO concept_evidence (
             id, course_id, concept_id, concept_revision, source_id, chunk_id,
-            chunk_text_hash, source_title, source_type, quote, locator_json,
-            ordinal, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            chunk_text_hash, projection_generation_id, source_title,
+            source_type, quote, locator_json, ordinal, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             evidence.id,
@@ -299,6 +335,7 @@ def _insert_concept_evidence(
             evidence.source_id,
             evidence.chunk_id,
             evidence.chunk_text_hash,
+            evidence.projection_generation_id,
             evidence.source_title,
             evidence.source_type,
             evidence.quote,
@@ -402,9 +439,10 @@ def _insert_relation_evidence(
         """
         INSERT INTO relation_evidence (
             id, course_id, relation_id, relation_revision, support_role,
-            source_id, chunk_id, chunk_text_hash, source_title, source_type,
-            quote, locator_json, ordinal, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            source_id, chunk_id, chunk_text_hash, projection_generation_id,
+            source_title, source_type, quote, locator_json, ordinal,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             evidence.id,
@@ -415,6 +453,7 @@ def _insert_relation_evidence(
             evidence.source_id,
             evidence.chunk_id,
             evidence.chunk_text_hash,
+            evidence.projection_generation_id,
             evidence.source_title,
             evidence.source_type,
             evidence.quote,
@@ -442,6 +481,8 @@ def _snapshot_concept_evidence(
         source_id=row["source_id"],
         chunk_id=row["id"],
         chunk_text_hash=row["text_hash"],
+        projection_generation_id=row["projection_generation_id"],
+        projection_is_current=True,
         source_title=row["source_title"],
         source_type=row["source_type"],
         quote=request.quote,
@@ -469,6 +510,8 @@ def _snapshot_relation_evidence(
         source_id=row["source_id"],
         chunk_id=row["id"],
         chunk_text_hash=row["text_hash"],
+        projection_generation_id=row["projection_generation_id"],
+        projection_is_current=True,
         source_title=row["source_title"],
         source_type=row["source_type"],
         quote=request.quote,
@@ -484,15 +527,18 @@ def _require_grounding_chunk(
     request: EvidenceReferenceCreate,
 ) -> Row:
     row = conn.execute(
-        """
+        f"""
         SELECT source_chunks.*, sources.title AS source_title,
-               sources.source_type AS source_type
+               sources.source_type AS source_type,
+               sources.projection_generation_id
         FROM source_chunks
         INNER JOIN sources ON sources.id = source_chunks.source_id
         WHERE source_chunks.id = ?
           AND source_chunks.is_active = 1
           AND sources.course_id = ?
           AND sources.content_status = 'ready'
+          AND sources.projection_generation_id IS NOT NULL
+          AND {_source_root_is_current_sql("sources")}
         """,
         (request.chunk_id, course_id),
     ).fetchone()
@@ -500,6 +546,16 @@ def _require_grounding_chunk(
         raise EvidenceChunkNotFoundError(
             "Evidence chunk is unavailable in the selected course."
         )
+    if hash_source_chunk_text(str(row["text"])) != row["text_hash"]:
+        raise EvidenceChunkNotFoundError(
+            "Evidence chunk is unavailable in the selected course."
+        )
+    try:
+        canonical_source_locator_json(row["locator_json"])
+    except (TypeError, ValueError) as exc:
+        raise EvidenceChunkNotFoundError(
+            "Evidence chunk is unavailable in the selected course."
+        ) from exc
     if request.quote not in str(row["text"]):
         raise EvidenceQuoteMismatchError(
             "Evidence quote must be an exact substring of the current chunk."
@@ -551,7 +607,8 @@ def _require_relation_endpoints(
     for concept_id, row in valid_rows.items():
         evidence_rows = conn.execute(
             """
-            SELECT source_id, chunk_id, chunk_text_hash, quote, locator_json
+            SELECT source_id, chunk_id, chunk_text_hash, quote, locator_json,
+                   projection_generation_id
             FROM concept_evidence
             WHERE course_id = ?
               AND concept_id = ?
@@ -614,10 +671,33 @@ def _list_concept_revision_evidence(
     revision: int,
 ) -> list[ConceptEvidence]:
     rows = conn.execute(
-        """
-        SELECT * FROM concept_evidence
-        WHERE concept_id = ? AND concept_revision = ?
-        ORDER BY ordinal, id
+        f"""
+        SELECT evidence.*,
+               sources.id AS current_source_id,
+               sources.content_status AS current_source_status,
+               sources.projection_generation_id
+                   AS current_projection_generation_id,
+               sources.source_type AS current_source_type,
+               courses.id AS current_course_id,
+               current_chunk.id AS current_chunk_id,
+               current_chunk.text AS current_chunk_text,
+               current_chunk.text_hash AS current_chunk_text_hash,
+               current_chunk.locator_json AS current_chunk_locator_json,
+               CASE WHEN {_source_root_is_current_sql("sources")}
+                    THEN 1 ELSE 0 END AS source_root_is_current
+        FROM concept_evidence AS evidence
+        LEFT JOIN sources
+            ON sources.id = evidence.source_id
+           AND sources.course_id = evidence.course_id
+        LEFT JOIN courses
+            ON courses.id = evidence.course_id
+           AND courses.deleted_at IS NULL
+        LEFT JOIN source_chunks AS current_chunk
+            ON current_chunk.id = evidence.chunk_id
+           AND current_chunk.source_id = evidence.source_id
+           AND current_chunk.is_active = 1
+        WHERE evidence.concept_id = ? AND evidence.concept_revision = ?
+        ORDER BY evidence.ordinal, evidence.id
         """,
         (concept_id, revision),
     ).fetchall()
@@ -630,10 +710,33 @@ def _list_relation_revision_evidence(
     revision: int,
 ) -> list[RelationEvidence]:
     rows = conn.execute(
-        """
-        SELECT * FROM relation_evidence
-        WHERE relation_id = ? AND relation_revision = ?
-        ORDER BY ordinal, id
+        f"""
+        SELECT evidence.*,
+               sources.id AS current_source_id,
+               sources.content_status AS current_source_status,
+               sources.projection_generation_id
+                   AS current_projection_generation_id,
+               sources.source_type AS current_source_type,
+               courses.id AS current_course_id,
+               current_chunk.id AS current_chunk_id,
+               current_chunk.text AS current_chunk_text,
+               current_chunk.text_hash AS current_chunk_text_hash,
+               current_chunk.locator_json AS current_chunk_locator_json,
+               CASE WHEN {_source_root_is_current_sql("sources")}
+                    THEN 1 ELSE 0 END AS source_root_is_current
+        FROM relation_evidence AS evidence
+        LEFT JOIN sources
+            ON sources.id = evidence.source_id
+           AND sources.course_id = evidence.course_id
+        LEFT JOIN courses
+            ON courses.id = evidence.course_id
+           AND courses.deleted_at IS NULL
+        LEFT JOIN source_chunks AS current_chunk
+            ON current_chunk.id = evidence.chunk_id
+           AND current_chunk.source_id = evidence.source_id
+           AND current_chunk.is_active = 1
+        WHERE evidence.relation_id = ? AND evidence.relation_revision = ?
+        ORDER BY evidence.ordinal, evidence.id
         """,
         (relation_id, revision),
     ).fetchall()
@@ -712,6 +815,7 @@ def _candidate_fields(row: Row) -> dict[str, object]:
 
 
 def _row_to_concept_evidence(row: Row) -> ConceptEvidence:
+    projection_is_current, currentness_reasons = _projection_currentness(row)
     return ConceptEvidence(
         id=row["id"],
         course_id=row["course_id"],
@@ -720,6 +824,9 @@ def _row_to_concept_evidence(row: Row) -> ConceptEvidence:
         source_id=row["source_id"],
         chunk_id=row["chunk_id"],
         chunk_text_hash=row["chunk_text_hash"],
+        projection_generation_id=row["projection_generation_id"],
+        projection_is_current=projection_is_current,
+        projection_currentness_reasons=currentness_reasons,
         source_title=row["source_title"],
         source_type=row["source_type"],
         quote=row["quote"],
@@ -730,6 +837,7 @@ def _row_to_concept_evidence(row: Row) -> ConceptEvidence:
 
 
 def _row_to_relation_evidence(row: Row) -> RelationEvidence:
+    projection_is_current, currentness_reasons = _projection_currentness(row)
     return RelationEvidence(
         id=row["id"],
         course_id=row["course_id"],
@@ -739,6 +847,9 @@ def _row_to_relation_evidence(row: Row) -> RelationEvidence:
         source_id=row["source_id"],
         chunk_id=row["chunk_id"],
         chunk_text_hash=row["chunk_text_hash"],
+        projection_generation_id=row["projection_generation_id"],
+        projection_is_current=projection_is_current,
+        projection_currentness_reasons=currentness_reasons,
         source_title=row["source_title"],
         source_type=row["source_type"],
         quote=row["quote"],
@@ -748,6 +859,51 @@ def _row_to_relation_evidence(row: Row) -> RelationEvidence:
     )
 
 
+def _projection_currentness(row: Row) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    generation_id = row["projection_generation_id"]
+    if generation_id is None:
+        reasons.append("legacy_projection_generation")
+    if row["current_course_id"] is None:
+        reasons.append("course_unavailable")
+
+    if row["current_source_id"] is None:
+        reasons.append("source_unavailable")
+    else:
+        if row["current_source_status"] != "ready":
+            reasons.append("source_not_ready")
+        if not bool(row["source_root_is_current"]):
+            reasons.append("source_root_unavailable")
+        if generation_id != row["current_projection_generation_id"]:
+            reasons.append("projection_generation_mismatch")
+        if row["source_type"] != row["current_source_type"]:
+            reasons.append("source_type_mismatch")
+
+    if row["current_chunk_id"] is None:
+        reasons.append("chunk_unavailable")
+    else:
+        current_text = str(row["current_chunk_text"])
+        actual_current_hash = hash_source_chunk_text(current_text)
+        if (
+            row["chunk_text_hash"] != actual_current_hash
+            or row["current_chunk_text_hash"] != actual_current_hash
+        ):
+            reasons.append("chunk_hash_mismatch")
+        try:
+            locator_matches = canonical_source_locator_json(
+                row["locator_json"]
+            ) == canonical_source_locator_json(
+                row["current_chunk_locator_json"]
+            )
+        except (TypeError, ValueError):
+            locator_matches = False
+        if not locator_matches:
+            reasons.append("locator_mismatch")
+        if str(row["quote"]) not in current_text:
+            reasons.append("quote_mismatch")
+    return not reasons, reasons
+
+
 def _row_evidence_fingerprint(row: Row) -> EvidenceFingerprint:
     return (
         str(row["source_id"]),
@@ -755,6 +911,11 @@ def _row_evidence_fingerprint(row: Row) -> EvidenceFingerprint:
         str(row["chunk_text_hash"]),
         str(row["quote"]),
         _canonical_locator_json(row["locator_json"]),
+        (
+            str(row["projection_generation_id"])
+            if row["projection_generation_id"] is not None
+            else None
+        ),
     )
 
 
@@ -767,6 +928,7 @@ def _evidence_fingerprint(
         evidence.chunk_text_hash,
         evidence.quote,
         _canonical_locator_json(evidence.locator),
+        evidence.projection_generation_id,
     )
 
 
@@ -778,17 +940,7 @@ def _locator_json(locator: object) -> str:
 
 
 def _canonical_locator_json(locator: object) -> str:
-    if isinstance(locator, str):
-        value = json.loads(locator)
-    else:
-        model_dump = getattr(locator, "model_dump", None)
-        value = model_dump(mode="json") if callable(model_dump) else locator
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    return canonical_source_locator_json(locator)
 
 
 def _validate_page(limit: int, cursor: str | None) -> None:

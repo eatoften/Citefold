@@ -64,18 +64,21 @@ def chat_evidence() -> None:
             INSERT INTO sources (
                 id, course_id, origin_type, origin_id, source_type, title,
                 content_status, index_status, index_generation, index_model,
-                index_dimension, enabled, size_bytes, mime_type,
+                index_dimension, projection_generation_id,
+                projection_manifest_hash, enabled, size_bytes, mime_type,
                 metadata_json, error_message, index_error,
                 created_at, updated_at, indexed_at
             ) VALUES (
                 ?, ?, 'source_asset', 'notes', 'text', 'Lecture notes',
-                'ready', 'ready', NULL, 'test-model', 2, 1, 100,
+                'ready', 'ready', NULL, 'test-model', 2, ?, ?, 1, 100,
                 'text/plain', '{}', NULL, NULL, ?, ?, ?
             )
             """,
             (
                 SOURCE_ID,
                 COURSE_ID,
+                "chat-evidence-generation",
+                "a" * 64,
                 NOW.isoformat(),
                 NOW.isoformat(),
                 NOW.isoformat(),
@@ -448,16 +451,19 @@ def test_completion_rejects_same_course_source_outside_turn_snapshot(
             """
             INSERT INTO sources (
                 id, course_id, origin_type, origin_id, source_type, title,
-                content_status, index_status, enabled, metadata_json,
-                created_at, updated_at
+                content_status, index_status, projection_generation_id,
+                projection_manifest_hash, enabled, metadata_json, created_at,
+                updated_at
             ) VALUES (
                 ?, ?, 'source_asset', 'unselected', 'text', 'Unselected notes',
-                'ready', 'ready', 1, '{}', ?, ?
+                'ready', 'ready', ?, ?, 1, '{}', ?, ?
             )
             """,
             (
                 foreign_source_id,
                 COURSE_ID,
+                "unselected-generation",
+                "b" * 64,
                 NOW.isoformat(),
                 NOW.isoformat(),
             ),

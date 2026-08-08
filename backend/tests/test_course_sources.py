@@ -389,6 +389,11 @@ def test_course_sources_unify_video_and_documents_with_typed_locators(
     assert sources["asset:pdf-1"]["source_type"] == "pdf"
     assert sources["asset:readme-1"]["title"] == "lesson.md"
     assert all(source["content_status"] == "ready" for source in sources.values())
+    assert all(source["projection_generation_id"] for source in sources.values())
+    assert all(
+        len(source["projection_manifest_hash"]) == 64
+        for source in sources.values()
+    )
 
     expected_locators = {
         f"job:{job.id}": {

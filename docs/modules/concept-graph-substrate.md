@@ -5,6 +5,7 @@
 - **Status:** G1.1 implemented and locally verified; full G1 in progress
 - **Architecture owner:** [ADR-0008](../decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md)
 - **Evidence rules:** [Graph annotation protocol](../graph-annotation-protocol.md)
+- **Projection identity:** [G1.2a Source generations](source-projection-generation.md)
 
 ## Responsibility
 
@@ -150,9 +151,12 @@ head from naming a missing revision. Detail reads join only the current
 revision and its evidence. Old revisions and evidence remain auditable.
 
 Evidence tables retain snapshot values even if a later Source projection is
-replaced. Currentness is determined by comparing the stored Source/Chunk/hash/
-Locator snapshot with the active evidence projection; historical audit must
-not depend on the old chunk row still existing.
+replaced. G1.2a additionally snapshots the Source projection generation and
+computes currentness from course/root availability, generation, active
+same-Source Chunk, Source type, hash, typed Locator, and exact quote.
+Historical audit never depends on the old Chunk row still existing, and
+legacy v9 evidence without a trustworthy generation is explicitly ineligible
+until regrounded.
 
 Required database protections include:
 

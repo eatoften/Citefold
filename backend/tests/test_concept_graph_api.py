@@ -17,6 +17,8 @@ from app.course_source import (
 )
 from app.course_source_store import replace_source_projection
 from app.db import connect
+from app.source_asset import SourceAsset
+from app.source_asset_store import create_source_asset
 
 
 client = TestClient(main.app)
@@ -29,6 +31,18 @@ def _course_with_pdf_chunk(
 ) -> tuple[Course, CourseSourceChunk]:
     course = create_video_course(CourseCreate(title=f"Course {suffix}"))
     source_id = f"asset:graph-{suffix}"
+    create_source_asset(
+        SourceAsset(
+            id=f"graph-{suffix}",
+            course_id=course.id,
+            asset_type="pdf",
+            original_filename=f"Graph {suffix}.pdf",
+            stored_path=f"graph-{suffix}.pdf",
+            size_bytes=1,
+            sha256="a" * 64,
+            extraction_status="ready",
+        )
+    )
     chunk = CourseSourceChunk(
         id=f"source_unit:graph-{suffix}-page-1",
         source_id=source_id,
