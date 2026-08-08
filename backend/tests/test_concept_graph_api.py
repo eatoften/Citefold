@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from sqlite3 import IntegrityError
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 import pytest
@@ -22,6 +23,14 @@ from app.source_asset_store import create_source_asset
 
 
 client = TestClient(main.app)
+
+
+def _create_metadata() -> dict[str, str]:
+    return {
+        "operation_id": uuid4().hex,
+        "actor": "test@example.test",
+        "reason": "Create a grounded graph candidate for this test.",
+    }
 
 
 def _course_with_pdf_chunk(
@@ -83,6 +92,7 @@ def _create_concept(
     response = client.post(
         f"/courses/{course_id}/concepts",
         json={
+            **_create_metadata(),
             "preferred_name": name,
             "short_definition": f"Definition of {name}.",
             "evidence": [{"chunk_id": chunk_id, "quote": quote}],
@@ -144,6 +154,7 @@ def test_concept_creation_rolls_back_when_grounding_is_invalid() -> None:
     response = client.post(
         f"/courses/{course.id}/concepts",
         json={
+            **_create_metadata(),
             "preferred_name": "Invented concept",
             "short_definition": "This candidate must not survive.",
             "evidence": [
@@ -171,6 +182,7 @@ def test_concept_creation_rejects_an_out_of_course_chunk() -> None:
     response = client.post(
         f"/courses/{course.id}/concepts",
         json={
+            **_create_metadata(),
             "preferred_name": "Cross-course concept",
             "short_definition": "This must be rejected.",
             "evidence": [
@@ -205,6 +217,7 @@ def test_symmetric_relation_is_canonical_and_duplicate_safe() -> None:
     )
     descending = sorted((left["id"], right["id"]), reverse=True)
     payload = {
+        **_create_metadata(),
         "source_concept_id": descending[0],
         "target_concept_id": descending[1],
         "relation_type": "related",
@@ -237,6 +250,7 @@ def test_symmetric_relation_is_canonical_and_duplicate_safe() -> None:
 
     reversed_payload = {
         **payload,
+        **_create_metadata(),
         "source_concept_id": payload["target_concept_id"],
         "target_concept_id": payload["source_concept_id"],
     }
@@ -276,6 +290,7 @@ def test_pedagogical_inference_requires_both_endpoint_evidence() -> None:
         quote="learning rate",
     )
     payload = {
+        **_create_metadata(),
         "source_concept_id": left["id"],
         "target_concept_id": right["id"],
         "relation_type": "prerequisite",
@@ -298,6 +313,7 @@ def test_pedagogical_inference_requires_both_endpoint_evidence() -> None:
         f"/courses/{course.id}/concept-relations",
         json={
             **payload,
+            **_create_metadata(),
             "evidence": [
                 {
                     "chunk_id": chunk.id,
@@ -325,6 +341,7 @@ def test_pedagogical_inference_requires_both_endpoint_evidence() -> None:
         f"/courses/{course.id}/concept-relations",
         json={
             **payload,
+            **_create_metadata(),
             "evidence": [
                 *payload["evidence"],
                 {
@@ -363,6 +380,7 @@ def test_relation_rejects_cross_course_endpoints_and_evidence() -> None:
         quote="Gradient descent",
     )
     base_payload = {
+        **_create_metadata(),
         "source_concept_id": left["id"],
         "target_concept_id": right["id"],
         "relation_type": "prerequisite",
@@ -385,6 +403,7 @@ def test_relation_rejects_cross_course_endpoints_and_evidence() -> None:
         f"/courses/{course.id}/concept-relations",
         json={
             **base_payload,
+            **_create_metadata(),
             "evidence": [
                 {
                     "chunk_id": other_chunk.id,
@@ -461,6 +480,7 @@ def test_inference_rejects_endpoint_snapshot_drift_atomically(
     response = client.post(
         f"/courses/{course.id}/concept-relations",
         json={
+            **_create_metadata(),
             "source_concept_id": left["id"],
             "target_concept_id": right["id"],
             "relation_type": "prerequisite",
@@ -517,6 +537,7 @@ def test_source_asserted_relation_rejects_endpoint_roles() -> None:
     response = client.post(
         f"/courses/{course.id}/concept-relations",
         json={
+            **_create_metadata(),
             "source_concept_id": left["id"],
             "target_concept_id": right["id"],
             "relation_type": "prerequisite",
@@ -556,6 +577,7 @@ def test_unexpected_integrity_error_is_not_reported_as_duplicate(
     response = client.post(
         f"/courses/{course.id}/concept-relations",
         json={
+            **_create_metadata(),
             "source_concept_id": "concept-a",
             "target_concept_id": "concept-b",
             "relation_type": "prerequisite",
@@ -580,6 +602,7 @@ def test_unexpected_integrity_error_is_not_reported_as_duplicate(
 def test_concept_request_bounds_are_enforced_before_writes() -> None:
     course, chunk = _course_with_pdf_chunk("request-bounds")
     base = {
+        **_create_metadata(),
         "preferred_name": "Bounded concept",
         "short_definition": "The API must bound evidence input.",
     }
@@ -588,6 +611,7 @@ def test_concept_request_bounds_are_enforced_before_writes() -> None:
         f"/courses/{course.id}/concepts",
         json={
             **base,
+            **_create_metadata(),
             "evidence": [
                 {"chunk_id": chunk.id, "quote": f"quote-{index}"}
                 for index in range(33)
@@ -598,6 +622,7 @@ def test_concept_request_bounds_are_enforced_before_writes() -> None:
         f"/courses/{course.id}/concepts",
         json={
             **base,
+            **_create_metadata(),
             "evidence": [{"chunk_id": chunk.id, "quote": "x" * 16_001}],
         },
     )

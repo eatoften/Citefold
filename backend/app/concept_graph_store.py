@@ -17,6 +17,7 @@ from .concept_graph import (
     ConceptSummary,
     EvidenceReferenceCreate,
     GraphMarkStaleRequest,
+    GraphOperationRequest,
     GraphReviewRequest,
     RelationEndpointRevisionBinding,
     RelationEvidence,
@@ -138,6 +139,9 @@ def create_concept_candidate(
     evidence_ids: list[str],
     alias_ids: list[str] | None = None,
     alias_names: list[str] | None = None,
+    *,
+    operation: GraphOperationRequest,
+    request_hash: str,
 ) -> Concept:
     if len(evidence_requests) != len(evidence_ids):
         raise ValueError("Every Concept evidence reference needs an id.")
@@ -152,6 +156,19 @@ def create_concept_candidate(
     ensure_db()
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        replay = _replay_create_operation(
+            conn,
+            course_id=concept.course_id,
+            operation_id=operation.operation_id,
+            request_hash=request_hash,
+            kind="concept_create",
+            entity_type="concept",
+        )
+        if replay is not None:
+            entity_id, revision = replay
+            return _load_concept_revision_or_raise(
+                conn, concept.course_id, entity_id, revision
+            )
         _insert_concept_identity(conn, concept)
         _insert_concept_revision(conn, concept)
         aliases = _build_aliases(
@@ -173,6 +190,19 @@ def create_concept_candidate(
         ]
         for item in evidence:
             _insert_concept_evidence(conn, item)
+        _record_operation(
+            conn,
+            course_id=concept.course_id,
+            operation_id=operation.operation_id,
+            kind="concept_create",
+            request_hash=request_hash,
+            actor=operation.actor,
+            reason=operation.reason,
+            entity_type="concept",
+            entity_id=concept.id,
+            result_revision=concept.revision,
+            created_at=concept.created_at,
+        )
         row = _select_concept_revision(
             conn, concept.course_id, concept.id, concept.revision
         )
@@ -184,6 +214,9 @@ def create_relation_candidate(
     relation: ConceptRelation,
     evidence_requests: list[RelationEvidenceReferenceCreate],
     evidence_ids: list[str],
+    *,
+    operation: GraphOperationRequest,
+    request_hash: str,
 ) -> ConceptRelation:
     if len(evidence_requests) != len(evidence_ids):
         raise ValueError("Every relation evidence reference needs an id.")
@@ -191,6 +224,19 @@ def create_relation_candidate(
     ensure_db()
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
+        replay = _replay_create_operation(
+            conn,
+            course_id=relation.course_id,
+            operation_id=operation.operation_id,
+            request_hash=request_hash,
+            kind="relation_create",
+            entity_type="relation",
+        )
+        if replay is not None:
+            entity_id, revision = replay
+            return _load_relation_revision_or_raise(
+                conn, relation.course_id, entity_id, revision
+            )
         endpoint_evidence = _require_relation_endpoints(conn, relation)
         _require_relation_identity_available(conn, relation)
         _insert_relation_identity(conn, relation)
@@ -209,6 +255,19 @@ def create_relation_candidate(
         _require_relation_support(relation, evidence, endpoint_evidence)
         for item in evidence:
             _insert_relation_evidence(conn, item)
+        _record_operation(
+            conn,
+            course_id=relation.course_id,
+            operation_id=operation.operation_id,
+            kind="relation_create",
+            request_hash=request_hash,
+            actor=operation.actor,
+            reason=operation.reason,
+            entity_type="relation",
+            entity_id=relation.id,
+            result_revision=relation.revision,
+            created_at=relation.created_at,
+        )
         row = _select_relation_revision(
             conn, relation.course_id, relation.id, relation.revision
         )
@@ -1581,6 +1640,52 @@ def _replay_operation(
     entity_type: str,
     entity_id: str,
 ) -> int | None:
+    replay = _read_operation_receipt(
+        conn,
+        course_id=course_id,
+        operation_id=operation_id,
+        request_hash=request_hash,
+        kind=kind,
+        entity_type=entity_type,
+    )
+    if replay is None:
+        return None
+    stored_entity_id, revision = replay
+    if stored_entity_id != entity_id:
+        raise GraphOperationReuseError(
+            "This operation id was already used for a different request."
+        )
+    return revision
+
+
+def _replay_create_operation(
+    conn: Connection,
+    *,
+    course_id: str,
+    operation_id: str,
+    request_hash: str,
+    kind: str,
+    entity_type: str,
+) -> tuple[str, int] | None:
+    return _read_operation_receipt(
+        conn,
+        course_id=course_id,
+        operation_id=operation_id,
+        request_hash=request_hash,
+        kind=kind,
+        entity_type=entity_type,
+    )
+
+
+def _read_operation_receipt(
+    conn: Connection,
+    *,
+    course_id: str,
+    operation_id: str,
+    request_hash: str,
+    kind: str,
+    entity_type: str,
+) -> tuple[str, int] | None:
     row = conn.execute(
         """
         SELECT kind, request_hash, entity_type, entity_id, result_revision,
@@ -1596,11 +1701,12 @@ def _replay_operation(
         row["request_hash"] != request_hash
         or row["kind"] != kind
         or row["entity_type"] != entity_type
-        or row["entity_id"] != entity_id
     ):
         raise GraphOperationReuseError(
             "This operation id was already used for a different request."
         )
+    entity_id = str(row["entity_id"])
+    revision = int(row["result_revision"])
     try:
         receipt = json.loads(row["result_json"])
     except (TypeError, json.JSONDecodeError) as exc:
@@ -1608,10 +1714,10 @@ def _replay_operation(
     if receipt != {
         "entity_type": entity_type,
         "entity_id": entity_id,
-        "revision": int(row["result_revision"]),
+        "revision": revision,
     }:
         raise RuntimeError("Stored graph operation receipt is inconsistent.")
-    return int(row["result_revision"])
+    return entity_id, revision
 
 
 def _require_current_concept_evidence(

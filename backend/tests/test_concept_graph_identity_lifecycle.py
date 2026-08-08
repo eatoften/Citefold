@@ -85,6 +85,9 @@ def _concept(
     response = client.post(
         f"/courses/{course_id}/concepts",
         json={
+            "operation_id": uuid4().hex,
+            "actor": "reviewer@example.test",
+            "reason": "Create a grounded Concept candidate.",
             "preferred_name": name,
             "short_definition": f"Definition for {name}.",
             "aliases": aliases or [],
@@ -106,6 +109,9 @@ def _relation(
     response = client.post(
         f"/courses/{course_id}/concept-relations",
         json={
+            "operation_id": uuid4().hex,
+            "actor": "reviewer@example.test",
+            "reason": "Create a grounded relation candidate.",
             "source_concept_id": source_id,
             "target_concept_id": target_id,
             "relation_type": relation_type,

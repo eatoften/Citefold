@@ -9,6 +9,7 @@ from app.concept_graph import (
     Concept,
     ConceptRelation,
     EvidenceReferenceCreate,
+    GraphOperationRequest,
     RelationEvidenceReferenceCreate,
 )
 from app.concept_graph_store import (
@@ -78,6 +79,17 @@ def _grounding_fixture() -> tuple[str, CourseSourceChunk]:
     return course.id, chunk
 
 
+def _operation_args() -> dict[str, object]:
+    return {
+        "operation": GraphOperationRequest(
+            operation_id=uuid4().hex,
+            actor="store-test",
+            reason="Create a grounded test aggregate.",
+        ),
+        "request_hash": uuid4().hex + uuid4().hex,
+    }
+
+
 def _candidate(course_id: str, name: str) -> Concept:
     now = utc_now()
     return Concept(
@@ -107,6 +119,7 @@ def test_store_atomically_snapshots_grounded_concept_evidence() -> None:
             )
         ],
         [uuid4().hex],
+        **_operation_args(),
     )
 
     assert stored.evidence[0].source_id == chunk.source_id
@@ -124,6 +137,7 @@ def test_store_atomically_snapshots_grounded_concept_evidence() -> None:
                 )
             ],
             [uuid4().hex],
+            **_operation_args(),
         )
 
     assert get_concept(course_id, valid.id) is not None
@@ -143,6 +157,7 @@ def test_current_read_uses_only_current_revision_evidence() -> None:
         revision_one,
         [EvidenceReferenceCreate(chunk_id=chunk.id, quote="last-in")],
         [uuid4().hex],
+        **_operation_args(),
     )
     revision_two_time = utc_now()
     with connect() as conn:
@@ -223,6 +238,7 @@ def test_relation_current_read_preserves_old_revision_evidence() -> None:
             concept,
             [EvidenceReferenceCreate(chunk_id=chunk.id, quote=quote)],
             [uuid4().hex],
+            **_operation_args(),
         )
     now = utc_now()
     revision_one = ConceptRelation(
@@ -250,6 +266,7 @@ def test_relation_current_read_preserves_old_revision_evidence() -> None:
             )
         ],
         [uuid4().hex],
+        **_operation_args(),
     )
     revision_two_time = utc_now()
     with connect() as conn:

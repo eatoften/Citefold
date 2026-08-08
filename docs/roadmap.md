@@ -47,7 +47,7 @@ commit, and remote push are all complete.
 | P0.5 Reliability | Autosave, recoverable tasks, backup/restore, safe desktop lifecycle | Complete |
 | P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Complete |
 | G0 Graph contract and baseline | Relation semantics, evidence rules, evaluation scope, and non-goals are frozen | In progress |
-| G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | In progress - G1.1 candidates plus G1.2a-G1.2c projection, review, and identity lifecycles implemented |
+| G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | In progress - G1.1 candidates plus G1.2a-G1.2d projection, review, identity, and create-reliability lifecycles implemented |
 | G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | Planned |
 | G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | Planned |
 | G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | Planned |
@@ -162,12 +162,19 @@ dependencies permit a star of duplicates around one active survivor while
 forbidding redirect chains and cycles. Merge/retire retries use the same
 course-scoped immutable operation ledger as other revision mutations.
 
-G1.1/G1.2a-G1.2c do **not** satisfy the full G1 gate. Idempotent initial
-Concept/relation creation, immutable graph publication, and the remaining
-full-G1 release checks are still required. Initial create uses a separate
-contract because it has no prior head revision; before release it needs a
-client request ID, canonical request hash, and stored entity receipt. Until
-then, the project must not claim that every graph write is idempotent.
+G1.2d closes the initial-create retry gap. Concept/relation POST requests now
+require a client operation ID, actor label, and reason; a versioned canonical
+request hash plus the immutable operation ledger makes aggregate creation and
+its evidence/binding children atomic and replayable. The replay lookup runs
+before current Source or endpoint validation, so a lost successful response
+can still recover the exact historical revision after later drift. The actor
+label is client supplied and is not an authenticated security principal.
+
+G1.1/G1.2a-G1.2d do **not** satisfy the full G1 gate. Immutable graph
+publication and the remaining full-G1 release checks are still required. The
+project may now claim that implemented client-visible graph mutation endpoints
+are operation-ID based and idempotent, but it must not claim that a draft head
+is a published graph.
 
 Deliverables:
 

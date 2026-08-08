@@ -115,34 +115,24 @@ def create_grounded_concept_candidate(
         created_at=now,
         updated_at=now,
     )
-    try:
-        return create_concept_candidate(
+    return _run_graph_write(
+        lambda: create_concept_candidate(
             concept,
             request.evidence,
             [uuid4().hex for _ in request.evidence],
             [uuid4().hex for _ in request.aliases],
             request.aliases,
-        )
-    except EvidenceChunkNotFoundError as exc:
-        raise GraphEvidenceNotFoundError(str(exc)) from exc
-    except EvidenceQuoteMismatchError as exc:
-        raise InvalidConceptGraphRequestError(str(exc)) from exc
-    except IntegrityError as exc:
-        raise ConceptGraphPersistenceError(
-            "Concept graph persistence failed."
-        ) from exc
-    except OperationalError as exc:
-        if _is_sqlite_busy(exc):
-            raise ConceptGraphBusyError(
-                "Concept graph is busy; retry the operation."
-            ) from exc
-        raise ConceptGraphPersistenceError(
-            "Concept graph persistence failed."
-        ) from exc
-    except Exception as exc:
-        raise ConceptGraphPersistenceError(
-            "Concept graph persistence failed."
-        ) from exc
+            operation=request,
+            request_hash=_create_hash(
+                course_id=course.id,
+                entity_type="concept",
+                kind="concept_create",
+                path="/courses/{course_id}/concepts",
+                request=request,
+            ),
+        ),
+        entity_type="concept",
+    )
 
 
 def list_course_concepts(
@@ -212,42 +202,22 @@ def create_grounded_relation_candidate(
         created_at=now,
         updated_at=now,
     )
-    try:
-        return create_relation_candidate(
+    return _run_graph_write(
+        lambda: create_relation_candidate(
             relation,
             evidence_requests,
             [uuid4().hex for _ in evidence_requests],
-        )
-    except EvidenceChunkNotFoundError as exc:
-        raise GraphEvidenceNotFoundError(str(exc)) from exc
-    except EvidenceQuoteMismatchError as exc:
-        raise InvalidConceptGraphRequestError(str(exc)) from exc
-    except RelationEndpointNotFoundError as exc:
-        raise ConceptNotFoundError(str(exc)) from exc
-    except RelationEvidenceMismatchError as exc:
-        raise InvalidConceptGraphRequestError(str(exc)) from exc
-    except (DuplicateRelationError, RelationEvidenceDriftError) as exc:
-        raise ConceptGraphConflictError(
-            str(exc)
-        ) from exc
-    except GraphEvidenceStaleError as exc:
-        raise ConceptGraphConflictError(str(exc)) from exc
-    except IntegrityError as exc:
-        raise ConceptGraphPersistenceError(
-            "Concept graph persistence failed."
-        ) from exc
-    except OperationalError as exc:
-        if _is_sqlite_busy(exc):
-            raise ConceptGraphBusyError(
-                "Concept graph is busy; retry the operation."
-            ) from exc
-        raise ConceptGraphPersistenceError(
-            "Concept graph persistence failed."
-        ) from exc
-    except Exception as exc:
-        raise ConceptGraphPersistenceError(
-            "Concept graph persistence failed."
-        ) from exc
+            operation=request,
+            request_hash=_create_hash(
+                course_id=course.id,
+                entity_type="relation",
+                kind="relation_create",
+                path="/courses/{course_id}/concept-relations",
+                request=request,
+            ),
+        ),
+        entity_type="relation",
+    )
 
 
 def list_course_relations(
@@ -298,7 +268,7 @@ def edit_course_concept(
     request: ConceptRevisionEdit,
 ) -> Concept:
     course = _require_course(course_id)
-    return _run_mutation(
+    return _run_graph_write(
         lambda: edit_concept_revision(
             course.id,
             concept_id,
@@ -322,7 +292,7 @@ def review_course_concept(
     request: GraphReviewRequest,
 ) -> Concept:
     course = _require_course(course_id)
-    return _run_mutation(
+    return _run_graph_write(
         lambda: review_concept_revision(
             course.id,
             concept_id,
@@ -346,7 +316,7 @@ def mark_course_concept_stale(
     request: GraphMarkStaleRequest,
 ) -> Concept:
     course = _require_course(course_id)
-    return _run_mutation(
+    return _run_graph_write(
         lambda: mark_concept_revision_stale(
             course.id,
             concept_id,
@@ -370,7 +340,7 @@ def merge_course_concept(
     request: ConceptMergeRequest,
 ) -> Concept:
     course = _require_course(course_id)
-    return _run_mutation(
+    return _run_graph_write(
         lambda: merge_concept_identity(
             course.id,
             concept_id,
@@ -394,7 +364,7 @@ def retire_course_concept(
     request: ConceptRetireRequest,
 ) -> Concept:
     course = _require_course(course_id)
-    return _run_mutation(
+    return _run_graph_write(
         lambda: retire_concept_identity(
             course.id,
             concept_id,
@@ -418,7 +388,7 @@ def edit_course_relation(
     request: RelationRevisionEdit,
 ) -> ConceptRelation:
     course = _require_course(course_id)
-    return _run_mutation(
+    return _run_graph_write(
         lambda: edit_relation_revision(
             course.id,
             relation_id,
@@ -445,7 +415,7 @@ def review_course_relation(
     request: RelationReviewRequest,
 ) -> ConceptRelation:
     course = _require_course(course_id)
-    return _run_mutation(
+    return _run_graph_write(
         lambda: review_relation_revision(
             course.id,
             relation_id,
@@ -472,7 +442,7 @@ def mark_course_relation_stale(
     request: GraphMarkStaleRequest,
 ) -> ConceptRelation:
     course = _require_course(course_id)
-    return _run_mutation(
+    return _run_graph_write(
         lambda: mark_relation_revision_stale(
             course.id,
             relation_id,
@@ -493,14 +463,14 @@ def mark_course_relation_stale(
     )
 
 
-MutationResult = TypeVar("MutationResult", Concept, ConceptRelation)
+GraphWriteResult = TypeVar("GraphWriteResult", Concept, ConceptRelation)
 
 
-def _run_mutation(
-    operation: Callable[[], MutationResult],
+def _run_graph_write(
+    operation: Callable[[], GraphWriteResult],
     *,
     entity_type: str,
-) -> MutationResult:
+) -> GraphWriteResult:
     try:
         return operation()
     except GraphEntityNotFoundError as exc:
@@ -561,6 +531,29 @@ def _mutation_hash(
         "path": path,
         "request": request.model_dump(mode="json"),
     }
+    return _canonical_hash(payload)
+
+
+def _create_hash(
+    *,
+    course_id: str,
+    entity_type: str,
+    kind: str,
+    path: str,
+    request: ConceptCreate | ConceptRelationCreate,
+) -> str:
+    payload = {
+        "protocol": "concept-graph-create-v1",
+        "course_id": course_id,
+        "entity_type": entity_type,
+        "kind": kind,
+        "path": path,
+        "request": request.model_dump(mode="json"),
+    }
+    return _canonical_hash(payload)
+
+
+def _canonical_hash(payload: dict[str, object]) -> str:
     encoded = json.dumps(
         payload,
         sort_keys=True,

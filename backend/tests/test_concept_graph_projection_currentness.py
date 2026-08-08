@@ -11,6 +11,7 @@ from app.concept_graph import (
     Concept,
     ConceptRelation,
     EvidenceReferenceCreate,
+    GraphOperationRequest,
     RelationEvidenceReferenceCreate,
 )
 from app.concept_graph_store import (
@@ -73,6 +74,17 @@ class _OriginProjection:
     purge: Callable[[], None]
 
 
+def _operation_args() -> dict[str, object]:
+    return {
+        "operation": GraphOperationRequest(
+            operation_id=uuid4().hex,
+            actor="currentness-test",
+            reason="Create a grounded test aggregate.",
+        ),
+        "request_hash": uuid4().hex + uuid4().hex,
+    }
+
+
 def _candidate(course_id: str, name: str) -> Concept:
     now = utc_now()
     return Concept(
@@ -96,6 +108,7 @@ def _ground_concept(
         _candidate(course_id, name),
         [EvidenceReferenceCreate(chunk_id=chunk.id, quote=quote)],
         [uuid4().hex],
+        **_operation_args(),
     )
 
 
@@ -380,6 +393,7 @@ def test_locator_drift_then_revert_never_revives_old_graph_evidence() -> None:
                 ),
             ],
             [uuid4().hex, uuid4().hex],
+            **_operation_args(),
         )
 
 
@@ -418,6 +432,7 @@ def test_relation_snapshots_generation_and_course_scope_fences_currentness() -> 
             )
         ],
         [uuid4().hex],
+        **_operation_args(),
     )
     assert relation.evidence[0].projection_generation_id
     assert relation.evidence[0].projection_is_current is True

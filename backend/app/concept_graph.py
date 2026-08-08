@@ -36,8 +36,38 @@ GraphReviewDecision = Literal["accept", "reject"]
 SYMMETRIC_RELATION_TYPES = {"related", "contrast_with"}
 
 
+class GraphOperationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: str = Field(min_length=1, max_length=100)
+    actor: str = Field(min_length=1, max_length=200)
+    reason: str = Field(min_length=1, max_length=2_000)
+
+    @field_validator("operation_id", mode="before")
+    @classmethod
+    def clean_operation_id(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Operation id is required.")
+        return cleaned
+
+    @field_validator("actor", "reason", mode="before")
+    @classmethod
+    def clean_operation_text(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        cleaned = " ".join(value.strip().split())
+        if not cleaned:
+            raise ValueError("Operation metadata is required.")
+        return cleaned
+
+
 class EvidenceReferenceCreate(BaseModel):
     """A client reference that the server must resolve and snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
 
     chunk_id: str = Field(min_length=1, max_length=200)
     quote: str = Field(min_length=1, max_length=16_000)
@@ -62,7 +92,7 @@ class RelationEvidenceReferenceCreate(EvidenceReferenceCreate):
     support_role: RelationEvidenceSupportRole
 
 
-class ConceptCreate(BaseModel):
+class ConceptCreate(GraphOperationRequest):
     preferred_name: str = Field(min_length=1, max_length=200)
     short_definition: str = Field(min_length=1, max_length=4_000)
     evidence: list[EvidenceReferenceCreate] = Field(
@@ -94,7 +124,7 @@ class ConceptCreate(BaseModel):
         return self
 
 
-class ConceptRelationCreate(BaseModel):
+class ConceptRelationCreate(GraphOperationRequest):
     source_concept_id: str = Field(min_length=1, max_length=200)
     target_concept_id: str = Field(min_length=1, max_length=200)
     relation_type: ConceptRelationType
@@ -186,29 +216,8 @@ class RelationEndpointRevisionBinding(BaseModel):
     created_at: datetime = Field(default_factory=utc_now)
 
 
-class GraphMutationRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    operation_id: str = Field(min_length=1, max_length=100)
+class GraphMutationRequest(GraphOperationRequest):
     expected_revision: int = Field(ge=1)
-    actor: str = Field(min_length=1, max_length=200)
-    reason: str = Field(min_length=1, max_length=2_000)
-
-    @field_validator("operation_id")
-    @classmethod
-    def clean_operation_id(cls, value: str) -> str:
-        cleaned = value.strip()
-        if not cleaned:
-            raise ValueError("Operation id is required.")
-        return cleaned
-
-    @field_validator("actor", "reason")
-    @classmethod
-    def clean_mutation_text(cls, value: str) -> str:
-        cleaned = " ".join(value.strip().split())
-        if not cleaned:
-            raise ValueError("Mutation metadata is required.")
-        return cleaned
 
 
 class ConceptRevisionEdit(GraphMutationRequest):

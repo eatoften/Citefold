@@ -3195,3 +3195,162 @@ G1.2d makes initial Concept and Relation creation operation-ID based,
 transactional, and replayable without weakening the existing request-hash
 contract. Only after that reliability debt closes does G1.3 freeze immutable,
 content-hashed graph versions for deterministic path consumers.
+
+## G1.2d - Idempotent initial Concept Graph creation
+
+**Status:** Complete as a bounded G1.2 slice; G1.3 immutable publication remains open
+
+**Date:** 2026-08-09
+
+**Branch:** `codex/concept-graph-foundation`
+
+### User outcome
+
+Initial Concept and Relation candidate creation now survives response loss,
+client retries, and concurrent duplicate requests without creating accidental
+duplicate aggregates. Its receipt is durable SQLite state rather than process
+memory. A successful retry returns the same
+stable entity and immutable revision even if its Source evidence or Relation
+endpoints have since changed.
+
+This closes the last client-visible graph-write idempotency gap. It does not
+make a draft Concept authoritative, semantically deduplicate independently
+submitted Concepts, or publish a graph version.
+
+### Delivered scope
+
+- Concept and Relation create requests now require a normalized
+  `operation_id`, client-supplied `actor` label, and `reason`; they reject
+  unknown top-level and nested evidence fields and do not accept an
+  `expected_revision` for an entity that does not exist yet;
+- `concept-graph-create-v1` hashes the exact route, course, entity type, create
+  kind, and complete normalized request using canonical compact UTF-8 JSON and
+  SHA-256;
+- generated entity/evidence/alias IDs, timestamps, and dynamic currentness stay
+  outside the request hash;
+- both create stores enter `BEGIN IMMEDIATE` and look up the shared
+  course-scoped operation ledger before Source, quote, endpoint, support, or
+  relation-uniqueness validation;
+- an identical receipt reloads its stored entity ID and revision; changed
+  reuse of the same operation ID returns `409` without writing;
+- identity, revision, aliases/evidence or endpoint binding, and operation
+  receipt commit or roll back as one aggregate transaction;
+- concurrent identical operations converge on one aggregate and receipt;
+  concurrent different payloads using one operation ID produce one success
+  and one conflict;
+- different operation IDs may create two duplicate Concept candidates for
+  later review/merge, while the canonical Relation identity constraint permits
+  only one matching Relation and leaves no losing receipt;
+- create, edit, review, stale, merge, and retire share one operation-ID
+  namespace per course, while the same opaque ID may be reused in another
+  course;
+- create and revision workflows now share one `_run_graph_write` error boundary
+  for `404`, `409`, `422`, retryable `503`, and safe `500` behavior;
+- fixed Concept and Relation hash vectors protect the protocol from accidental
+  serializer or model-default drift.
+
+### Decisions and technology
+
+Idempotency is keyed by client intent, not by generated ID or fuzzy semantic
+equality. A server-generated request ID cannot recover from a response that
+was committed but lost before the client received it. Requiring the caller to
+reuse one opaque operation ID gives the database a stable name for the intent
+and lets SQLite serialize competing writers before they inspect mutable
+evidence.
+
+The create receipt stores only entity type, stable entity ID, and immutable
+revision. Replay reloads that historical revision and recomputes currentness
+against today's Source and endpoint heads. Immediate replay therefore returns
+the same response, while a later replay can truthfully report
+`evidence_current=false` or `is_current_revision=false` without mutating the
+original snapshot. Persisting a full cached response would make those fields
+lie.
+
+Symmetric Relation storage canonicalizes endpoints, but the idempotency hash
+captures the normalized client request before domain canonicalization. Reusing
+one operation ID with reversed endpoints and support roles is treated as a
+changed request and returns `409`; using a new operation ID reaches the stable
+Relation uniqueness rule. This preserves an exact audit record instead of
+guessing that two differently expressed requests carried identical intent.
+
+The shared v12 operation ledger was deliberately widened in G1.2c, so G1.2d
+needs no schema migration or second ledger. `(course_id, operation_id)` is the
+single namespace across create and revision operations, and its existing JSON
+trigger verifies that every receipt refers to a real stored revision.
+
+### Problems encountered and resolutions
+
+- The initial model made only the top-level request strict. Pydantic model
+  configuration does not recursively apply to nested evidence DTOs, so an
+  unknown client locator could be silently discarded before hashing. Nested
+  evidence requests now independently forbid extras, and a direct API test
+  locks the boundary.
+- Create and mutation hashes initially duplicated canonical JSON encoding.
+  Both protocol constructors now use one `_canonical_hash` implementation,
+  while retaining separate version labels and payload fields.
+- Create and mutation replay initially duplicated receipt query and JSON
+  consistency logic. A shared reader now validates kind, entity type, request
+  hash, and result object; mutation replay additionally checks its
+  client-addressed entity ID, while create replay learns the generated ID from
+  the receipt.
+- Concept and Relation create services initially duplicated BUSY and safe-500
+  exception handling. All graph writes now use one wrapper so those paths
+  cannot drift independently.
+- A corrupted-receipt test first attempted invalid JSON, which SQLite's table
+  constraint correctly rejected before the read-path test. The final fault
+  uses valid but inconsistent JSON, restores the immutability trigger after
+  controlled tampering, and separately tests a receipt pointing to a missing
+  revision.
+- Existing review tests counted every ledger row and began seeing the new
+  create receipt. They now assert the intended review operation kind, making
+  the causal expectation explicit rather than weakening the count.
+
+### Verification
+
+- independent read-only audit: no P0 or P1 code/security findings after the
+  nested strictness issue was closed;
+- focused create/review/identity/currentness/store regression: **76 passed**;
+- same-operation and distinct-operation concurrency, Source/endpoint drift
+  replay, cross-course namespace, create-versus-mutation reuse, Concept and
+  Relation receipt-failure rollback/retry, BUSY retry, and corrupt/dangling
+  receipt behavior: covered;
+- full backend final-tree result: **800 passed, 3 skipped**; one existing
+  Starlette `TestClient` / `httpx` deprecation warning;
+- full frontend: **27 files, 214 tests passed**, plus ESLint and production
+  TypeScript/Vite build;
+- Python compilation, `uv lock --check`, and `git diff --check`: passed.
+
+The three backend skips remain environment-dependent path/symlink cases. The
+frontend build retains the documented 588.23 kB main-chunk warning; this
+backend reliability slice did not increase that bundle.
+
+### Known debt and claim boundary
+
+The required operation metadata is an intentional breaking change to an
+internal experimental API. No frontend call site uses these routes today;
+untracked external clients must add the three fields. The supplied `actor` is
+an audit label, not an authenticated principal, so it must not be described as
+proof of user identity.
+
+Workspace backup/restore already copies the complete SQLite ledger. A focused
+packaged-workspace restore followed by same-operation replay remains a full-G1
+release integration test. G1.2d itself proves durable database replay but does
+not claim an immutable published graph, automatic Understanding, graph paths,
+or a graph UI.
+
+### Git checkpoint
+
+Independent commit subject:
+
+```text
+feat(graph): make candidate creation idempotent
+```
+
+The immutable SHA is reported after the commit is created and pushed.
+
+### Next gate
+
+G1.3 moves publication into a separate bounded context. It will revalidate the
+complete authoritative draft dependency set, compare-and-swap an expected
+draft manifest and active version, and seal a content-hashed self-contained
+snapshot without expanding the already large draft mutation store.

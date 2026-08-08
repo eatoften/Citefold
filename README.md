@@ -117,10 +117,12 @@ historical reads, atomic incident-relation invalidation, and a transactional
 prerequisite cycle guard. G1.2c adds append-only Concept merge/retirement,
 dual-head compare-and-swap, replayable normalization receipts, redirect
 chain/cycle prevention, and atomic invalidation of incident relations.
-Idempotent initial candidate creation, immutable published graph versions,
-automatic Understanding, deterministic paths, and the evidence-first graph UI
-remain roadmap work; the current Explore graph is still a sparse CardRelation
-discovery baseline. See the
+G1.2d makes initial Concept/relation creation operation-ID based, atomically
+receipted, concurrency-safe, and replayable even after evidence or endpoint
+drift. Immutable published graph versions, automatic Understanding,
+deterministic paths, and the evidence-first graph UI remain roadmap work; the
+current Explore graph is still a sparse CardRelation discovery baseline. See
+the
 [active roadmap](docs/roadmap.md),
 [graph decision record](docs/decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md),
 [G1 substrate contract](docs/modules/concept-graph-substrate.md),
@@ -144,7 +146,8 @@ sealed-use ledger must be frozen in G0.2 before resume-quality metrics exist.
 > G1.1 persists grounded human Concept/relation candidates on that backbone,
 > G1.2a versions their Source projections, G1.2b provides their reviewable
 > draft lifecycle, and G1.2c gives Concept identities an auditable
-> merge/retirement lifecycle. The current automatic Card
+> merge/retirement lifecycle. G1.2d adds durable initial-create receipts, but
+> G1.3 has not yet published an authoritative graph. The current automatic Card
 > pipeline still reads video
 > `TranscriptChunk` objects directly; no candidate is an accepted graph fact;
 > and Explore still renders a Card-to-Card `CardRelation` graph.

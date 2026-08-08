@@ -1,7 +1,7 @@
 # Concept Graph Draft Lifecycle
 
 - **Program:** G1.2
-- **Status:** G1.2a-G1.2c implemented and locally verified; G1.3 pending
+- **Status:** G1.2a-G1.2d implemented and locally verified; G1.3 pending
 - **Depends on:** [G1.1 candidate substrate](concept-graph-substrate.md)
 - **Projection identity:** [G1.2a Source generations](source-projection-generation.md)
 - **Architecture owner:** [ADR-0008](../decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md)
@@ -71,6 +71,42 @@ reground, review transition, or explicit stale transition appends stale
 revisions for every incident current relation in the same write transaction
 rather than waiting for a cleanup job. G1.2c applies the same primitive to
 merge and retirement.
+
+## Initial-create operation contract
+
+Concept and relation candidate creation requires strict operation metadata:
+
+```text
+operation_id
+actor
+reason
+candidate-specific payload
+```
+
+There is no `expected_revision` because the stable identity does not exist
+yet. The service hashes `concept-graph-create-v1`, the actual route template,
+course, entity type, create kind, and the complete normalized client request.
+Generated entity/evidence IDs and timestamps are deliberately outside the
+hash. For symmetric relations this hash captures the client's normalized
+endpoint and support-role request before domain endpoint canonicalization;
+reversing endpoints and roles under the same operation ID is therefore a
+different request and returns `409`.
+
+Inside one `BEGIN IMMEDIATE`, the store checks the course-scoped operation
+ledger before Source, quote, endpoint, or relation-uniqueness validation. A
+matching receipt returns the exact immutable revision created originally;
+currentness fields are freshly derived and may differ after Source or endpoint
+drift. Changed reuse returns `409`. A new operation inserts identity, revision,
+complete children, and receipt atomically. Concurrent retries converge on one
+aggregate. Distinct operations may create semantically duplicate Concept
+candidates, while the permanent relation identity constraint still rejects a
+duplicate relation and rolls back its unused receipt.
+
+This required metadata is an intentional breaking change to an internal
+experimental API. There is currently no frontend caller of these create
+routes, so no public UI workflow is being silently broken.
+`actor` is currently a client-supplied audit label, not an authenticated user
+identity; authentication and principal binding remain a release concern.
 
 ## Revision and operation contract
 
@@ -196,6 +232,7 @@ trusts a cached eligibility flag; G1.3 rechecks the complete snapshot.
 ### Implemented G1.2 HTTP surface
 
 ```text
+POST  /courses/{course_id}/concepts
 GET   /courses/{course_id}/concepts/{concept_id}/revisions/{revision}
 PATCH /courses/{course_id}/concepts/{concept_id}
 POST  /courses/{course_id}/concepts/{concept_id}/review
@@ -203,6 +240,7 @@ POST  /courses/{course_id}/concepts/{concept_id}/mark-stale
 POST  /courses/{course_id}/concepts/{concept_id}/merge
 POST  /courses/{course_id}/concepts/{concept_id}/retire
 
+POST  /courses/{course_id}/concept-relations
 GET   /courses/{course_id}/concept-relations/{relation_id}/revisions/{revision}
 PATCH /courses/{course_id}/concept-relations/{relation_id}
 POST  /courses/{course_id}/concept-relations/{relation_id}/review
@@ -226,18 +264,23 @@ not rewritten.
 3. **G1.2c normalization integrity:** merge/retirement and reuse of the proven
    incident-invalidation primitive for those identity transitions, dual-head
    CAS, replayable receipts, and redirect-dependency protection.
+4. **G1.2d reliable initial creation:** strict create metadata, canonical
+   request hashes, replay-before-validation, atomic aggregate receipts, and
+   same-operation concurrency convergence.
 
 Each slice receives an independent commit and remote CI result. G1.2 is not
 an immutable publication layer: G1.3 remains responsible for freezing an
 authoritative graph version. G1.2 does not implement G2 fixtures/evaluation,
 G3 paths, G4 UI, or LLM candidate generation.
-The G1.1 initial Concept/relation create endpoints also remain outside this
-operation ledger: they do not yet accept an idempotent client request ID or
-persist a create receipt. Closing that reliability debt requires a separate
-create hash/entity-receipt contract without `expected_revision`; this slice
-does not retrofit it implicitly. Migration v12 reserves `concept_create` and
-`relation_create` ledger kinds only so that later widening does not require
-another table rebuild; no create-receipt behavior is claimed here.
+The G1.1 Concept/relation create endpoints now use the v12-reserved
+`concept_create` and `relation_create` ledger kinds. This adds reliable initial
+creation without changing the permanent relation-identity rule or implying
+G1.3 publication.
+
+Workspace backup/restore already preserves the SQLite operation ledger as part
+of the database snapshot. A packaged-workspace restore followed by create
+replay remains a G1 release integration test rather than a claim of this
+focused slice.
 
 Migration v12 also makes revision-owned Concept/relation revisions, evidence,
 and aliases reject in-place `UPDATE`s at the database boundary. Production
@@ -249,6 +292,8 @@ remains available for explicit aggregate cleanup and course deletion.
 - two concurrent reviews with the same expected revision yield one success;
 - same operation replay returns the prior result; changed payload returns
   `409` and adds no revision;
+- initial-create replay precedes Source/endpoint validation, concurrent retries
+  converge, and malformed or dangling receipts fail safely;
 - Source update before/after acceptance never admits mismatched generation;
 - locator-only drift and drift-then-revert keep old evidence ineligible;
 - two serialized prerequisite accepts that would jointly form a cycle cannot

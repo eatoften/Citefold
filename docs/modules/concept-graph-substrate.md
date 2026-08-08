@@ -50,6 +50,9 @@ as a Concept ID or accepted Concept revision.
 The create boundary accepts:
 
 ```text
+operation_id
+actor
+reason
 preferred_name
 short_definition
 evidence[]:
@@ -78,6 +81,9 @@ client cannot supply a trusted locator or hash.
 The create boundary accepts:
 
 ```text
+operation_id
+actor
+reason
 source_concept_id
 target_concept_id
 relation_type
@@ -186,6 +192,12 @@ trusted only to Pydantic.
 
 No failed request may leave an aggregate without its required evidence or an
 evidence row without its aggregate.
+
+G1.2d makes both create boundaries idempotent through a course-scoped durable
+operation receipt. Request bodies and nested evidence objects reject unknown
+fields. A matching retry returns the original immutable revision with freshly
+computed currentness; changed reuse returns `409`. The exact normalized client
+request is hashed before symmetric relation endpoint canonicalization.
 
 ## G1.1 acceptance
 

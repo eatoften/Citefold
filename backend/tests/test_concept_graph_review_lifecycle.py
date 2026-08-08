@@ -89,6 +89,9 @@ def _create_concept(
     response = client.post(
         f"/courses/{course_id}/concepts",
         json={
+            "operation_id": uuid4().hex,
+            "actor": "reviewer@example.test",
+            "reason": "Create a grounded Concept candidate.",
             "preferred_name": name,
             "short_definition": f"Definition for {name}.",
             "aliases": aliases or [],
@@ -130,6 +133,9 @@ def _create_relation(
     response = client.post(
         f"/courses/{course_id}/concept-relations",
         json={
+            "operation_id": uuid4().hex,
+            "actor": "reviewer@example.test",
+            "reason": "Create a grounded relation candidate.",
             "source_concept_id": source_id,
             "target_concept_id": target_id,
             "relation_type": relation_type,
@@ -174,6 +180,9 @@ def _review_relation_payload(
 def test_alias_contract_rejects_preferred_name_and_unknown_mutation_fields() -> None:
     with pytest.raises(ValueError):
         ConceptCreate(
+            operation_id=uuid4().hex,
+            actor="reviewer@example.test",
+            reason="Validate the alias contract.",
             preferred_name="Straße",
             short_definition="A name.",
             aliases=["STRASSE"],
@@ -251,7 +260,8 @@ def test_concept_review_is_append_only_idempotent_and_historical() -> None:
             (candidate["id"],),
         ).fetchone()[0] == 2
         assert conn.execute(
-            "SELECT COUNT(*) FROM concept_graph_operations"
+            "SELECT COUNT(*) FROM concept_graph_operations "
+            "WHERE kind = 'concept_review'"
         ).fetchone()[0] == 1
 
 
@@ -307,7 +317,8 @@ def test_concurrent_reviews_use_cas_and_only_one_operation_wins(
             (candidate["id"],),
         ).fetchone()[0] == 2
         assert conn.execute(
-            "SELECT COUNT(*) FROM concept_graph_operations"
+            "SELECT COUNT(*) FROM concept_graph_operations "
+            "WHERE kind = 'concept_review'"
         ).fetchone()[0] == 1
 
 
@@ -345,7 +356,8 @@ def test_same_operation_concurrent_and_later_replay_returns_one_revision() -> No
             (candidate["id"],),
         ).fetchone()[0] == 2
         assert conn.execute(
-            "SELECT COUNT(*) FROM concept_graph_operations"
+            "SELECT COUNT(*) FROM concept_graph_operations "
+            "WHERE kind = 'concept_review'"
         ).fetchone()[0] == 1
 
 
@@ -389,7 +401,8 @@ def test_held_sqlite_write_lock_maps_to_503_without_partial_write(
             (candidate["id"],),
         ).fetchone()[0] == 1
         assert conn.execute(
-            "SELECT COUNT(*) FROM concept_graph_operations"
+            "SELECT COUNT(*) FROM concept_graph_operations "
+            "WHERE kind = 'concept_review'"
         ).fetchone()[0] == 0
 
 
