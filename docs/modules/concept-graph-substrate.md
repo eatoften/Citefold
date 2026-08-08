@@ -2,7 +2,7 @@
 
 - **Program:** G1
 - **First slice:** G1.1 grounded manual candidates
-- **Status:** G1.1 implemented and locally verified; full G1 in progress
+- **Status:** G1.1 implemented and verified; full G1 completed by G1.3
 - **Architecture owner:** [ADR-0008](../decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md)
 - **Evidence rules:** [Graph annotation protocol](../graph-annotation-protocol.md)
 - **Projection identity:** [G1.2a Source generations](source-projection-generation.md)
@@ -216,5 +216,6 @@ request is hashed before symmetric relation endpoint canonicalization.
 
 Focused commands are recorded with the implementation commit. G1.2 now adds
 review/currentness transitions, aliases/merge history, dual-head draft CAS,
-incident invalidation, and prerequisite acyclicity. G1.3 still owns immutable
-graph versions and publication tests.
+incident invalidation, and prerequisite acyclicity. G1.3 now owns immutable
+graph versions and publication tests; see the
+[publication contract](concept-graph-publication.md).

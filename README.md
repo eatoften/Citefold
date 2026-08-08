@@ -119,14 +119,18 @@ dual-head compare-and-swap, replayable normalization receipts, redirect
 chain/cycle prevention, and atomic invalidation of incident relations.
 G1.2d makes initial Concept/relation creation operation-ID based, atomically
 receipted, concurrency-safe, and replayable even after evidence or endpoint
-drift. Immutable published graph versions, automatic Understanding,
-deterministic paths, and the evidence-first graph UI remain roadmap work; the
-current Explore graph is still a sparse CardRelation discovery baseline. See
-the
+drift. G1.3 now revalidates the complete reviewed draft and current Source
+authority inside one serialized transaction, then seals a content-hashed,
+self-contained GraphVersion behind active-version and draft-manifest CAS.
+Historical versions remain auditable, while `/current` fails closed when its
+Source authority drifts. Automatic Understanding, deterministic paths, and the
+evidence-first graph UI remain roadmap work; the current Explore graph is still
+a sparse CardRelation discovery baseline. See the
 [active roadmap](docs/roadmap.md),
 [graph decision record](docs/decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md),
 [G1 substrate contract](docs/modules/concept-graph-substrate.md),
 [Source projection generation contract](docs/modules/source-projection-generation.md),
+[immutable graph publication contract](docs/modules/concept-graph-publication.md),
 [learning and mastery plan](docs/project-mastery-plan.md), and
 [append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.
@@ -146,9 +150,9 @@ sealed-use ledger must be frozen in G0.2 before resume-quality metrics exist.
 > G1.1 persists grounded human Concept/relation candidates on that backbone,
 > G1.2a versions their Source projections, G1.2b provides their reviewable
 > draft lifecycle, and G1.2c gives Concept identities an auditable
-> merge/retirement lifecycle. G1.2d adds durable initial-create receipts, but
-> G1.3 has not yet published an authoritative graph. The current automatic Card
-> pipeline still reads video
+> merge/retirement lifecycle. G1.2d adds durable initial-create receipts, and
+> G1.3 publishes immutable authoritative GraphVersions with fail-closed Source
+> authority. The current automatic Card pipeline still reads video
 > `TranscriptChunk` objects directly; no candidate is an accepted graph fact;
 > and Explore still renders a Card-to-Card `CardRelation` graph.
 

@@ -1601,6 +1601,697 @@ def _add_concept_graph_identity_lifecycle(
         )
 
 
+def _add_concept_graph_publication(
+    conn: sqlite3.Connection,
+) -> None:
+    """Add the sealed, self-contained Concept Graph publication store."""
+
+    conn.execute(
+        """
+        CREATE TABLE concept_graph_versions (
+            course_id TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            parent_version_number INTEGER,
+            draft_manifest_hash TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            concept_count INTEGER NOT NULL,
+            concept_alias_count INTEGER NOT NULL,
+            relation_count INTEGER NOT NULL,
+            concept_evidence_count INTEGER NOT NULL,
+            relation_evidence_count INTEGER NOT NULL,
+            published_by TEXT NOT NULL,
+            publication_reason TEXT NOT NULL,
+            published_at TEXT NOT NULL,
+            PRIMARY KEY (course_id, version_number),
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+            FOREIGN KEY (course_id, parent_version_number)
+                REFERENCES concept_graph_versions(course_id, version_number),
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (version_number >= 1),
+            CHECK (
+                (version_number = 1 AND parent_version_number IS NULL)
+                OR
+                (version_number > 1
+                 AND parent_version_number = version_number - 1)
+            ),
+            CHECK (length(draft_manifest_hash) = 64),
+            CHECK (draft_manifest_hash NOT GLOB '*[^0-9a-f]*'),
+            CHECK (length(content_hash) = 64),
+            CHECK (content_hash NOT GLOB '*[^0-9a-f]*'),
+            CHECK (concept_count >= 1),
+            CHECK (concept_alias_count >= 0),
+            CHECK (relation_count >= 0),
+            CHECK (concept_evidence_count >= concept_count),
+            CHECK (relation_evidence_count >= relation_count),
+            CHECK (length(published_by) BETWEEN 1 AND 200),
+            CHECK (trim(published_by) != ''),
+            CHECK (length(publication_reason) BETWEEN 1 AND 2000),
+            CHECK (trim(publication_reason) != ''),
+            CHECK (trim(published_at) != '')
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_graph_version_heads (
+            course_id TEXT PRIMARY KEY,
+            active_version_number INTEGER NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+            FOREIGN KEY (course_id, active_version_number)
+                REFERENCES concept_graph_versions(course_id, version_number),
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (active_version_number >= 1),
+            CHECK (trim(updated_at) != '')
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_graph_version_concepts (
+            course_id TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            ordinal INTEGER NOT NULL,
+            concept_id TEXT NOT NULL,
+            concept_revision INTEGER NOT NULL,
+            preferred_name TEXT NOT NULL,
+            short_definition TEXT NOT NULL,
+            identity_status TEXT NOT NULL,
+            review_status TEXT NOT NULL,
+            validity_status TEXT NOT NULL,
+            proposal_origin TEXT NOT NULL,
+            provider TEXT,
+            model TEXT,
+            prompt_protocol TEXT,
+            output_version TEXT,
+            review_operation_id TEXT NOT NULL,
+            review_operation_request_hash TEXT NOT NULL,
+            review_actor TEXT NOT NULL,
+            review_reason TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            review_revision INTEGER NOT NULL,
+            revision_created_at TEXT NOT NULL,
+            revision_updated_at TEXT NOT NULL,
+            aggregate_hash TEXT NOT NULL,
+            PRIMARY KEY (course_id, version_number, concept_id),
+            UNIQUE (course_id, version_number, ordinal),
+            UNIQUE (
+                course_id, version_number, concept_id, concept_revision
+            ),
+            FOREIGN KEY (course_id, version_number)
+                REFERENCES concept_graph_versions(course_id, version_number)
+                ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (version_number >= 1),
+            CHECK (ordinal >= 0),
+            CHECK (length(concept_id) BETWEEN 1 AND 200),
+            CHECK (concept_revision >= 1),
+            CHECK (trim(preferred_name) != ''),
+            CHECK (trim(short_definition) != ''),
+            CHECK (identity_status = 'active'),
+            CHECK (review_status = 'accepted'),
+            CHECK (validity_status = 'current'),
+            CHECK (proposal_origin IN ('human', 'model', 'import')),
+            CHECK (
+                proposal_origin != 'model'
+                OR (
+                    provider IS NOT NULL AND trim(provider) != ''
+                    AND model IS NOT NULL AND trim(model) != ''
+                    AND prompt_protocol IS NOT NULL
+                    AND trim(prompt_protocol) != ''
+                    AND output_version IS NOT NULL
+                    AND trim(output_version) != ''
+                )
+            ),
+            CHECK (length(review_operation_id) BETWEEN 1 AND 100),
+            CHECK (length(review_operation_request_hash) = 64),
+            CHECK (
+                review_operation_request_hash NOT GLOB '*[^0-9a-f]*'
+            ),
+            CHECK (length(review_actor) BETWEEN 1 AND 200),
+            CHECK (trim(review_actor) != ''),
+            CHECK (length(review_reason) BETWEEN 1 AND 2000),
+            CHECK (trim(review_reason) != ''),
+            CHECK (trim(reviewed_at) != ''),
+            CHECK (review_revision = concept_revision - 1),
+            CHECK (trim(revision_created_at) != ''),
+            CHECK (trim(revision_updated_at) != ''),
+            CHECK (length(aggregate_hash) = 64),
+            CHECK (aggregate_hash NOT GLOB '*[^0-9a-f]*')
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_graph_version_concept_aliases (
+            course_id TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            concept_id TEXT NOT NULL,
+            concept_revision INTEGER NOT NULL,
+            ordinal INTEGER NOT NULL,
+            alias_id TEXT NOT NULL,
+            display_text TEXT NOT NULL,
+            normalized_text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (
+                course_id, version_number, concept_id, alias_id
+            ),
+            UNIQUE (
+                course_id, version_number, concept_id,
+                concept_revision, ordinal
+            ),
+            FOREIGN KEY (
+                course_id, version_number, concept_id, concept_revision
+            ) REFERENCES concept_graph_version_concepts(
+                course_id, version_number, concept_id, concept_revision
+            ) ON DELETE CASCADE,
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (version_number >= 1),
+            CHECK (length(concept_id) BETWEEN 1 AND 200),
+            CHECK (concept_revision >= 1),
+            CHECK (ordinal BETWEEN 0 AND 31),
+            CHECK (length(alias_id) BETWEEN 1 AND 200),
+            CHECK (length(display_text) BETWEEN 1 AND 200),
+            CHECK (trim(display_text) != ''),
+            CHECK (length(normalized_text) BETWEEN 1 AND 200),
+            CHECK (trim(normalized_text) != ''),
+            CHECK (trim(created_at) != '')
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_graph_version_concept_evidence (
+            course_id TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            concept_id TEXT NOT NULL,
+            concept_revision INTEGER NOT NULL,
+            ordinal INTEGER NOT NULL,
+            evidence_id TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            chunk_text_hash TEXT NOT NULL,
+            projection_generation_id TEXT NOT NULL,
+            source_title TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            quote TEXT NOT NULL,
+            locator_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (
+                course_id, version_number, concept_id, evidence_id
+            ),
+            UNIQUE (
+                course_id, version_number, concept_id,
+                concept_revision, ordinal
+            ),
+            FOREIGN KEY (
+                course_id, version_number, concept_id, concept_revision
+            ) REFERENCES concept_graph_version_concepts(
+                course_id, version_number, concept_id, concept_revision
+            ) ON DELETE CASCADE,
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (version_number >= 1),
+            CHECK (length(concept_id) BETWEEN 1 AND 200),
+            CHECK (concept_revision >= 1),
+            CHECK (ordinal BETWEEN 0 AND 31),
+            CHECK (length(evidence_id) BETWEEN 1 AND 200),
+            CHECK (length(source_id) BETWEEN 1 AND 200),
+            CHECK (length(chunk_id) BETWEEN 1 AND 200),
+            CHECK (length(chunk_text_hash) = 64),
+            CHECK (chunk_text_hash NOT GLOB '*[^0-9a-f]*'),
+            CHECK (length(projection_generation_id) BETWEEN 1 AND 200),
+            CHECK (trim(source_title) != ''),
+            CHECK (source_type IN (
+                'video', 'audio', 'pptx', 'pdf', 'docx', 'text'
+            )),
+            CHECK (length(quote) BETWEEN 1 AND 16000),
+            CHECK (trim(quote) != ''),
+            CHECK (json_valid(locator_json)),
+            CHECK (json_type(locator_json) = 'object'),
+            CHECK (trim(created_at) != '')
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_graph_version_relations (
+            course_id TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            ordinal INTEGER NOT NULL,
+            relation_id TEXT NOT NULL,
+            relation_revision INTEGER NOT NULL,
+            source_concept_id TEXT NOT NULL,
+            source_concept_revision INTEGER NOT NULL,
+            target_concept_id TEXT NOT NULL,
+            target_concept_revision INTEGER NOT NULL,
+            relation_type TEXT NOT NULL,
+            support_basis TEXT NOT NULL,
+            rationale TEXT NOT NULL,
+            review_status TEXT NOT NULL,
+            validity_status TEXT NOT NULL,
+            proposal_origin TEXT NOT NULL,
+            provider TEXT,
+            model TEXT,
+            prompt_protocol TEXT,
+            output_version TEXT,
+            review_operation_id TEXT NOT NULL,
+            review_operation_request_hash TEXT NOT NULL,
+            review_actor TEXT NOT NULL,
+            review_reason TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            review_revision INTEGER NOT NULL,
+            binding_created_at TEXT NOT NULL,
+            revision_created_at TEXT NOT NULL,
+            revision_updated_at TEXT NOT NULL,
+            aggregate_hash TEXT NOT NULL,
+            PRIMARY KEY (course_id, version_number, relation_id),
+            UNIQUE (course_id, version_number, ordinal),
+            UNIQUE (
+                course_id, version_number, relation_id, relation_revision
+            ),
+            FOREIGN KEY (course_id, version_number)
+                REFERENCES concept_graph_versions(course_id, version_number)
+                ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,
+            FOREIGN KEY (
+                course_id, version_number,
+                source_concept_id, source_concept_revision
+            ) REFERENCES concept_graph_version_concepts(
+                course_id, version_number, concept_id, concept_revision
+            ),
+            FOREIGN KEY (
+                course_id, version_number,
+                target_concept_id, target_concept_revision
+            ) REFERENCES concept_graph_version_concepts(
+                course_id, version_number, concept_id, concept_revision
+            ),
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (version_number >= 1),
+            CHECK (ordinal >= 0),
+            CHECK (length(relation_id) BETWEEN 1 AND 200),
+            CHECK (relation_revision >= 1),
+            CHECK (length(source_concept_id) BETWEEN 1 AND 200),
+            CHECK (source_concept_revision >= 1),
+            CHECK (length(target_concept_id) BETWEEN 1 AND 200),
+            CHECK (target_concept_revision >= 1),
+            CHECK (source_concept_id != target_concept_id),
+            CHECK (relation_type IN (
+                'prerequisite', 'part_of', 'example_of',
+                'related', 'contrast_with'
+            )),
+            CHECK (
+                relation_type NOT IN ('related', 'contrast_with')
+                OR source_concept_id < target_concept_id
+            ),
+            CHECK (support_basis IN (
+                'source_asserted', 'pedagogical_inference'
+            )),
+            CHECK (trim(rationale) != ''),
+            CHECK (review_status = 'accepted'),
+            CHECK (validity_status = 'current'),
+            CHECK (proposal_origin IN ('human', 'model', 'import')),
+            CHECK (
+                proposal_origin != 'model'
+                OR (
+                    provider IS NOT NULL AND trim(provider) != ''
+                    AND model IS NOT NULL AND trim(model) != ''
+                    AND prompt_protocol IS NOT NULL
+                    AND trim(prompt_protocol) != ''
+                    AND output_version IS NOT NULL
+                    AND trim(output_version) != ''
+                )
+            ),
+            CHECK (length(review_operation_id) BETWEEN 1 AND 100),
+            CHECK (length(review_operation_request_hash) = 64),
+            CHECK (
+                review_operation_request_hash NOT GLOB '*[^0-9a-f]*'
+            ),
+            CHECK (length(review_actor) BETWEEN 1 AND 200),
+            CHECK (trim(review_actor) != ''),
+            CHECK (length(review_reason) BETWEEN 1 AND 2000),
+            CHECK (trim(review_reason) != ''),
+            CHECK (trim(reviewed_at) != ''),
+            CHECK (review_revision = relation_revision - 1),
+            CHECK (trim(binding_created_at) != ''),
+            CHECK (trim(revision_created_at) != ''),
+            CHECK (trim(revision_updated_at) != ''),
+            CHECK (length(aggregate_hash) = 64),
+            CHECK (aggregate_hash NOT GLOB '*[^0-9a-f]*')
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_graph_version_relation_evidence (
+            course_id TEXT NOT NULL,
+            version_number INTEGER NOT NULL,
+            relation_id TEXT NOT NULL,
+            relation_revision INTEGER NOT NULL,
+            ordinal INTEGER NOT NULL,
+            evidence_id TEXT NOT NULL,
+            support_role TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            chunk_text_hash TEXT NOT NULL,
+            projection_generation_id TEXT NOT NULL,
+            source_title TEXT NOT NULL,
+            source_type TEXT NOT NULL,
+            quote TEXT NOT NULL,
+            locator_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (
+                course_id, version_number, relation_id, evidence_id
+            ),
+            UNIQUE (
+                course_id, version_number, relation_id,
+                relation_revision, ordinal
+            ),
+            FOREIGN KEY (
+                course_id, version_number, relation_id, relation_revision
+            ) REFERENCES concept_graph_version_relations(
+                course_id, version_number, relation_id, relation_revision
+            ) ON DELETE CASCADE,
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (version_number >= 1),
+            CHECK (length(relation_id) BETWEEN 1 AND 200),
+            CHECK (relation_revision >= 1),
+            CHECK (ordinal BETWEEN 0 AND 31),
+            CHECK (length(evidence_id) BETWEEN 1 AND 200),
+            CHECK (support_role IN (
+                'relation_assertion', 'source_endpoint', 'target_endpoint'
+            )),
+            CHECK (length(source_id) BETWEEN 1 AND 200),
+            CHECK (length(chunk_id) BETWEEN 1 AND 200),
+            CHECK (length(chunk_text_hash) = 64),
+            CHECK (chunk_text_hash NOT GLOB '*[^0-9a-f]*'),
+            CHECK (length(projection_generation_id) BETWEEN 1 AND 200),
+            CHECK (trim(source_title) != ''),
+            CHECK (source_type IN (
+                'video', 'audio', 'pptx', 'pdf', 'docx', 'text'
+            )),
+            CHECK (length(quote) BETWEEN 1 AND 16000),
+            CHECK (trim(quote) != ''),
+            CHECK (json_valid(locator_json)),
+            CHECK (json_type(locator_json) = 'object'),
+            CHECK (trim(created_at) != '')
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE concept_graph_publication_operations (
+            course_id TEXT NOT NULL,
+            operation_id TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            expected_active_version_number INTEGER,
+            expected_draft_manifest_hash TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            result_version_number INTEGER NOT NULL,
+            result_content_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (course_id, operation_id),
+            UNIQUE (course_id, result_version_number),
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE,
+            FOREIGN KEY (course_id, result_version_number)
+                REFERENCES concept_graph_versions(course_id, version_number)
+                ON DELETE CASCADE,
+            CHECK (length(course_id) BETWEEN 1 AND 200),
+            CHECK (length(operation_id) BETWEEN 1 AND 100),
+            CHECK (length(request_hash) = 64),
+            CHECK (request_hash NOT GLOB '*[^0-9a-f]*'),
+            CHECK (
+                expected_active_version_number IS NULL
+                OR expected_active_version_number >= 1
+            ),
+            CHECK (length(expected_draft_manifest_hash) = 64),
+            CHECK (expected_draft_manifest_hash NOT GLOB '*[^0-9a-f]*'),
+            CHECK (length(actor) BETWEEN 1 AND 200),
+            CHECK (trim(actor) != ''),
+            CHECK (length(reason) BETWEEN 1 AND 2000),
+            CHECK (trim(reason) != ''),
+            CHECK (result_version_number >= 1),
+            CHECK (length(result_content_hash) = 64),
+            CHECK (result_content_hash NOT GLOB '*[^0-9a-f]*'),
+            CHECK (trim(created_at) != ''),
+            CHECK (
+                (result_version_number = 1
+                 AND expected_active_version_number IS NULL)
+                OR
+                (result_version_number > 1
+                 AND expected_active_version_number = result_version_number - 1)
+            )
+        )
+        """
+    )
+
+    conn.execute(
+        """
+        CREATE INDEX idx_concept_graph_versions_content
+        ON concept_graph_versions (course_id, content_hash, version_number)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_graph_version_concept_evidence_source
+        ON concept_graph_version_concept_evidence (
+            course_id, version_number, source_id, chunk_id
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_graph_version_relations_source
+        ON concept_graph_version_relations (
+            course_id, version_number,
+            source_concept_id, relation_type, relation_id
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_graph_version_relations_target
+        ON concept_graph_version_relations (
+            course_id, version_number,
+            target_concept_id, relation_type, relation_id
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_graph_version_relation_evidence_source
+        ON concept_graph_version_relation_evidence (
+            course_id, version_number, source_id, chunk_id
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX idx_graph_publication_operations_result
+        ON concept_graph_publication_operations (
+            course_id, result_version_number, operation_id
+        )
+        """
+    )
+
+    snapshot_tables = (
+        "concept_graph_version_concepts",
+        "concept_graph_version_concept_aliases",
+        "concept_graph_version_concept_evidence",
+        "concept_graph_version_relations",
+        "concept_graph_version_relation_evidence",
+    )
+    for table in snapshot_tables:
+        conn.execute(
+            f"""
+            CREATE TRIGGER {table}_late_insert
+            BEFORE INSERT ON {table}
+            WHEN EXISTS (
+                SELECT 1 FROM concept_graph_versions
+                WHERE course_id = NEW.course_id
+                  AND version_number = NEW.version_number
+            )
+            BEGIN
+                SELECT RAISE(ABORT, 'published graph version is sealed');
+            END
+            """
+        )
+        conn.execute(
+            f"""
+            CREATE TRIGGER {table}_immutable_update
+            BEFORE UPDATE ON {table}
+            BEGIN
+                SELECT RAISE(ABORT, 'published graph snapshot is immutable');
+            END
+            """
+        )
+
+    conn.execute(
+        """
+        CREATE TRIGGER concept_graph_version_seal_insert
+        BEFORE INSERT ON concept_graph_versions
+        WHEN
+            (NEW.version_number = 1 AND EXISTS (
+                SELECT 1 FROM concept_graph_version_heads AS heads
+                WHERE heads.course_id = NEW.course_id
+            ))
+            OR (NEW.version_number > 1 AND NOT EXISTS (
+                SELECT 1 FROM concept_graph_versions AS parent
+                INNER JOIN concept_graph_version_heads AS heads
+                    ON heads.course_id = parent.course_id
+                   AND heads.active_version_number = parent.version_number
+                WHERE parent.course_id = NEW.course_id
+                  AND parent.version_number = NEW.parent_version_number
+            ))
+            OR NEW.concept_count != (
+                SELECT COUNT(*) FROM concept_graph_version_concepts
+                WHERE course_id = NEW.course_id
+                  AND version_number = NEW.version_number
+            )
+            OR NEW.concept_alias_count != (
+                SELECT COUNT(*)
+                FROM concept_graph_version_concept_aliases
+                WHERE course_id = NEW.course_id
+                  AND version_number = NEW.version_number
+            )
+            OR NEW.relation_count != (
+                SELECT COUNT(*) FROM concept_graph_version_relations
+                WHERE course_id = NEW.course_id
+                  AND version_number = NEW.version_number
+            )
+            OR NEW.concept_evidence_count != (
+                SELECT COUNT(*)
+                FROM concept_graph_version_concept_evidence
+                WHERE course_id = NEW.course_id
+                  AND version_number = NEW.version_number
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM concept_graph_version_concepts AS concepts
+                WHERE concepts.course_id = NEW.course_id
+                  AND concepts.version_number = NEW.version_number
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM concept_graph_version_concept_evidence AS evidence
+                      WHERE evidence.course_id = concepts.course_id
+                        AND evidence.version_number = concepts.version_number
+                        AND evidence.concept_id = concepts.concept_id
+                        AND evidence.concept_revision =
+                            concepts.concept_revision
+                  )
+            )
+            OR NEW.relation_evidence_count != (
+                SELECT COUNT(*)
+                FROM concept_graph_version_relation_evidence
+                WHERE course_id = NEW.course_id
+                  AND version_number = NEW.version_number
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM concept_graph_version_relations AS relations
+                WHERE relations.course_id = NEW.course_id
+                  AND relations.version_number = NEW.version_number
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM concept_graph_version_relation_evidence AS evidence
+                      WHERE evidence.course_id = relations.course_id
+                        AND evidence.version_number = relations.version_number
+                        AND evidence.relation_id = relations.relation_id
+                        AND evidence.relation_revision =
+                            relations.relation_revision
+                  )
+            )
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid published graph seal');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER concept_graph_versions_immutable_update
+        BEFORE UPDATE ON concept_graph_versions
+        BEGIN
+            SELECT RAISE(ABORT, 'published graph version is immutable');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER concept_graph_version_head_insert
+        BEFORE INSERT ON concept_graph_version_heads
+        WHEN NEW.active_version_number != 1
+        BEGIN
+            SELECT RAISE(ABORT, 'first published graph version must be one');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER concept_graph_version_head_update
+        BEFORE UPDATE ON concept_graph_version_heads
+        WHEN NEW.course_id IS NOT OLD.course_id
+          OR NEW.active_version_number != OLD.active_version_number + 1
+        BEGIN
+            SELECT RAISE(ABORT, 'published graph head must advance by one');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER concept_graph_publication_operation_insert
+        BEFORE INSERT ON concept_graph_publication_operations
+        WHEN NOT EXISTS (
+            SELECT 1
+            FROM concept_graph_versions AS versions
+            INNER JOIN concept_graph_version_heads AS heads
+                ON heads.course_id = versions.course_id
+               AND heads.active_version_number = versions.version_number
+            WHERE versions.course_id = NEW.course_id
+              AND versions.version_number = NEW.result_version_number
+              AND versions.content_hash = NEW.result_content_hash
+              AND versions.draft_manifest_hash =
+                  NEW.expected_draft_manifest_hash
+              AND versions.published_by = NEW.actor
+              AND versions.publication_reason = NEW.reason
+              AND versions.published_at = NEW.created_at
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'invalid graph publication receipt');
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER concept_graph_publication_operations_immutable_update
+        BEFORE UPDATE ON concept_graph_publication_operations
+        BEGIN
+            SELECT RAISE(ABORT, 'graph publication receipt is immutable');
+        END
+        """
+    )
+    publication_tables = (
+        "concept_graph_versions",
+        "concept_graph_version_heads",
+        *snapshot_tables,
+        "concept_graph_publication_operations",
+    )
+    for table in publication_tables:
+        conn.execute(
+            f"""
+            CREATE TRIGGER {table}_guard_delete
+            BEFORE DELETE ON {table}
+            WHEN EXISTS (
+                SELECT 1 FROM courses WHERE id = OLD.course_id
+            )
+            BEGIN
+                SELECT RAISE(
+                    ABORT,
+                    'published graph data requires permanent course purge'
+                );
+            END
+            """
+        )
+
+
 MIGRATIONS: tuple[Migration, ...] = (
     Migration(
         version=1,
@@ -1661,6 +2352,11 @@ MIGRATIONS: tuple[Migration, ...] = (
         version=12,
         name="concept_graph_identity_lifecycle",
         apply=_add_concept_graph_identity_lifecycle,
+    ),
+    Migration(
+        version=13,
+        name="concept_graph_publication",
+        apply=_add_concept_graph_publication,
     ),
 )
 

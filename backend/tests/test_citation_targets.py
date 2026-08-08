@@ -1288,7 +1288,7 @@ def test_v4_video_fingerprint_migrates_v3_database_and_backup(
 
     backup = prepare_migration_backup(db_path)
     assert backup is not None
-    assert ".pre-migration-v12-" in backup.name
+    assert ".pre-migration-v13-" in backup.name
     with sqlite3.connect(backup) as conn:
         backup_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(jobs)")
@@ -1297,7 +1297,7 @@ def test_v4_video_fingerprint_migrates_v3_database_and_backup(
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
-        assert apply_migrations(conn) == [4, 5, 6, 7, 8, 9, 10, 11, 12]
+        assert apply_migrations(conn) == [4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         columns = {
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(jobs)")

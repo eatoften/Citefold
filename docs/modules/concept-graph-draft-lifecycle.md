@@ -1,11 +1,11 @@
 # Concept Graph Draft Lifecycle
 
 - **Program:** G1.2
-- **Status:** G1.2a-G1.2d implemented and locally verified; G1.3 pending
+- **Status:** G1.2a-G1.2d implemented and verified; consumed by G1.3
 - **Depends on:** [G1.1 candidate substrate](concept-graph-substrate.md)
 - **Projection identity:** [G1.2a Source generations](source-projection-generation.md)
 - **Architecture owner:** [ADR-0008](../decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md)
-- **Next module:** immutable graph publication (G1.3)
+- **Next module:** [immutable graph publication (G1.3)](concept-graph-publication.md)
 
 ## Responsibility
 
@@ -269,8 +269,9 @@ not rewritten.
    same-operation concurrency convergence.
 
 Each slice receives an independent commit and remote CI result. G1.2 is not
-an immutable publication layer: G1.3 remains responsible for freezing an
-authoritative graph version. G1.2 does not implement G2 fixtures/evaluation,
+an immutable publication layer: G1.3 now freezes the authoritative graph
+version described in the publication contract. G1.2 does not implement G2
+fixtures/evaluation,
 G3 paths, G4 UI, or LLM candidate generation.
 The G1.1 Concept/relation create endpoints now use the v12-reserved
 `concept_create` and `relation_create` ledger kinds. This adds reliable initial

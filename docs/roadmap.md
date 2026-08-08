@@ -47,7 +47,7 @@ commit, and remote push are all complete.
 | P0.5 Reliability | Autosave, recoverable tasks, backup/restore, safe desktop lifecycle | Complete |
 | P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Complete |
 | G0 Graph contract and baseline | Relation semantics, evidence rules, evaluation scope, and non-goals are frozen | In progress |
-| G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | In progress - G1.1 candidates plus G1.2a-G1.2d projection, review, identity, and create-reliability lifecycles implemented |
+| G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | Complete - G1.1 candidates, G1.2 lifecycle/reliability, and G1.3 immutable publication implemented |
 | G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | Planned |
 | G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | Planned |
 | G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | Planned |
@@ -170,11 +170,25 @@ before current Source or endpoint validation, so a lost successful response
 can still recover the exact historical revision after later drift. The actor
 label is client supplied and is not an authenticated security principal.
 
-G1.1/G1.2a-G1.2d do **not** satisfy the full G1 gate. Immutable graph
-publication and the remaining full-G1 release checks are still required. The
-project may now claim that implemented client-visible graph mutation endpoints
-are operation-ID based and idempotent, but it must not claim that a draft head
-is a published graph.
+G1.3 closes the authority boundary. It selects only active/accepted/current
+Concept heads, validates every accepted/current Relation without silently
+pruning invalid edges, checks exact immutable review receipts and current
+Source projection generations, and rejects prerequisite cycles. A strict
+preview exposes a deterministic draft manifest; publication rebuilds it under
+`BEGIN IMMEDIATE`, compares both draft and active-version CAS values, inserts a
+complete normalized snapshot, seals its counts/content hash, advances the head
+by one, and writes an idempotent receipt in the same transaction. Historical
+snapshots are independent of mutable draft and Source rows. Dynamic Source
+drift makes `/current` return a structured conflict without rewriting history.
+See the
+[immutable publication module](modules/concept-graph-publication.md).
+
+G1 is complete as a bounded implementation stage. A behavior-preserving G1.3b
+internal split is recorded before more publication features: move draft
+validation/hash construction, sealed snapshot codecs, and shared Source
+authority into separate modules without changing hashes or copying predicates.
+This maintainability debt does not weaken the published-version contract, but
+it must be paid before G3 consumes the boundary.
 
 Deliverables:
 

@@ -117,9 +117,10 @@ R1-R9 makes it defensible as an applied-MLE/ML-systems flagship. A recruiter
 may see only a few lines and a short demo, so every resume sentence must map to
 a public artifact, test, commit, measurement, or video timestamp in the demo.
 
-Current status on 2026-08-08: the P0/P1.1 foundation is strong and merged to
-`main`, but the final flagship gate is **not yet passed**. G0 is active; G1-G4,
-critical product finish, the next public release, and maintainer mastery remain.
+Current checkpoint: the P0/P1.1 foundation is strong and G1 now has an
+immutable authority boundary, but the final flagship gate is **not yet
+passed**. G0.2 and G2-G4, critical product finish, the next public release, and
+maintainer mastery remain.
 The visible maintainability baseline also includes a 5,169-line `App.tsx`, a
 3,803-line `main.py`, a tag/manual-only Windows release workflow, an empty
 backend README, and an unchanged Vite-template frontend README. These are
@@ -631,7 +632,7 @@ Update this table only with evidence:
 | Reliability | Locally verified | M0 | Not assessed | Not assessed | draw task state machine and inject one crash case |
 | Notes | Locally verified | M0 | Not assessed | Not assessed | explain publication/versioning and add one conflict case |
 | Concept graph G0 | In progress | M0 | Not assessed | Not assessed | restate ADR-0008 and review the first contract change |
-| Concept graph G1-G4 | Planned | M0 | Not assessed | Not assessed | complete each stage artifact |
+| Concept graph G1-G4 | G1 implemented; G2-G4 planned | M0 | Not assessed | Not assessed | explain G1 publication transaction, then complete the G2 annotation artifact |
 
 ### Daily checkpoint template
 

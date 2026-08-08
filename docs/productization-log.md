@@ -3354,3 +3354,130 @@ G1.3 moves publication into a separate bounded context. It will revalidate the
 complete authoritative draft dependency set, compare-and-swap an expected
 draft manifest and active version, and seal a content-hashed self-contained
 snapshot without expanding the already large draft mutation store.
+
+## G1.3 - Immutable Concept Graph publication
+
+**Status:** Complete as the bounded G1 authority slice; G0.2/G2 evaluation
+protocol work is next
+
+### Problem and authority decision
+
+An accepted draft revision is still mutable authoring state. Paths cannot use
+it safely because a later Concept edit, merge, Source reprojection, missing
+review receipt, or concurrent publisher could change its meaning between
+validation and traversal. G1.3 therefore introduces an explicit publication
+boundary: only the active sealed `GraphVersion` is authoritative.
+
+The selected Concept set is exactly the current
+`active + accepted + validity=current` heads. Merged, retired, rejected,
+candidate, stale, and tombstoned heads are historical exclusions rather than
+publication blockers. In contrast, every current `accepted + current`
+Relation is in the validation dependency set. An invalid accepted Relation
+blocks the whole graph; it is never silently filtered to make publication
+succeed.
+
+### Implementation and system design
+
+- migration v13 adds normalized, self-contained version, head, Concept, alias,
+  Concept evidence, Relation, Relation evidence, and publication-operation
+  tables;
+- deferred child foreign keys permit children-before-seal insertion, while the
+  seal trigger verifies parent/head state, complete counts, per-owner evidence,
+  and exact Relation endpoint revisions;
+- update, late-insert, and direct-delete guards make sealed rows immutable;
+  conditional delete guards still permit the one permanent course-purge
+  cascade;
+- the preview hashes the complete authoritative draft dependency set and
+  streams blocking issue identity into a bounded digest/sample;
+- `concept-graph-content-v1` identifies one exact immutable materialization,
+  including runtime identities, evidence, endpoint bindings, model provenance,
+  and immutable review receipt provenance;
+- `concept-graph-draft-manifest-v1` additionally commits endpoint-head and
+  validation observations, while intentionally ignoring non-authoritative
+  candidate/rejected/stale rows;
+- `concept-graph-publication-request-v1` binds course, route, strict request,
+  actor label, reason, and both CAS expectations to a durable operation ID;
+- `concept-graph-concept-aggregate-v1` and
+  `concept-graph-relation-aggregate-v1` commit every published parent field and
+  its canonically ordered aliases/evidence. They remain derived values outside
+  the unchanged full `concept-graph-content-v1` payload;
+- `BEGIN IMMEDIATE` serializes replay, active-head CAS, draft rebuild, Source
+  authority checks, snapshot insertion, seal, head advance, and receipt;
+- historical metadata and child pages read only sealed data; dynamic Source
+  authority is recomputed in bulk, and the current endpoint fails with a
+  structured conflict when generation/type/hash/Locator/quote/root checks no
+  longer match;
+- every multi-query read opens an explicit SQLite read transaction, and G3 is
+  required to load authority plus adjacency in the same transaction to avoid a
+  new TOCTOU window.
+
+The API surface is isolated in publication model/store/service/router modules
+instead of adding more branches to the already large mutable graph store. The
+first correctness slice nevertheless leaves a 2.6k-line internal publication
+store. G1.3b must split draft validation/hash construction, sealed snapshot
+codec/read-write logic, and the shared Source-authority evaluator before G3,
+preserving golden hashes and moving rather than duplicating predicates.
+
+### Defects found during adversarial implementation
+
+1. A valid Chunk longer than 65,536 characters was initially publishable but
+   immediately reported stale by the historical authority evaluator. Preview
+   and published-authority bounds now use the same fail-closed policy, so the
+   version cannot be stale at the moment it is sealed.
+2. Historical version lists initially loaded every evidence row in Python and
+   rejected multiple valid large versions using a one-version limit. Authority
+   now uses one bounded-result SQL/window scan with cached live Chunk hashing;
+   it returns exact per-version stale counts and only the first 100 details.
+3. Child pagination initially rehashed the complete graph for every page, then
+   a count-only optimization could not detect same-count external corruption.
+   Metadata/current/replay retain full canonical content verification; child
+   pages verify seal/count plus the domain-separated aggregate hash of every
+   returned Concept or Relation. Parent, alias, and evidence tampering therefore
+   fails closed without loading unrelated graph rows.
+4. The first 64 MiB estimate counted Unicode characters and omitted structural
+   payload. Preflight now uses UTF-8 BLOB lengths plus conservative framing,
+   and final canonical content/manifest bytes are checked directly.
+5. Blocking issues were initially materialized without a bound. The final
+   design keeps an exact count, a bounded user-visible sample, and a streaming
+   length-prefixed SHA-256 commitment over every stable issue coordinate.
+6. Draft and historical Source-currentness queries initially risked returning
+   long live Chunk text/Locator values to Python. One 15-value SQLite predicate
+   now returns only a boolean and shares a bounded exact-evidence LRU cache; the
+   version-list path remains bounded while repeated observations reuse work.
+
+### Verification and honest claim boundary
+
+Dedicated tests cover strict request/hash behavior; first and second versions;
+replay after loss; concurrent same/different publishers; publish-versus-edit
+and publish-versus-Source-update serialization; rollback and same-operation
+recovery at every write stage; Source drift; missing review receipts; invalid
+accepted Relations; terminal-head exclusion; pagination and course isolation;
+UTF-8/live-observation bounds and cache reuse; database mutation guards;
+aggregate-only and same-count parent/child external corruption;
+soft-delete/restore; migration backup and rollback; permanent course purge;
+and inspection of a real workspace-backup archive containing the full sealed
+graph ledger.
+
+The implemented claim is now: reviewed, evidence-grounded draft graphs can be
+published as immutable, idempotent, course-scoped authoritative versions, and
+current authority fails closed after Source drift. G1.3 does **not** claim that
+Concepts are automatically generated accurately, that a human golden graph
+exists, that paths are implemented, or that graph use improves learning.
+
+### Git checkpoint
+
+Independent commit subject:
+
+```text
+feat(graph): publish immutable graph versions
+```
+
+The immutable SHA and remote CI result are recorded after commit and push.
+
+### Next gate
+
+Close G0.2 before automatic Understanding: freeze the strict, redacted golden
+fixture protocol and CS336 Lecture 3 Source slice; then generate blinded
+annotation packets and materialize a human-reviewed G2 graph through the G1
+service/publication boundary. Lecture 3 is authoring data, not a held-out model
+accuracy claim.
