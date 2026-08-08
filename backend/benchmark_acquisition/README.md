@@ -25,6 +25,9 @@ are never committed to this repository.
 - explicit output paths are normalized without resolving through links; every
   existing path component and existing asset is rejected if it is a symlink or
   Windows reparse point;
+- existing assets must be regular single-link files whose descriptor identity,
+  size, link count, modification time, and change time remain stable across the
+  complete read window;
 - no execution, no executable permission, no archive expansion, no manifest
   mutation, and no automatic acceptance of upstream changes;
 - existing mismatched files cause a failure instead of silent replacement.
@@ -33,8 +36,10 @@ The default destination is under the repository's existing ignored
 `backend/data/` root. Assets are physically separated as
 `<root>/<partition>/<filename>` and default acquisition excludes
 `sealed_transfer`. Downstream runners must select registered manifest asset
-IDs; recursively globbing the download root is forbidden because it can mix
-sealed and development inputs.
+IDs; the acquisition API rejects unknown IDs, duplicates, and IDs outside the
+caller's authorized partitions before creating the output directory.
+Recursively globbing the download root is forbidden because it can mix sealed
+and development inputs.
 
 A matching hash establishes byte identity, not PDF safety. The downstream
 parser must still treat every PDF as untrusted input and run with its own
@@ -49,6 +54,19 @@ uv run python -m benchmark_acquisition.fetch `
   --manifest benchmark_acquisition/manifests/cs336-sp25-v1.json
 ```
 
+Use repeatable `--asset-id` arguments for a least-privilege exact selection.
+Request order is preserved:
+
+```powershell
+uv run python -m benchmark_acquisition.fetch `
+  --manifest benchmark_acquisition/manifests/cs336-sp25-v1.json `
+  --asset-id lecture-03-architecture `
+  --asset-id lecture-05-gpus
+```
+
+An exact ID is not an authorization bypass. For example, naming a sealed ID
+without the sealed flag fails before any directory or network side effect.
+
 The sealed assets require an explicit flag:
 
 ```powershell
@@ -60,6 +78,34 @@ uv run python -m benchmark_acquisition.fetch `
 Acquisition does not authorize opening or tuning on a sealed result. The
 sealed partition is opened once for final evaluation after selection and
 freeze; the evaluation protocol owns that access ledger.
+
+Downstream authoring code must not accept a bare PDF path. The read-only public
+entry point derives the sole local path from the manifest and repository root,
+defaults to `authoring`, performs the complete local verification again, and
+returns a frozen receipt:
+
+```python
+from pathlib import Path
+
+from benchmark_acquisition import load_manifest, verify_registered_asset
+
+manifest = load_manifest(
+    Path("benchmark_acquisition/manifests/cs336-sp25-v1.json")
+)
+receipt = verify_registered_asset(
+    manifest,
+    "lecture-03-architecture",
+    repository_root=Path.cwd().parent,
+)
+```
+
+`verify_registered_asset` never creates a missing directory, accepts no output
+path or glob, and only recognizes the canonical ignored path
+`backend/data/public_course_benchmarks/<corpus_id>/<partition>/<filename>`.
+The receipt captures the registered identities plus the verified file identity
+and mtime/ctime snapshot. It proves one completed verification, not that the
+path can never change afterward; a privileged consumer should keep its own
+open/revalidation boundary appropriately narrow.
 
 The command is a maintainer-run local tool. Its output root must not be writable
 by an untrusted process concurrently with acquisition. Component-by-component
@@ -92,7 +138,9 @@ quality gates; it is not a closed-world Concept inventory.
 
 ## Tests
 
-Focused tests are offline and inject byte streams; they never contact GitHub:
+Focused tests are offline and inject byte streams; they never contact GitHub.
+They include exact-ID authorization, canonical-path/no-side-effect verification,
+hard-link/symlink rejection, and simulated read-window metadata drift:
 
 ```powershell
 uv run pytest tests/test_benchmark_acquisition.py -q

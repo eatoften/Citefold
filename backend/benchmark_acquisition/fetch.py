@@ -9,8 +9,8 @@ import os
 import stat
 import tempfile
 import time
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import asdict, dataclass, field
+from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -19,14 +19,18 @@ from .manifest import (
     AssetSpec,
     CorpusManifest,
     ManifestError,
+    SUPPORTED_PARTITIONS,
     load_manifest,
     validate_download_url,
 )
 
 
 DEFAULT_PARTITIONS = frozenset({"authoring", "development"})
+DEFAULT_VERIFICATION_PARTITIONS = frozenset({"authoring"})
 _READ_SIZE = 128 * 1024
 _PDF_MAGIC = b"%PDF-"
+_CANONICAL_BENCHMARK_PREFIX = ("backend", "data", "public_course_benchmarks")
+_VERIFIED_ASSET_TOKEN = object()
 
 
 class AcquisitionError(RuntimeError):
@@ -41,6 +45,89 @@ class AcquisitionResult:
     byte_size: int
     sha256: str
     status: str
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class VerifiedAssetReceipt:
+    """Proof that one exact registered local asset passed full verification.
+
+    The constructor token keeps ordinary callers from promoting a bare path or
+    self-asserted digest into verification authority.  Python module internals
+    are not a security boundary, so consumers must still obtain receipts only
+    from :func:`verify_registered_asset`.
+    """
+
+    corpus_id: str
+    asset_id: str
+    partition: str
+    path: Path
+    media_type: str
+    byte_size: int
+    sha256: str
+    git_blob_sha1: str
+    file_device: int
+    file_inode: int
+    file_mtime_ns: int
+    file_ctime_ns: int
+    _validation_token: object = field(init=False, repr=False, compare=False)
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        raise TypeError(
+            "VerifiedAssetReceipt must come from verify_registered_asset"
+        )
+
+    def __post_init__(self) -> None:
+        if self._validation_token is not _VERIFIED_ASSET_TOKEN:
+            raise ValueError(
+                "VerifiedAssetReceipt must come from verify_registered_asset"
+            )
+        if not self.corpus_id or not self.asset_id:
+            raise ValueError("Verified asset identity must not be empty")
+        if self.partition not in SUPPORTED_PARTITIONS:
+            raise ValueError("Verified asset partition is unsupported")
+        if not self.path.is_absolute():
+            raise ValueError("Verified asset path must be absolute")
+        if self.media_type != "application/pdf" or self.byte_size <= 0:
+            raise ValueError("Verified asset metadata is invalid")
+        for label, digest, length in (
+            ("sha256", self.sha256, 64),
+            ("git_blob_sha1", self.git_blob_sha1, 40),
+        ):
+            if len(digest) != length or any(
+                character not in "0123456789abcdef" for character in digest
+            ):
+                raise ValueError(f"{label} must be lowercase hexadecimal")
+        if self.file_inode <= 0:
+            raise ValueError("Verified asset file identity is unavailable")
+
+
+def _issue_verified_asset_receipt(
+    *,
+    manifest: CorpusManifest,
+    asset: AssetSpec,
+    path: Path,
+    verified: os.stat_result,
+) -> VerifiedAssetReceipt:
+    receipt = object.__new__(VerifiedAssetReceipt)
+    values = {
+        "corpus_id": manifest.corpus_id,
+        "asset_id": asset.asset_id,
+        "partition": asset.partition,
+        "path": path,
+        "media_type": asset.media_type,
+        "byte_size": asset.byte_size,
+        "sha256": asset.sha256,
+        "git_blob_sha1": asset.git_blob_sha1,
+        "file_device": int(verified.st_dev),
+        "file_inode": int(verified.st_ino),
+        "file_mtime_ns": _stat_time_ns(verified, "mtime"),
+        "file_ctime_ns": _stat_time_ns(verified, "ctime"),
+        "_validation_token": _VERIFIED_ASSET_TOKEN,
+    }
+    for name, value in values.items():
+        object.__setattr__(receipt, name, value)
+    receipt.__post_init__()
+    return receipt
 
 
 class _AllowlistedRedirectHandler(HTTPRedirectHandler):
@@ -61,29 +148,25 @@ def acquire_manifest(
     output_directory: Path,
     *,
     partitions: Iterable[str] = DEFAULT_PARTITIONS,
+    asset_ids: Iterable[str] | None = None,
     open_url: Callable | None = None,
 ) -> tuple[AcquisitionResult, ...]:
     """Acquire selected partitions into an ignored, caller-owned directory.
 
-    The default deliberately excludes ``sealed_transfer``.  Acquisition never
-    mutates the manifest and refuses to replace an invalid existing file.
-    ``open_url`` is an offline-test seam; production calls use an opener whose
-    redirects are checked before they are followed.
+    The default deliberately excludes ``sealed_transfer``.  When ``asset_ids``
+    is supplied, every exact ID must exist and belong to an authorized
+    partition; request order is preserved and duplicates are rejected.
+    Acquisition never mutates the manifest and refuses to replace an invalid
+    existing file. ``open_url`` is an offline-test seam; production calls use
+    an opener whose redirects are checked before they are followed.
     """
 
-    selected_partitions = frozenset(partitions)
-    unknown = selected_partitions - {
-        "authoring",
-        "development",
-        "sealed_transfer",
-    }
-    if unknown:
-        raise AcquisitionError(f"Unknown partitions: {sorted(unknown)}")
-    assets = [
-        asset for asset in manifest.assets if asset.partition in selected_partitions
-    ]
-    if not assets:
-        raise AcquisitionError("No manifest assets match the selected partitions")
+    selected_partitions = _validated_partitions(partitions)
+    assets = _select_registered_assets(
+        manifest,
+        selected_partitions,
+        asset_ids=asset_ids,
+    )
 
     output_directory = _ensure_plain_directory(output_directory)
 
@@ -102,6 +185,43 @@ def acquire_manifest(
             )
         )
     return tuple(results)
+
+
+def verify_registered_asset(
+    manifest: CorpusManifest,
+    asset_id: str,
+    repository_root: Path,
+    allowed_partitions: Iterable[str] = DEFAULT_VERIFICATION_PARTITIONS,
+) -> VerifiedAssetReceipt:
+    """Verify one manifest-selected asset at its sole canonical local path.
+
+    No caller-selected asset path is accepted.  The path is derived from the
+    repository root and the manifest's gitignored benchmark directory.  This
+    function is read-only: a missing directory or file fails without creating
+    any filesystem component.
+    """
+
+    partitions = _validated_partitions(allowed_partitions)
+    asset = _select_registered_assets(
+        manifest,
+        partitions,
+        asset_ids=(asset_id,),
+    )[0]
+    root = Path(os.path.abspath(repository_root))
+    _validate_directory_chain(root, require_complete=True)
+    destination = _canonical_registered_asset_path(manifest, asset, root)
+    _validate_directory_chain(destination.parent, require_complete=True)
+    verified = _verify_local_file(
+        destination,
+        asset,
+        manifest.max_asset_bytes,
+    )
+    return _issue_verified_asset_receipt(
+        manifest=manifest,
+        asset=asset,
+        path=destination,
+        verified=verified,
+    )
 
 
 def acquire_asset(
@@ -249,26 +369,22 @@ def _stream_verified(  # noqa: ANN001
         raise AcquisitionError(f"Git blob SHA-1 mismatch for {asset.asset_id}")
 
 
-def _verify_local_file(path: Path, asset: AssetSpec, max_asset_bytes: int) -> None:
+def _verify_local_file(
+    path: Path,
+    asset: AssetSpec,
+    max_asset_bytes: int,
+) -> os.stat_result:
     try:
         before = path.lstat()
     except OSError as exc:
         raise AcquisitionError(f"Cannot inspect existing file: {path}") from exc
-    if _is_link_or_reparse(before) or not stat.S_ISREG(before.st_mode):
-        raise AcquisitionError(f"Existing file does not match {asset.asset_id}")
-    if before.st_size != asset.byte_size:
-        raise AcquisitionError(f"Existing file does not match {asset.asset_id}")
-    if before.st_size > max_asset_bytes:
-        raise AcquisitionError(f"Existing file exceeds the safety limit: {path}")
-    if os.name != "nt" and before.st_mode & (
-        stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-    ):
-        raise AcquisitionError(f"Existing benchmark asset is executable: {path}")
+    _validate_local_file_metadata(before, path, asset, max_asset_bytes)
 
     sha256 = hashlib.sha256()
     blob_sha1 = hashlib.sha1(usedforsecurity=False)
     blob_sha1.update(f"blob {asset.byte_size}\0".encode("ascii"))
     leading = b""
+    byte_count = 0
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         file_descriptor = os.open(path, flags)
@@ -276,39 +392,234 @@ def _verify_local_file(path: Path, asset: AssetSpec, max_asset_bytes: int) -> No
         raise AcquisitionError(f"Cannot safely open existing file: {path}") from exc
     try:
         opened = os.fstat(file_descriptor)
-        if (
-            _is_link_or_reparse(opened)
-            or not stat.S_ISREG(opened.st_mode)
-            or opened.st_size != asset.byte_size
-        ):
-            raise AcquisitionError(f"Existing file changed while opening: {path}")
-        if _has_distinct_identity(before, opened) and not _same_identity(before, opened):
-            raise AcquisitionError(f"Existing file changed while opening: {path}")
-        handle = os.fdopen(file_descriptor, "rb", closefd=False)
-        while chunk := handle.read(_READ_SIZE):
-            if not leading:
-                leading = chunk[: len(_PDF_MAGIC)]
-            sha256.update(chunk)
-            blob_sha1.update(chunk)
-        handle.close()
+        _validate_local_file_metadata(opened, path, asset, max_asset_bytes)
+        _require_same_identity(before, opened, path, stage="while opening")
+        _require_stable_read_window(before, opened, path, stage="while opening")
+        with os.fdopen(file_descriptor, "rb", closefd=False) as handle:
+            while chunk := handle.read(_READ_SIZE):
+                byte_count += len(chunk)
+                if byte_count > asset.byte_size or byte_count > max_asset_bytes:
+                    raise AcquisitionError(
+                        f"Existing file exceeded the registered size: {path}"
+                    )
+                if not leading:
+                    leading = chunk[: len(_PDF_MAGIC)]
+                sha256.update(chunk)
+                blob_sha1.update(chunk)
+        read_finished = os.fstat(file_descriptor)
+        _validate_local_file_metadata(
+            read_finished,
+            path,
+            asset,
+            max_asset_bytes,
+        )
+        _require_same_identity(opened, read_finished, path, stage="while reading")
+        _require_stable_read_window(
+            opened,
+            read_finished,
+            path,
+            stage="while reading",
+        )
     finally:
         os.close(file_descriptor)
     try:
         after = path.lstat()
     except OSError as exc:
-        raise AcquisitionError(f"Existing file changed after verification: {path}") from exc
-    if (
-        _is_link_or_reparse(after)
-        or not stat.S_ISREG(after.st_mode)
-        or (_has_distinct_identity(opened, after) and not _same_identity(opened, after))
-    ):
-        raise AcquisitionError(f"Existing file changed after verification: {path}")
+        raise AcquisitionError(
+            f"Existing file changed after verification: {path}"
+        ) from exc
+    _validate_local_file_metadata(after, path, asset, max_asset_bytes)
+    _require_same_identity(
+        read_finished,
+        after,
+        path,
+        stage="after verification",
+    )
+    _require_stable_read_window(
+        read_finished,
+        after,
+        path,
+        stage="after verification",
+    )
+    if byte_count != asset.byte_size:
+        raise AcquisitionError(f"Existing size mismatch for {asset.asset_id}")
     if leading != _PDF_MAGIC:
         raise AcquisitionError(f"Existing PDF signature mismatch for {asset.asset_id}")
     if sha256.hexdigest() != asset.sha256:
         raise AcquisitionError(f"Existing SHA-256 mismatch for {asset.asset_id}")
     if blob_sha1.hexdigest() != asset.git_blob_sha1:
         raise AcquisitionError(f"Existing Git blob SHA-1 mismatch for {asset.asset_id}")
+    return after
+
+
+def _validate_local_file_metadata(
+    metadata,  # noqa: ANN001
+    path: Path,
+    asset: AssetSpec,
+    max_asset_bytes: int,
+) -> None:
+    if _is_link_or_reparse(metadata) or not stat.S_ISREG(metadata.st_mode):
+        raise AcquisitionError(f"Existing file does not match {asset.asset_id}")
+    if getattr(metadata, "st_nlink", 0) != 1:
+        raise AcquisitionError(f"Existing file is not single-link: {path}")
+    if metadata.st_size != asset.byte_size:
+        raise AcquisitionError(f"Existing file does not match {asset.asset_id}")
+    if metadata.st_size > max_asset_bytes:
+        raise AcquisitionError(f"Existing file exceeds the safety limit: {path}")
+    if os.name != "nt" and metadata.st_mode & (
+        stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+    ):
+        raise AcquisitionError(f"Existing benchmark asset is executable: {path}")
+
+
+def _require_same_identity(  # noqa: ANN001
+    first,
+    second,
+    path: Path,
+    *,
+    stage: str,
+) -> None:
+    if not _has_distinct_identity(first, second) or not _same_identity(first, second):
+        raise AcquisitionError(f"Existing file changed {stage}: {path}")
+
+
+def _require_stable_read_window(
+    first,  # noqa: ANN001
+    second,  # noqa: ANN001
+    path: Path,
+    *,
+    stage: str,
+) -> None:
+    if _read_window_metadata(first) != _read_window_metadata(second):
+        raise AcquisitionError(f"Existing file changed {stage}: {path}")
+
+
+def _read_window_metadata(metadata) -> tuple[int, int, int, int]:  # noqa: ANN001
+    return (
+        int(metadata.st_size),
+        int(metadata.st_nlink),
+        _stat_time_ns(metadata, "mtime"),
+        _stat_time_ns(metadata, "ctime"),
+    )
+
+
+def _stat_time_ns(metadata, kind: str) -> int:  # noqa: ANN001
+    nanoseconds = getattr(metadata, f"st_{kind}_ns", None)
+    if isinstance(nanoseconds, int):
+        return nanoseconds
+    seconds = getattr(metadata, f"st_{kind}", None)
+    if not isinstance(seconds, (int, float)):
+        raise AcquisitionError(f"File {kind} timestamp is unavailable")
+    return int(seconds * 1_000_000_000)
+
+
+def _validated_partitions(partitions: Iterable[str]) -> frozenset[str]:
+    if isinstance(partitions, (str, bytes)):
+        raise AcquisitionError("partitions must be an iterable of partition names")
+    try:
+        selected = tuple(partitions)
+    except TypeError as exc:
+        raise AcquisitionError("partitions must be iterable") from exc
+    if not all(isinstance(partition, str) for partition in selected):
+        raise AcquisitionError("partitions must contain only strings")
+    selected_partitions = frozenset(selected)
+    unknown = selected_partitions - SUPPORTED_PARTITIONS
+    if unknown:
+        raise AcquisitionError(f"Unknown partitions: {sorted(unknown)}")
+    if not selected_partitions:
+        raise AcquisitionError("At least one authorized partition is required")
+    return selected_partitions
+
+
+def _select_registered_assets(
+    manifest: CorpusManifest,
+    selected_partitions: frozenset[str],
+    *,
+    asset_ids: Iterable[str] | None,
+) -> tuple[AssetSpec, ...]:
+    assets_by_id: dict[str, AssetSpec] = {}
+    for asset in manifest.assets:
+        if asset.asset_id in assets_by_id:
+            raise AcquisitionError(
+                f"Manifest contains duplicate asset ID: {asset.asset_id}"
+            )
+        assets_by_id[asset.asset_id] = asset
+
+    if asset_ids is None:
+        selected = tuple(
+            asset
+            for asset in manifest.assets
+            if asset.partition in selected_partitions
+        )
+        if not selected:
+            raise AcquisitionError(
+                "No manifest assets match the selected partitions"
+            )
+        return selected
+
+    if isinstance(asset_ids, (str, bytes)):
+        raise AcquisitionError("asset_ids must be an iterable of exact asset IDs")
+    try:
+        requested_ids = tuple(asset_ids)
+    except TypeError as exc:
+        raise AcquisitionError("asset_ids must be iterable") from exc
+    if not requested_ids:
+        raise AcquisitionError("At least one exact asset ID is required")
+    if not all(isinstance(asset_id, str) for asset_id in requested_ids):
+        raise AcquisitionError("asset_ids must contain only strings")
+    if len(requested_ids) != len(set(requested_ids)):
+        raise AcquisitionError("Duplicate requested asset IDs are forbidden")
+
+    unknown_ids = sorted(set(requested_ids) - set(assets_by_id))
+    if unknown_ids:
+        raise AcquisitionError(f"Unknown asset IDs: {unknown_ids}")
+    unauthorized_ids = [
+        asset_id
+        for asset_id in requested_ids
+        if assets_by_id[asset_id].partition not in selected_partitions
+    ]
+    if unauthorized_ids:
+        raise AcquisitionError(
+            "Requested asset IDs are outside the authorized partitions: "
+            f"{unauthorized_ids}"
+        )
+    return tuple(assets_by_id[asset_id] for asset_id in requested_ids)
+
+
+def _canonical_registered_asset_path(
+    manifest: CorpusManifest,
+    asset: AssetSpec,
+    repository_root: Path,
+) -> Path:
+    relative_output = PurePosixPath(manifest.default_output_directory)
+    expected_parts = (*_CANONICAL_BENCHMARK_PREFIX, manifest.corpus_id)
+    if (
+        relative_output.is_absolute()
+        or "\\" in manifest.default_output_directory
+        or relative_output.parts != expected_parts
+        or relative_output.as_posix() != manifest.default_output_directory
+    ):
+        raise AcquisitionError(
+            "Manifest output directory is not the canonical ignored corpus path"
+        )
+    if (
+        not asset.output_filename
+        or asset.output_filename in {".", ".."}
+        or "/" in asset.output_filename
+        or "\\" in asset.output_filename
+    ):
+        raise AcquisitionError("Registered asset filename is not one safe component")
+
+    output_directory = repository_root.joinpath(*relative_output.parts)
+    partition_directory = output_directory / asset.partition
+    destination = partition_directory / asset.output_filename
+    if destination.parent != partition_directory:
+        raise AcquisitionError("Registered asset path escaped its partition")
+    try:
+        destination.relative_to(repository_root)
+    except ValueError as exc:
+        raise AcquisitionError("Registered asset path escaped the repository") from exc
+    return destination
 
 
 def _parse_content_length(value: str | None, asset_id: str) -> int:
@@ -408,6 +719,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--output-directory", type=Path)
     parser.add_argument(
+        "--asset-id",
+        dest="asset_ids",
+        action="append",
+        help=(
+            "Acquire one exact registered asset ID. Repeat for multiple assets; "
+            "each ID must belong to an authorized partition."
+        ),
+    )
+    parser.add_argument(
         "--include-sealed-transfer",
         action="store_true",
         help="Explicitly acquire the sealed-transfer partition as well.",
@@ -431,6 +751,7 @@ def main() -> None:
         manifest,
         output_directory,
         partitions=partitions,
+        asset_ids=args.asset_ids,
     )
     print(json.dumps([asdict(item) for item in results], indent=2))
 

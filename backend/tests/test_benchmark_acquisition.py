@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import stat
 import sys
 from dataclasses import replace
@@ -22,8 +23,10 @@ from app.concept_graph import (
 from benchmark_acquisition.fetch import (
     AcquisitionError,
     AcquisitionResult,
+    VerifiedAssetReceipt,
     acquire_asset,
     acquire_manifest,
+    verify_registered_asset,
 )
 from benchmark_acquisition.counterfactual_fixture import (
     CounterfactualFixtureError,
@@ -538,6 +541,72 @@ def test_manifest_acquisition_excludes_sealed_partition_by_default(
     )
 
 
+def test_manifest_acquisition_selects_only_exact_asset_ids_in_request_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    requested = [
+        asset.asset_id
+        for asset in reversed(manifest.assets)
+        if asset.partition == "authoring"
+    ][:2]
+    acquired: list[str] = []
+
+    def fake_acquire(_manifest, asset, output_directory, *, open_url):
+        acquired.append(asset.asset_id)
+        return AcquisitionResult(
+            asset_id=asset.asset_id,
+            partition=asset.partition,
+            path=str(output_directory / asset.partition / asset.output_filename),
+            byte_size=asset.byte_size,
+            sha256=asset.sha256,
+            status="offline-test",
+        )
+
+    monkeypatch.setattr(fetch_module, "acquire_asset", fake_acquire)
+    results = acquire_manifest(
+        manifest,
+        tmp_path,
+        partitions={"authoring"},
+        asset_ids=requested,
+        open_url=lambda *_args, **_kwargs: None,
+    )
+
+    assert acquired == requested
+    assert [result.asset_id for result in results] == requested
+
+
+@pytest.mark.parametrize(
+    ("asset_ids", "message"),
+    [
+        (["not-registered"], "Unknown asset IDs"),
+        (["lecture-11-scaling-details"], "authorized partitions"),
+        (
+            ["lecture-03-architecture", "lecture-03-architecture"],
+            "Duplicate requested asset IDs",
+        ),
+    ],
+)
+def test_exact_asset_selection_fails_before_creating_output(
+    tmp_path: Path,
+    asset_ids: list[str],
+    message: str,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    output = tmp_path / "must-not-be-created"
+
+    with pytest.raises(AcquisitionError, match=message):
+        acquire_manifest(
+            manifest,
+            output,
+            asset_ids=asset_ids,
+            open_url=lambda *_args, **_kwargs: pytest.fail("network was attempted"),
+        )
+
+    assert not output.exists()
+
+
 def test_acquisition_physically_separates_selected_partitions(tmp_path: Path) -> None:
     manifest = load_manifest(MANIFEST_PATH)
     authoring_body = b"%PDF-1.7\nauthoring\n%%EOF\n"
@@ -575,15 +644,250 @@ def test_acquisition_physically_separates_selected_partitions(tmp_path: Path) ->
     assert (tmp_path / "sealed_transfer" / sealed.output_filename).is_file()
 
 
+def test_verify_registered_asset_issues_strict_canonical_receipt(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    body = b"%PDF-1.7\nverified receipt\n%%EOF\n"
+    asset = _asset_for_body(manifest.assets[0], body)
+    focused_manifest = _focused_manifest(manifest, asset)
+    expected = _write_canonical_asset(tmp_path, focused_manifest, asset, body)
+
+    receipt = verify_registered_asset(
+        focused_manifest,
+        asset.asset_id,
+        tmp_path,
+    )
+
+    assert isinstance(receipt, VerifiedAssetReceipt)
+    assert receipt.corpus_id == focused_manifest.corpus_id
+    assert receipt.asset_id == asset.asset_id
+    assert receipt.partition == "authoring"
+    assert receipt.path == expected
+    assert receipt.byte_size == len(body)
+    assert receipt.sha256 == hashlib.sha256(body).hexdigest()
+    assert receipt.file_inode > 0
+    with pytest.raises(TypeError, match="verify_registered_asset"):
+        VerifiedAssetReceipt()
+    with pytest.raises(TypeError, match="verify_registered_asset"):
+        replace(receipt, asset_id="self-asserted")
+
+
+def test_verify_registered_asset_has_no_directory_creation_side_effect(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    body = b"%PDF-1.7\nmissing local asset\n%%EOF\n"
+    asset = _asset_for_body(manifest.assets[0], body)
+    focused_manifest = _focused_manifest(manifest, asset)
+    canonical_root = tmp_path / focused_manifest.default_output_directory
+
+    with pytest.raises(AcquisitionError, match="missing"):
+        verify_registered_asset(
+            focused_manifest,
+            asset.asset_id,
+            tmp_path,
+        )
+
+    assert not canonical_root.exists()
+
+
+@pytest.mark.parametrize(
+    ("asset_id", "message"),
+    [
+        ("not-registered", "Unknown asset IDs"),
+        ("lecture-04-moes", "authorized partitions"),
+    ],
+)
+def test_verify_registered_asset_rejects_unknown_or_wrong_partition(
+    tmp_path: Path,
+    asset_id: str,
+    message: str,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+
+    with pytest.raises(AcquisitionError, match=message):
+        verify_registered_asset(manifest, asset_id, tmp_path)
+
+    assert not (tmp_path / "backend").exists()
+
+
+def test_verify_registered_asset_does_not_discover_path_drift(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    body = b"%PDF-1.7\npath drift\n%%EOF\n"
+    asset = _asset_for_body(manifest.assets[0], body)
+    focused_manifest = _focused_manifest(manifest, asset)
+    canonical = _canonical_asset_path(tmp_path, focused_manifest, asset)
+    drifted = canonical.with_name(f"drifted-{canonical.name}")
+    drifted.parent.mkdir(parents=True)
+    drifted.write_bytes(body)
+
+    with pytest.raises(AcquisitionError, match="Cannot inspect existing file"):
+        verify_registered_asset(
+            focused_manifest,
+            asset.asset_id,
+            tmp_path,
+        )
+
+    forged_path_manifest = replace(
+        focused_manifest,
+        default_output_directory=(
+            "backend/data/public_course_benchmarks/path-drift"
+        ),
+    )
+    with pytest.raises(AcquisitionError, match="canonical ignored corpus path"):
+        verify_registered_asset(
+            forged_path_manifest,
+            asset.asset_id,
+            tmp_path,
+        )
+
+
+def test_verify_registered_asset_rejects_hardlink(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    body = b"%PDF-1.7\nhardlink\n%%EOF\n"
+    asset = _asset_for_body(manifest.assets[0], body)
+    focused_manifest = _focused_manifest(manifest, asset)
+    canonical = _write_canonical_asset(tmp_path, focused_manifest, asset, body)
+    alias = tmp_path / "alias.pdf"
+    try:
+        os.link(canonical, alias)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"hard links unavailable on this platform: {exc}")
+
+    with pytest.raises(AcquisitionError, match="single-link"):
+        verify_registered_asset(
+            focused_manifest,
+            asset.asset_id,
+            tmp_path,
+        )
+
+
+def test_verify_registered_asset_rejects_symlink(
+    tmp_path: Path,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    body = b"%PDF-1.7\nsymlink\n%%EOF\n"
+    asset = _asset_for_body(manifest.assets[0], body)
+    focused_manifest = _focused_manifest(manifest, asset)
+    canonical = _canonical_asset_path(tmp_path, focused_manifest, asset)
+    canonical.parent.mkdir(parents=True)
+    target = tmp_path / "target.pdf"
+    target.write_bytes(body)
+    try:
+        canonical.symlink_to(target)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks unavailable on this platform: {exc}")
+
+    with pytest.raises(AcquisitionError, match="does not match"):
+        verify_registered_asset(
+            focused_manifest,
+            asset.asset_id,
+            tmp_path,
+        )
+
+
+def test_verify_registered_asset_rejects_read_window_metadata_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    body = b"%PDF-1.7\nmetadata drift\n%%EOF\n"
+    asset = _asset_for_body(manifest.assets[0], body)
+    focused_manifest = _focused_manifest(manifest, asset)
+    _write_canonical_asset(tmp_path, focused_manifest, asset, body)
+    real_fstat = fetch_module.os.fstat
+    calls = 0
+
+    def drifting_fstat(file_descriptor):
+        nonlocal calls
+        metadata = real_fstat(file_descriptor)
+        calls += 1
+        if calls != 2:
+            return metadata
+        return SimpleNamespace(
+            st_mode=metadata.st_mode,
+            st_file_attributes=getattr(metadata, "st_file_attributes", 0),
+            st_nlink=metadata.st_nlink,
+            st_size=metadata.st_size,
+            st_dev=metadata.st_dev,
+            st_ino=metadata.st_ino,
+            st_mtime_ns=metadata.st_mtime_ns + 1,
+            st_ctime_ns=metadata.st_ctime_ns,
+        )
+
+    monkeypatch.setattr(fetch_module.os, "fstat", drifting_fstat)
+
+    with pytest.raises(AcquisitionError, match="changed while reading"):
+        verify_registered_asset(
+            focused_manifest,
+            asset.asset_id,
+            tmp_path,
+        )
+
+
+def test_verify_registered_asset_rejects_post_read_path_identity_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = load_manifest(MANIFEST_PATH)
+    body = b"%PDF-1.7\npath identity drift\n%%EOF\n"
+    asset = _asset_for_body(manifest.assets[0], body)
+    focused_manifest = _focused_manifest(manifest, asset)
+    canonical = _write_canonical_asset(tmp_path, focused_manifest, asset, body)
+    real_lstat = Path.lstat
+    asset_lstat_calls = 0
+
+    def drifting_lstat(path):
+        nonlocal asset_lstat_calls
+        metadata = real_lstat(path)
+        if path != canonical:
+            return metadata
+        asset_lstat_calls += 1
+        if asset_lstat_calls != 2:
+            return metadata
+        return SimpleNamespace(
+            st_mode=metadata.st_mode,
+            st_file_attributes=getattr(metadata, "st_file_attributes", 0),
+            st_nlink=metadata.st_nlink,
+            st_size=metadata.st_size,
+            st_dev=metadata.st_dev,
+            st_ino=metadata.st_ino + 1,
+            st_mtime_ns=metadata.st_mtime_ns,
+            st_ctime_ns=metadata.st_ctime_ns,
+        )
+
+    monkeypatch.setattr(Path, "lstat", drifting_lstat)
+
+    with pytest.raises(AcquisitionError, match="changed after verification"):
+        verify_registered_asset(
+            focused_manifest,
+            asset.asset_id,
+            tmp_path,
+        )
+
+
 def test_cli_does_not_resolve_explicit_output_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     raw_output = tmp_path / "not-created" / ".." / "chosen"
-    captured: dict[str, Path] = {}
+    requested = ["lecture-03-architecture", "lecture-05-gpus"]
+    captured: dict[str, object] = {}
 
-    def fake_acquire(_manifest, output_directory, *, partitions):
+    def fake_acquire(
+        _manifest,
+        output_directory,
+        *,
+        partitions,
+        asset_ids,
+    ):
         captured["output"] = output_directory
+        captured["asset_ids"] = asset_ids
         assert partitions == {"authoring", "development"}
         return ()
 
@@ -597,12 +901,47 @@ def test_cli_does_not_resolve_explicit_output_directory(
             str(MANIFEST_PATH),
             "--output-directory",
             str(raw_output),
+            "--asset-id",
+            requested[0],
+            "--asset-id",
+            requested[1],
         ],
     )
     fetch_module.main()
 
     assert str(captured["output"]) == str(raw_output)
     assert ".." in captured["output"].parts
+    assert captured["asset_ids"] == requested
+
+
+def _focused_manifest(manifest, asset):
+    return replace(
+        manifest,
+        assets=(asset,),
+        max_assets=1,
+        max_total_bytes=asset.byte_size,
+    )
+
+
+def _canonical_asset_path(repository_root: Path, manifest, asset) -> Path:
+    return (
+        repository_root
+        / manifest.default_output_directory
+        / asset.partition
+        / asset.output_filename
+    )
+
+
+def _write_canonical_asset(
+    repository_root: Path,
+    manifest,
+    asset,
+    body: bytes,
+) -> Path:
+    path = _canonical_asset_path(repository_root, manifest, asset)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(body)
+    return path
 
 
 def _asset_for_body(asset, body: bytes):

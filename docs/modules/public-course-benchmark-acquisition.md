@@ -12,11 +12,13 @@ URL, an unbounded downloader, or PDFs accidentally committed to the portfolio.
 
 ```text
 reviewed canonical manifest
+  -> exact asset-ID + authorized-partition selection
   -> HTTPS/domain/redirect policy
   -> count/aggregate/asset-deadline bounded temporary download
   -> type + size + PDF-magic checks
   -> SHA-256 + Git-blob identity checks
   -> no-overwrite publication under backend/data/<partition>/
+  -> canonical-path local re-verification receipt
   -> separate Source ingestion and benchmark runners
 ```
 
@@ -57,7 +59,11 @@ or deletes a mismatched existing asset automatically.
 
 Directory validation walks every existing component without resolving the
 caller path and rejects both symlinks and Windows reparse points. Existing
-assets are checked before open, against the opened handle, and again afterward.
+assets must be regular single-link files. They are checked before open, against
+the opened descriptor, again after the complete read, and once more through the
+path. Device/inode identity, exact size, link count, mtime, and ctime must stay
+stable throughout that window. The content must still match PDF magic,
+SHA-256, and Git blob SHA-1.
 
 Hash equality proves identity, not that a PDF is safe. Parsing remains an
 untrusted-input boundary with separate resource limits. Hard-link publication
@@ -67,6 +73,27 @@ or machine failure may leave a hidden `.part` file for later quarantine.
 The manifest is intentionally strict and code-reviewed. Expanding the host
 allowlist or changing a checksum is a source-registration change, not an
 ordinary runtime event.
+
+## Least-privilege selection and verification
+
+`acquire_manifest(..., asset_ids=...)` and repeatable CLI `--asset-id` options
+select exact registered IDs. Omission retains the existing behavior of
+acquiring every asset in the authorized partitions. An unknown or duplicate ID,
+or an ID whose registered partition is not authorized by `partitions`, fails
+before output-directory creation or network setup. The default authorized set
+remains `authoring + development`; it never includes `sealed_transfer`.
+
+Consumers that need a local authoring input call
+`verify_registered_asset(manifest, asset_id, repository_root)`. It accepts no
+raw path, output override, or filesystem glob. It defaults independently to
+the `authoring` partition and uniquely derives
+`backend/data/public_course_benchmarks/<corpus_id>/<partition>/<filename>` from
+the registered manifest. The function is read-only, so a missing component
+fails without creating directories. Success returns a frozen, constructor-
+guarded `VerifiedAssetReceipt` containing the manifest identity, canonical
+absolute path, content hashes, and verified filesystem identity/timestamps.
+The receipt attests to the completed read window; it is not a permanent lease
+on a mutable pathname.
 
 This is a maintainer-operated local acquisition boundary, not a hostile
 multi-tenant downloader. The output root must not be concurrently writable by
@@ -118,5 +145,7 @@ The offline test slice validates canonical identities, content and partition
 disjointness, aggregate limits, the separated CC0 fixture contract, manifest
 tamper rejection, physical partitioning, deadline enforcement, symlink
 rejection where the platform permits it, successful publication,
-existing-file reuse, and cleanup after wrong type/hash. It uses injected
-responses and never performs a network request.
+existing-file reuse, cleanup after wrong type/hash, exact-ID selection,
+unauthorized partition rejection, canonical path drift, no-side-effect local
+verification, hard-link/symlink rejection, and read-window metadata drift. It
+uses injected responses and never performs a network request.
