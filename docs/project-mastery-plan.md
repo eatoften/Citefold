@@ -105,12 +105,12 @@ not a substitute for role-specific qualifications.
 | R1 differentiated product | Source -> Chat -> sentence citation and Source -> Concept -> relation/path -> edge evidence both work end to end; the graph is more than a force-layout similarity demo |
 | R2 engineering correctness | additive migrations, course isolation, graph/version invariants, reliable tasks, recovery, deterministic algorithms, and focused fault tests pass |
 | R3 measurable quality | frozen golden graph, locator validity, path correctness, graph coverage/error report, latency budget, and preserved Dense Chat baseline |
-| R4 maintainability | a frozen P1.4 checklist names each debt, owner module, acceptance command, and expected artifact; critical items then pass: bounded frontend slices, shared contracts/client where valuable, automated frontend/backend/E2E gates, and documented failure states |
-| R5 product finish | a frozen P1.2/P1.3 journey checklist defines success before implementation; onboarding/error recovery, reproducible setup, clean public README, fresh-machine demo, and a versioned desktop release pass it |
+| R4 maintainability | the [frozen R4 checklist](release-readiness-checklist.md#r4-maintainability-freeze) passes: root composition, feature-owned state/API, backend layer boundaries, architecture checks, named residual debt, commands, and retained artifacts |
+| R5 product finish | the [frozen R5 checklist](release-readiness-checklist.md#r5-product-finish-freeze) passes: bounded Studio essentials, onboarding/recovery, license-clear sample, recruiter-first documentation, clean install/upgrade, commands, and retained artifacts |
 | R6 maintainer ownership | M3 on all five critical vertical slices, two or three M4 design defenses, user-owned diffs/commits, and reproducible bug/design stories |
 | R7 interview readiness | separate DSA, OS, networking, database, behavioral, and timed coding preparation appropriate to the target role |
-| R8 MLE evidence when claimed | MLE-E1 uses a sealed, independently reviewed test set frozen before results; a pinned runner/environment and numeric tolerances compare justified retrieval/routing baselines and report ranking, citation, abstention, latency, ablation, and per-error results; the maintainer reaches M3 on retrieval/evaluation/PyTorch |
-| R9 security and release hygiene | threat boundaries for untrusted imports, local HTTP/process/file access, and model output are documented; path/resource controls, secret/dependency checks, artifact provenance, license decisions, and bounded abuse/failure tests pass |
+| R8 MLE evidence when claimed | the [R8 applied-MLE checklist](release-readiness-checklist.md#r8-reproducible-applied-mle-evidence) passes: independently frozen sealed labels, fair baselines/ablations, pinned clean replay, metrics/error analysis, and maintainer M3 on retrieval/evaluation/PyTorch |
+| R9 security and release hygiene | the [R9 release-security checklist](release-readiness-checklist.md#r9-public-release-security-and-integrity) passes for untrusted imports, local HTTP/process/file access, model output, path/resource controls, private data, dependencies, and artifact provenance |
 
 Passing R1-R7 and R9 makes the repository defensible as an SDE flagship. Passing
 R1-R9 makes it defensible as an applied-MLE/ML-systems flagship. A recruiter
@@ -162,6 +162,11 @@ finished flagship, also produce:
 - a lightweight security/release review covering import limits, path trust,
   local API/process boundaries, dependency/secrets checks, model-output
   validation, binary provenance, and the tests that enforce the chosen limits.
+
+The exact hard checks, two packaged-build journeys, GitHub-Release
+install/upgrade procedure, and evidence-record format are frozen in the
+[release and resume readiness checklist](release-readiness-checklist.md). That
+document is currently a contract, not evidence that any readiness gate passed.
 
 A partial second-human graph review and observations from 3-5 real users are
 strong additions, but they are not fabricated or treated as hard blockers when
@@ -421,7 +426,10 @@ labels do not become final portfolio evidence until the relevant review and
 freeze gates are satisfied. MLE-E1 is a personal mastery/interview-evidence
 checkpoint, not a product stage owned by `roadmap.md`. It is required before an
 MLE-focused resume makes strong evaluation claims and does not block an
-SDE-focused product release.
+SDE-focused product release. Its sealed-test opening, clean replay, numeric
+tolerances, and maintainer M3 proof must satisfy the
+[R8 applied-MLE checklist](release-readiness-checklist.md#r8-reproducible-applied-mle-evidence);
+a generated report or development-set table alone is not acceptance.
 
 ## Daily Collaboration Loop
 
@@ -668,6 +676,8 @@ The final repository and preparation folder should contain:
 - deterministic algorithm tests and one performance profile;
 - one real-browser desktop/narrow-screen demo of Source -> Chat -> citation and
   Concept -> path -> edge evidence;
+- clean GitHub-Release install/upgrade evidence, release hashes, and the scoped
+  security review required by R9;
 - known limitations and explicitly rejected claims;
 - STAR stories for a hard bug, a design trade-off, an experiment that failed,
   a reliability improvement, and a user-facing improvement.
@@ -676,6 +686,7 @@ The final repository and preparation folder should contain:
 
 - [Active product roadmap](roadmap.md)
 - [Append-only productization log](productization-log.md)
+- [Release and resume readiness checklist](release-readiness-checklist.md)
 - [Technical-stack learning notebook](learning/README.md)
 - [Session 1 lesson](learning/session-01-source-card-graph-contract.md)
 - [Draft graph annotation protocol](graph-annotation-protocol.md)
