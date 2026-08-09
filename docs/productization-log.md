@@ -4369,3 +4369,53 @@ candidate review/edit, durable browser E2E, narrow-screen/accessibility gates,
 public-course human gold and path/Locator metrics, 1k/10k cold/warm profiles,
 full backend non-regression on the final commit, and desktop release acceptance
 remain required.
+
+## G4.1 real-course product demo - Source to path to citation
+
+**Status:** Production-service demo and real-browser acceptance complete;
+automated Draft Review UI and public quality evaluation remain open
+
+### Outcome and implementation choice
+
+One command now creates a new isolated workspace and exercises the existing
+production boundary instead of introducing a benchmark-only graph stack:
+
+```text
+verified CS336 Lecture 3 PDF
+-> production PDF import -> 68 Source Chunks
+-> 3 imported Concept candidates -> automated fixture acceptance
+-> 2 imported prerequisite/pedagogical-inference relations
+-> publication preview + immutable GraphVersion
+-> two-hop Trace + three-layer Learning Path
+-> four immutable relation citations -> verified PDF pages 65/66
+```
+
+`backend/product_demo.py` stores only page/ordinal coordinates, Chunk hashes,
+UTF-8 offsets, and evidence-span hashes. It reconstructs the exact private
+quotes only from a locally acquired, hash-verified PDF and never commits the
+Source bytes or quote text. The command sets all application storage paths
+before importing `app.*`, refuses a non-empty workspace, and calls the same
+Source, Concept Graph, publication, path, and citation services used by the
+product. This keeps the demo useful without creating a second schema, path
+algorithm, evaluator framework, or graph database.
+
+### Finding and fix
+
+The service boundary originally hard-coded every new candidate as
+`proposal_origin="human"`. That would make an automated fixture look
+human-authored after publication. The internal service functions now accept a
+keyword-only `proposal_origin` with the HTTP-compatible default `"human"`;
+the demo supplies `"import"`, and one focused regression protects that
+provenance. The demo receipt also states `human_reviewed=false`,
+`gold_authority=false`, and `accuracy_evaluated=false`.
+
+### Acceptance and remaining boundary
+
+The isolated service run produced three Concepts, two relations, a two-hop
+Trace, three Learning layers, and citations on pages `[65, 65, 65, 66]`. A
+clean browser then showed the 68-Chunk PDF in Sources, reproduced the Trace,
+opened both edge endpoints on pages 65 and 66, and built the three-layer
+Learning Path with no console warning or error. This proves a real
+Source-to-Graph-to-Path-to-Citation engineering slice; it does not measure
+Concept/Relation accuracy and is not human gold. The next user-visible stage is
+Draft Review/edit/publish in Studio, not additional evaluation infrastructure.

@@ -50,7 +50,7 @@ commit, and remote push are all complete.
 | G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | Complete - G1.1 candidates, G1.2 lifecycle/reliability, and G1.3 immutable publication implemented |
 | G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | In progress - G2.1 Concept tooling, shared G2.2 security primitives, and G2.3 Pass A software implemented; real reviewer-key registration, Concept seal, and Relation labels/seal absent |
 | G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | Product capability implemented and consumed by G4; cache/performance acceptance pending |
-| G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | In progress - Path/Relation/Source vertical slice and manual browser acceptance implemented; visual overview, durable E2E, public quality, accessibility, and performance gates pending |
+| G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | In progress - Path/Relation/Source vertical slice and hash-pinned CS336 browser smoke implemented; Draft Review UI is next, then durable E2E, public quality, accessibility, and performance gates |
 | P1.2 Studio | Study, Review, and Course Map become a coherent output library | Deferred until G4 |
 | P1.3 Product polish | Onboarding, previews, search, empty/error states, accessibility, localization | Deferred until G4 |
 | P1.4 Structural hardening | Large frontend slice extraction, shared API-client consolidation, and remaining release optimization | Deferred until G4 except release-blocking work |
@@ -73,7 +73,9 @@ remain specified but are explicitly deferred. The backend G3 path engine and
 the first G4 Path View plus graph-evidence navigation slice are implemented.
 Human gold and the deferred G2 authority work still must finish before
 public-course quality claims, but they no longer block building the remaining
-product behavior.
+product behavior. The immediate next product milestone is Concept-first Draft
+Review, Relation review/rebinding, publication preview, and CAS-safe publish in
+Studio; evaluation machinery remains deferred until that authoring loop exists.
 
 The architecture and alternatives are recorded in
 [ADR-0008](decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md).
@@ -352,6 +354,9 @@ Deliverables:
   error states, including request cancellation and late-response isolation;
 - [x] manually accept a real PDF Trace -> Relation -> evidence journey, Escape
   focus restoration, Local/Learning smoke paths, and a clean cold load;
+- [x] repeat that journey with the hash-pinned CS336 Lecture 3 Source: 68 page
+  Chunks, a two-hop engineering-fixture Trace, page 65/66 evidence, and three
+  Learning layers, without claiming human review or accuracy;
 - [ ] add the Obsidian-style overview and richer stable path layout without
   reviving the deleted CardRelation compatibility implementation;
 - [ ] provide Concept/Relation candidate review and edit from the product;

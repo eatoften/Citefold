@@ -28,10 +28,19 @@ protocol are frozen, and the two-step reviewer-policy plus four-step Concept
 workflow is implemented. No real reviewer-key policy has been registered in a
 prior commit, so no authorized real worksheet or human label exists. Therefore no
 `ConceptInventorySeal`, `GoldBundleSeal`, automatic proposal accuracy,
-graph-quality result, or path result exists. OpenSSH
+human-gold graph-quality result, or benchmark path result exists. OpenSSH
 approval in the later workflow proves control of an allowed key only; this
 single-maintainer local process remains self-attested rather than independently
 verified human/blind annotation.
+
+A separate product-engineering fixture now imports those verified 68 pages
+through the production Source pipeline, publishes three automatically accepted
+Concepts and two pedagogical-inference relations, finds one two-hop Trace and a
+three-layer Learning Path, and resolves all four relation evidence snapshots to
+pages 65/66 of the verified PDF. This is a repeatable integration smoke test
+with `human_reviewed=false`, `gold_authority=false`, and
+`accuracy_evaluated=false`; it does not replace or contribute labels to the
+future human benchmark.
 
 ## Course sources and licensing policy
 
@@ -122,8 +131,9 @@ The independent evaluation protocol owns selected page/slide ranges,
 exclusions, parser version, chunker version, semantic Source/Chunk artifact
 hashes, metric semantics, and claim boundaries. Its strict G0.2a loader,
 canonical sidecar contract, and no-overwrite freeze authority are implemented;
-the CS336 Lecture 3 instance remains **draft** until its exact Source slice is
-chosen and generated. The acquisition `ManifestAuthority` is the upstream
+the CS336 Lecture 3 Source-slice instance is frozen and independently replayed,
+while every human-gold and model-evaluation authority remains absent. The
+acquisition `ManifestAuthority` is the upstream
 byte/rights prerequisite, not a fifth downstream evaluation authority. The
 four downstream authorities are (1) the protocol definition plus Source-slice
 freeze, (2) a partition-bound `GoldBundleSeal`, (3) the

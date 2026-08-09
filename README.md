@@ -581,6 +581,25 @@ cd backend
 uv run pytest
 ```
 
+To exercise the real public-course product path, acquire the exact registered
+CS336 Lecture 3 PDF and seed a new isolated local workspace:
+
+```powershell
+cd backend
+uv run --frozen python -m benchmark_acquisition.fetch `
+  --manifest benchmark_acquisition/manifests/cs336-sp25-v1.json `
+  --asset-id lecture-03-architecture
+uv run --frozen python -m product_demo `
+  --workspace data/product_demos/cs336-l3-attention-local
+```
+
+The command uses the production PDF importer, Source/Chunk store, Concept
+review/publication services, path engine, and citation resolver. It refuses a
+non-empty workspace and verifies the registered file hash before parsing. Its
+three Concepts and two relations are an automated engineering fixture, not
+human gold and not an accuracy result; the PDF and generated workspace remain
+gitignored.
+
 The latest complete backend regression, at the G3 checkpoint, passed `1125`
 tests with `7` skipped. The G4-focused path/publication/citation regression
 passes `36` tests with `1` skipped, and all `210` frontend tests pass. Python
@@ -596,11 +615,13 @@ question -> open the citation -> save the answer as a Note -> delete and Undo
 or restore it from Recovery. Both viewports completed without horizontal
 overflow or console errors.
 
-The G4 product slice was exercised in a clean real browser over a seeded PDF:
-Explore -> two-hop Trace -> relation rationale -> evidence -> PDF page 1. The
-exact quote was highlighted, Escape restored focus, Local and Learning returned
-their expected server-owned structures, and the cold load had no console
-errors. This is a manual acceptance record, not yet a durable E2E suite.
+The G4 product slice was exercised in a clean real browser over the hash-pinned
+CS336 Lecture 3 PDF: Sources exposed 68 page Chunks; Explore returned the
+two-hop `Full Attention -> Sparse Attention -> Sliding-window Attention` Trace;
+each relation opened its evidence on PDF page 65 or 66; and Learning returned
+the three expected layers. The browser console had no warnings or errors. This
+is an automated-fixture/manual-browser engineering acceptance record, not
+human gold, an accuracy result, or a durable E2E suite.
 
 | Experiment | Main entry point | Record |
 | --- | --- | --- |

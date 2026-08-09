@@ -8,6 +8,7 @@ import pytest
 
 import app.main as main
 import app.concept_graph_service as concept_graph_service
+from app.concept_graph import ConceptCreate, ConceptRelationCreate
 from app.course import Course, CourseCreate
 from app.course_service import create_video_course
 from app.course_source import (
@@ -146,6 +147,53 @@ def test_concept_api_snapshots_current_chunk_and_isolates_courses() -> None:
     assert fetched.status_code == 200
     assert fetched.json() == created
     assert wrong_course.status_code == 404
+
+
+def test_internal_import_preserves_candidate_provenance() -> None:
+    course, chunk = _course_with_pdf_chunk("import-origin")
+    concepts = []
+    for name, quote in (
+        ("Gradient descent", "Gradient descent"),
+        ("Learning rate", "learning rate"),
+    ):
+        concepts.append(
+            concept_graph_service.create_grounded_concept_candidate(
+                course.id,
+                ConceptCreate(
+                    **_create_metadata(),
+                    preferred_name=name,
+                    short_definition=f"Definition of {name}.",
+                    evidence=[{"chunk_id": chunk.id, "quote": quote}],
+                ),
+                proposal_origin="import",
+            )
+        )
+
+    relation = concept_graph_service.create_grounded_relation_candidate(
+        course.id,
+        ConceptRelationCreate(
+            **_create_metadata(),
+            source_concept_id=concepts[0].id,
+            target_concept_id=concepts[1].id,
+            relation_type="related",
+            support_basis="source_asserted",
+            rationale="The Source discusses both imported Concepts.",
+            evidence=[
+                {
+                    "chunk_id": chunk.id,
+                    "quote": "Gradient descent uses a learning rate",
+                    "support_role": "relation_assertion",
+                }
+            ],
+        ),
+        proposal_origin="import",
+    )
+
+    assert [concept.proposal_origin for concept in concepts] == [
+        "import",
+        "import",
+    ]
+    assert relation.proposal_origin == "import"
 
 
 def test_concept_creation_rolls_back_when_grounding_is_invalid() -> None:

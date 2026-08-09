@@ -21,6 +21,7 @@ from .concept_graph import (
     GraphMarkStaleRequest,
     GraphMutationRequest,
     GraphReviewRequest,
+    ProposalOrigin,
     RelationReviewRequest,
     RelationRevisionEdit,
     RelationEvidenceReferenceCreate,
@@ -99,6 +100,8 @@ class ConceptGraphBusyError(ConceptGraphServiceError):
 def create_grounded_concept_candidate(
     course_id: str,
     request: ConceptCreate,
+    *,
+    proposal_origin: ProposalOrigin = "human",
 ) -> Concept:
     course = _require_course(course_id)
     now = utc_now()
@@ -111,7 +114,7 @@ def create_grounded_concept_candidate(
         identity_status="active",
         review_status="candidate",
         validity_status="current",
-        proposal_origin="human",
+        proposal_origin=proposal_origin,
         created_at=now,
         updated_at=now,
     )
@@ -175,6 +178,8 @@ def get_course_concept_revision(
 def create_grounded_relation_candidate(
     course_id: str,
     request: ConceptRelationCreate,
+    *,
+    proposal_origin: ProposalOrigin = "human",
 ) -> ConceptRelation:
     course = _require_course(course_id)
     source_id, target_id = canonicalize_relation_endpoints(
@@ -198,7 +203,7 @@ def create_grounded_relation_candidate(
         revision=1,
         review_status="candidate",
         validity_status="current",
-        proposal_origin="human",
+        proposal_origin=proposal_origin,
         created_at=now,
         updated_at=now,
     )
