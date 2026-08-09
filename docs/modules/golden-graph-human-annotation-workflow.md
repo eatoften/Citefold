@@ -239,8 +239,10 @@ inferred from a passing test suite:
    `prepare-concept-seal`. Keep the private key outside the repository.
 11. Run sealing and verification, inspect the public diff for Source text or
    personal data, and only then commit the six public leaves and sidecars.
-12. Later complete delayed Relation Pass A/B and adjudication over the entire
-   pair manifest before creating a separate `GoldBundleSeal`.
+12. Continue through the separate
+   [Relation Pass A commit--reveal workflow](golden-graph-relation-pass-a-workflow.md),
+   then complete delayed Pass B and adjudication over the entire pair manifest
+   before creating a separate `GoldBundleSeal`.
 
 The tool enforces shape, lineage, deterministic derivation, and key control.
 It cannot decide whether a Concept boundary, definition, alias, or evidence

@@ -132,18 +132,28 @@ policy has been registered, so no authorized worksheet or human label exists;
 no `ConceptInventorySeal`, `GoldBundleSeal`, accuracy result, or path result
 exists. The G2.2 prerequisite now centralizes exact-quote evidence resolution,
 public annotation privacy checks, and four-stage detached attestations; no
-Relation Pass A label or seal exists yet. Automatic Understanding, Relation
+Relation Pass A label or seal exists yet. G2.3 now implements the synthetic-
+tested Pass A commit--reveal tooling: an exhaustive private worksheet,
+G1-compatible evidence checks, a private immutable label artifact, and a
+nonce-salted label-free hash commitment with independent Pass A namespace
+signing. Public/private path capabilities are separated, and real-capability
+integration tests replay canonical protocol/Source/Concept/Git/SSH authority,
+revocation, no-overwrite publication, and seal-last recovery. There is
+deliberately no reveal command before Pass B. This is software
+machinery, not a real human Pass A result. Automatic Understanding, Relation
 gold, deterministic paths, and the
 evidence-first graph UI remain roadmap work; the current Explore graph is still a sparse
 CardRelation discovery baseline. See the
 [active roadmap](docs/roadmap.md),
 [graph decision record](docs/decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md),
 [staged-human-gold decision](docs/decisions/ADR-0010-staged-human-gold-and-key-control-attestation.md),
+[Pass A commit--reveal decision](docs/decisions/ADR-0011-embargo-relation-pass-a-behind-a-neutral-commitment.md),
 [G1 substrate contract](docs/modules/concept-graph-substrate.md),
 [Source projection generation contract](docs/modules/source-projection-generation.md),
 [immutable graph publication contract](docs/modules/concept-graph-publication.md),
 [G2.1 human annotation workflow](docs/modules/golden-graph-human-annotation-workflow.md),
 [shared annotation security primitives](docs/modules/golden-graph-annotation-security-primitives.md),
+[Relation Pass A workflow](docs/modules/golden-graph-relation-pass-a-workflow.md),
 [learning and mastery plan](docs/project-mastery-plan.md), and
 [append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.
@@ -245,11 +255,12 @@ The architecture preserves three different responsibilities:
 | Semantics | reviewed Concepts, Claims, Relations, and their evidence links | represent stable meaning and justified structure without replacing the Source |
 | Learning products | Cards, quizzes, guides, maps, and paths | present evidence and semantics for a learning task; remain regenerable artifacts |
 
-The implementation migration is additive:
+The implementation migration is additive. These are architecture migration
+steps, not aliases for the G1--G4 roadmap stage numbers:
 
-1. G1 introduces separate Concept, ConceptEvidence, Relation, and
+1. Introduce separate Concept, ConceptEvidence, Relation, and
    RelationEvidence storage without renaming or deleting current Cards.
-2. G2 makes Understanding consume canonical `CourseSourceChunk` inputs across
+2. Make Understanding consume canonical `CourseSourceChunk` inputs across
    modalities and emit only evidence-bound Card drafts with
    revision/hash/Locator provenance. A separate review/promotion service maps
    reviewed Cards and original Chunks to Concept/Relation candidates. The

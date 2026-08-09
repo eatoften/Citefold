@@ -201,8 +201,10 @@ checkpoint in [`productization-log.md`](../productization-log.md). Passing them
 establishes the software boundary only; it creates no human label, Relation
 pass, `GoldBundleSeal`, accuracy result, or path-quality result.
 
-## Next consumer
+## Current consumer
 
-G2.2 Relation Pass A must consume these APIs directly. It may add Relation
-schemas and a Relation-specific state machine, but it must not copy evidence,
-privacy, reviewer-policy, or detached-signature logic back into that workflow.
+G2.3 Relation Pass A now consumes these APIs directly through its separate
+[commit--reveal workflow](golden-graph-relation-pass-a-workflow.md). It adds
+Relation schemas and a Relation-specific state machine without copying
+evidence, privacy, reviewer-policy, or detached-signature logic. Pass B and
+GoldBundle must continue through the same shared boundary.

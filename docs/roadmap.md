@@ -48,7 +48,7 @@ commit, and remote push are all complete.
 | P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Complete |
 | G0 Graph contract and baseline | Relation semantics, evidence rules, evaluation scope, and non-goals are frozen | In progress |
 | G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | Complete - G1.1 candidates, G1.2 lifecycle/reliability, and G1.3 immutable publication implemented |
-| G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | In progress - G2.1 tooling implemented; reviewer-key registration and human work not started |
+| G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | In progress - G2.1 Concept tooling, shared G2.2 security primitives, and G2.3 Pass A software implemented; real reviewer-key registration, Concept seal, and Relation labels/seal absent |
 | G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | Planned |
 | G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | Planned |
 | P1.2 Studio | Study, Review, and Course Map become a coherent output library | Deferred until G4 |
@@ -239,15 +239,30 @@ implements `prepare-reviewer-key-policy`, `verify-reviewer-key-policy`,
 redacted six-leaf public Concept DAG, treats OpenSSH signatures as key-control
 evidence only, requires its public key policy to pre-exist in reachable Git
 history, and derives the exhaustive pair manifest before Relation review. No
-G2.2 Relation label state exists yet. Its prerequisite shared evidence/privacy
+real Relation label state exists yet. Its prerequisite shared evidence/privacy
 and four-stage detached-attestation primitives are now implemented and wired
 back into G2.1, so Pass A can reuse one audited security boundary instead of
 copying Concept-specific logic. See the
 [shared annotation primitives contract](modules/golden-graph-annotation-security-primitives.md).
+G2.3 now adds the
+[Relation Pass A commit--reveal workflow](modules/golden-graph-relation-pass-a-workflow.md):
+the full pair packet stays private, a label-free request/attestation/seal is
+published as the anti-rewrite commitment, G1 evidence-role/current-Concept
+rules are enforced, and there is no pre-Pass-B reveal path. Synthetic tests
+and real protocol/Source/Git-policy/Concept/SSH integration tests exercise this
+boundary; they are not CS336 labels. The visibility decision is
+recorded in
+[ADR-0011](decisions/ADR-0011-embargo-relation-pass-a-behind-a-neutral-commitment.md).
 No real CS336 reviewer-key policy or authorized worksheet exists. This is a
 software checkpoint, not a human-label, gold-graph, accuracy, agreement, or
 path-quality result. The staged authority decision is recorded in
 [ADR-0010](decisions/ADR-0010-staged-human-gold-and-key-control-attestation.md).
+
+The next software checkpoint is not blind Pass B itself. First, the public
+Pass A commitment must gain a Git-registered commitment authority and a typed
+72-hour readiness check derived from repository history rather than trusting
+the worksheet timestamp. Pass B initialization must then accept only the
+public commitment path capability and prove it never opens private Pass A.
 
 Deliverables:
 

@@ -122,6 +122,9 @@ def annotation_fixture(
             review=SimpleNamespace(
                 reviewer_id="maintainer-01",
                 annotation_guide_sha256="5" * 64,
+                both_passes_blind_to_system_proposals=True,
+                pass_b_blind_to_pass_a_labels=True,
+                minimum_delay_hours=72,
             ),
             acquisition=SimpleNamespace(corpus_id="fixture-corpus"),
         ),
@@ -1087,8 +1090,18 @@ def _registered_reviewer_key_policy(
     )
     seed = repository_root / "seed.txt"
     seed.write_text("seed\n", encoding="utf-8", newline="\n")
+    gitignore = repository_root / ".gitignore"
+    gitignore.write_text("backend/data/\n", encoding="utf-8", newline="\n")
     subprocess.run(
-        ["git", "-C", str(repository_root), "add", "--", "seed.txt"],
+        [
+            "git",
+            "-C",
+            str(repository_root),
+            "add",
+            "--",
+            "seed.txt",
+            ".gitignore",
+        ],
         check=True,
         capture_output=True,
     )
@@ -1109,7 +1122,10 @@ def _registered_reviewer_key_policy(
         ),
         allowed_namespaces=(CONCEPT_ATTESTATION_NAMESPACE,),
     )
-    (repository_root / "backend/golden_graph").mkdir(parents=True)
+    (repository_root / "backend/golden_graph").mkdir(
+        parents=True,
+        exist_ok=True,
+    )
     publish_reviewer_key_policy(
         repository_root=repository_root,
         policy=policy,

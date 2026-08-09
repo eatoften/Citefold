@@ -4121,3 +4121,112 @@ Passing these gates establishes a reusable software trust boundary only. It
 does not create human semantic authority or any benchmark result. The next
 software consumer is sealed Relation Pass A; the next human authority gate is
 still maintainer-owned reviewer-key registration and Concept annotation.
+
+## G2.3 - Embargoed Relation Pass A neutral commitment
+
+**Status:** Software checkpoint implemented and locally accepted; no real
+reviewer policy, Concept seal, Relation label, Pass A seal, GoldBundle,
+agreement, accuracy, or path-quality result exists
+
+### Outcome and non-outcome
+
+This checkpoint implements the first Relation-review software state machine
+without generating or reviewing semantic labels:
+
+```text
+canonical frozen protocol + private Source materialization
+-> historical six-leaf Concept authority + exhaustive pair manifest
+-> private mutable Pass A worksheet with random commitment nonce
+-> private immutable redacted Relation decisions
+-> public label-free request + detached SSHSIG + root seal
+```
+
+The public root is a neutral anti-rewrite commitment. It is not `R_gold` and
+does not prove that a human reviewed the worksheet, stayed blind to system
+proposals, or waited 72 hours. Those limitations remain explicit as
+`software_authenticated_* = false`. There is deliberately no reveal command.
+
+### Main design and technology choices
+
+- Strict/frozen Pydantic models encode the complete 66--190 pair universe,
+  directed versus symmetric Relation identity, exact evidence-role sets, and a
+  global Kahn DAG gate for prerequisites.
+- A private 256-bit nonce generated with `secrets.token_hex(32)` salts both the
+  worksheet and Relation artifact commitments. SHA-256 therefore binds exact
+  bytes without exposing a low-entropy deterministic label hash.
+- `RelationPassAPublicCommitmentPaths` and `RelationPassAPrivatePaths` make the
+  visibility boundary part of the API type. Public verification cannot be
+  handed a path capability that names the hidden label artifact.
+- Before every authority-changing transition, the workflow reloads canonical
+  frozen-protocol JSON/sidecar, private Source materialization/sidecar,
+  historical Concept policy from Git, and the complete signed Concept DAG.
+  Later logic consumes those fresh replay objects instead of the caller-owned
+  capability.
+- Publication deep-reparses the full Signed graph into a detached local
+  snapshot, replays the embedded OpenSSH signature, evidence, privacy,
+  lineage, and Concept membership, and only then begins durable I/O.
+- Four output paths must be pairwise distinct. Private and public leaves are
+  batch-preflighted before the first write, immutable writes never overwrite,
+  and the public seal is last so a crash can leave retryable orphans but no
+  authoritative root.
+- CLI preparation independently batch-preflights its two private candidates;
+  public models and receipts have explicit field allowlists and reject path or
+  label expansion in regression tests. CLI failures remain static and omit
+  private quotes, paths, and tracebacks.
+
+### Adversarial findings that changed the design
+
+1. Publishing Pass A labels would break Pass B blindness, while leaving A
+   private and mutable would permit rewriting after B. The neutral signed hash
+   commitment supplies both embargo and binding.
+2. A deterministic hash alone is not hiding for a finite label space. A
+   private random nonce now salts the worksheet and immutable artifact.
+3. One path DTO exposed the private artifact path to public-only consumers.
+   Separate public/private capability types now make that handoff impossible
+   without an explicit broader API.
+4. Checking a caller-issued Concept receipt in memory left coordinated nested
+   mutation and path substitution risks. Protocol, Source, Concept policy, and
+   all six Concept leaves are now replayed from repository-derived locations
+   and Git history.
+5. Replaying a Concept DAG with a caller-mutated reviewer policy could trust a
+   substituted signing key. The historical Concept policy is reconstructed
+   from its exact reachable registration commit before signature replay.
+6. Validating Signed data and later rereading the caller object created a
+   validation-to-publication TOCTOU window. Publication now uses only a deep,
+   hash-matched snapshot captured at entry.
+7. Signature/evidence validation after writing the root could leave an
+   immutable invalid seal. All cryptographic and private binding checks now run
+   before the first preflight/write and are repeated by post-write reload.
+8. Sequential preflight could discover a collision or later conflict after an
+   earlier leaf appeared. Paths are unique and all destinations preflight as a
+   batch; identical retry and seal-last recovery are tested explicitly.
+9. Treating policy availability as permanent would let a stale capability
+   authorize new work. Active revocation blocks authoring, while a separately
+   loaded historical authority preserves verification of old commitments.
+10. A receipt-format check did not bind
+    `acquisition_manifest_sha256` to the canonical protocol. Relation replay
+    now compares it with the protocol's acquisition binding before use.
+
+### Verification and honest claim boundary
+
+- Relation Pass A focused integration suite: `23 passed` in 292.38 seconds;
+- shared annotation boundary suite: `145 passed, 1 skipped` in 468.65 seconds;
+- complete backend regression: `1118 passed, 7 skipped, 1 warning` in 819.30
+  seconds;
+- the warning is the existing Starlette `httpx` deprecation warning;
+- the frozen real CS336 Lecture 3 Source-slice protocol regression passes with
+  the G0.2 derivation closure unchanged;
+- Python compileall, changed-Python 88-column scan, and `git diff --check`
+  pass;
+- independent final code review found no remaining P0/P1 in this checkpoint;
+- a separate documentation/claim audit found no label, nonce, private-path,
+  humanity, blindness, delay, accuracy, or gold-result overclaim after its
+  status-summary corrections;
+- remote change-level CI remains the push gate.
+
+The next software checkpoint is a Git-registered public Pass A commitment
+authority plus a typed readiness check based on repository history and the
+frozen 72-hour rule. Only after that boundary exists may Pass B initialization
+be implemented, and its tests must prove that it receives only public Pass A
+paths and never reads the hidden artifact. Real policy registration and every
+semantic decision remain maintainer-owned.

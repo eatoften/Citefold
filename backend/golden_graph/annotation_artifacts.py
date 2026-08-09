@@ -279,6 +279,30 @@ def publish_private_canonical_artifact(
     return digest
 
 
+def preflight_private_canonical_artifact(
+    path: Path,
+    artifact: BaseModel,
+    *,
+    repository_root: Path,
+) -> str:
+    """Validate an immutable private leaf without publishing any bytes."""
+
+    root = Path(repository_root).resolve(strict=True)
+    private_root = (root / "backend/data/golden_graph/annotations").resolve(
+        strict=True
+    )
+    _require_gitignored(root, path)
+    digest = preflight_canonical_artifact(
+        path,
+        artifact,
+        allowed_root=private_root,
+        reject_private_fields=False,
+    )
+    _require_gitignored(root, path)
+    _require_gitignored(root, path.with_suffix(".sha256"))
+    return digest
+
+
 def load_private_canonical_artifact(
     path: Path,
     model_type: type[_ArtifactModel],

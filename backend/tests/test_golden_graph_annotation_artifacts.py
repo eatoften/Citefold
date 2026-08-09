@@ -14,6 +14,7 @@ from golden_graph.annotation_artifacts import (
     CanonicalArtifactAuthority,
     load_canonical_artifact,
     preflight_canonical_artifact,
+    preflight_private_canonical_artifact,
     publish_canonical_artifact,
     read_private_worksheet_bytes,
     write_new_private_worksheet,
@@ -219,6 +220,34 @@ def test_private_boundary_rejects_force_added_ignored_file(
 
     with pytest.raises(AnnotationArtifactError, match="ignored and untracked"):
         read_private_worksheet_bytes(path, repository_root=tmp_path)
+
+
+def test_private_preflight_allows_private_schema_but_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    _initialize_private_repository(tmp_path)
+    private_root = tmp_path / "backend/data/golden_graph/annotations"
+    private_root.mkdir(parents=True)
+    path = private_root / "pass-a.private.json"
+    artifact = _PrivateFixtureArtifact(exact_quote="private Source fragment")
+
+    digest = preflight_private_canonical_artifact(
+        path,
+        artifact,
+        repository_root=tmp_path,
+    )
+
+    assert digest == hashlib.sha256(canonical_json_bytes(artifact)).hexdigest()
+    assert not path.exists()
+    assert not path.with_suffix(".sha256").exists()
+    path.write_bytes(b"conflicting private bytes\n")
+    with pytest.raises(AnnotationArtifactError, match="Conflicting immutable"):
+        preflight_private_canonical_artifact(
+            path,
+            artifact,
+            repository_root=tmp_path,
+        )
+    assert not path.with_suffix(".sha256").exists()
 
 
 def test_private_boundary_ignores_hostile_git_environment(
