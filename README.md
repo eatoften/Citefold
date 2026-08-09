@@ -6,13 +6,12 @@ with sentence-level citations, and provides Notes and a versioned Concept Graph.
 
 [Roadmap](docs/roadmap.md) | [Architecture decisions](docs/decisions/) |
 [Engineering log](docs/productization-log.md) |
-[Learning notes](docs/project-mastery-plan.md) |
-[Windows release](https://github.com/eatoften/Citefold/releases/latest)
+[Learning notes](docs/project-mastery-plan.md)
 
 > **Status:** The core local workflow is implemented, but the project is not
 > release-complete. Some package and UI identifiers still use the legacy
-> **Video Course Cards** name. The published `v0.1.1` Windows build predates the
-> latest Concept Graph workflow.
+> **Video Course Cards** name. The current supported entry point is the browser
+> frontend with a local backend; there is no supported desktop installer.
 
 ## Core data model
 
@@ -40,8 +39,7 @@ with sentence-level citations, and provides Notes and a versioned Concept Graph.
 | Graph-guided Chat | An explicit two-Concept question may attach the exact path from the active published GraphVersion; the route is persisted and shown with support basis and traversal direction | Exact name/alias matching only; the graph cannot add evidence or replace Source retrieval |
 | Notes | Free notes, save-answer-to-note with immutable citation provenance, revision-safe editing, and explicit Note-to-Source publication | Local single-user workflow; no collaboration or cloud sync |
 | Studio | Timestamped Cards, Study documents, FSRS Review, Course Map, Concept Graph Overview/Local/Trace/Learning views, evidence inspection, Draft Review, and compare-and-swap graph publication | No automatic Source-to-Concept promotion, human-reviewed gold graph, or Obsidian-scale overview yet |
-| Reliability | Persisted task progress, cancel/retry/restart recovery, autosaved drafts, conflict states, Trash/Undo, and validated workspace backup/restore | Durable browser E2E, full accessibility acceptance, and current release packaging remain open |
-| Desktop | Tauri 2 shell with an owned local FastAPI sidecar and SQLite workspace | Windows is the only exercised packaged target; current build is unsigned and model setup is user-managed |
+| Reliability | Persisted task progress, cancel/retry/restart recovery, autosaved drafts, conflict states, Trash/Undo, and validated workspace backup/restore | Durable browser E2E, full accessibility acceptance, and release acceptance remain open |
 
 ## Architecture
 
@@ -157,15 +155,13 @@ npm.cmd run dev
 Open `http://127.0.0.1:5174`. The FastAPI schema is available at
 `http://127.0.0.1:8001/docs`.
 
-For the packaged application, see [desktop setup and release constraints](docs/tauri-desktop.md).
-
 ## Repository map
 
 | Path | Responsibility |
 | --- | --- |
 | `backend/app/` | FastAPI routes, service/store boundaries, SQLite state, retrieval, citations, tasks, Notes, and Concept Graph |
 | `frontend/src/features/` | Product features for Sources, Chat, Notes, recovery, and Concept Graph |
-| `frontend/src-tauri/` | Windows desktop shell and backend sidecar lifecycle |
+| `frontend/src-tauri/` | Deferred desktop shell retained in source; not a current distribution target |
 | `backend/rag_lab/` | Isolated retrieval/generation experiments; not a product runtime dependency |
 | `backend/golden_graph/` | Frozen public-course protocol and human-gold tooling |
 | `docs/decisions/` | Architecture decision records |
@@ -219,7 +215,7 @@ graph-quality metrics.
 - durable browser E2E, complete keyboard/accessibility acceptance, and 1k/10k
   graph performance profiles;
 - recruiter-ready onboarding, a tracked screenshot/video demo, global search,
-  and the next signed desktop release;
+  and a public deployment model;
 - cloud sync, multi-user collaboration, and a plugin/API ecosystem. These are
   not implied by the current local personal-workspace scope.
 
