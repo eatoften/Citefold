@@ -4,9 +4,6 @@ Citefold is a local-first workspace for studying course videos and documents.
 It normalizes source material into one evidence model, supports multi-turn Chat
 with sentence-level citations, and provides Notes and a versioned Concept Graph.
 
-[Roadmap](docs/roadmap.md) | [Architecture decisions](docs/decisions/) |
-[Engineering log](docs/productization-log.md) |
-[Learning notes](docs/project-mastery-plan.md)
 
 > **Status:** The core local workflow is implemented, but the project is not
 > release-complete. Some package and UI identifiers still use the legacy
