@@ -4419,3 +4419,83 @@ Learning Path with no console warning or error. This proves a real
 Source-to-Graph-to-Path-to-Citation engineering slice; it does not measure
 Concept/Relation accuracy and is not human gold. The next user-visible stage is
 Draft Review/edit/publish in Studio, not additional evaluation infrastructure.
+
+## G4.2 Draft Review - Concept edit to immutable GraphVersion
+
+**Status:** User-visible authoring and publication loop implemented and
+browser-accepted; durable E2E and public quality gates remain open
+
+### Outcome
+
+Studio Explore now has a separate Review draft mode over the existing G1
+lifecycle and publication APIs:
+
+```text
+accepted Concept
+-> complete evidence-bound edit revision
+-> candidate review
+-> incident Relation becomes stale
+-> Relation edit binds current endpoint revisions
+-> Relation review uses that exact binding
+-> publication preview
+-> active-version + draft-manifest CAS publish
+-> immutable GraphVersion -> published Path View
+```
+
+The frontend did not add a second graph schema, form framework, client cache,
+or graph database. The container owns loading, selection, cancellation, and
+mutation orchestration; one presentation file owns the two editors and compact
+publication preview. Existing draft-lifecycle and publication services remain
+the only write authority.
+
+### Findings that changed the implementation
+
+1. Preserving an old form after a `409` while refreshing to the latest revision
+   would let a retry send old fields with a new `expected_revision`, defeating
+   CAS. Conflict handling now displays the server reason, resets to the latest
+   state, and requires an explicit re-edit; automatic merge is deferred.
+2. Relation edit and review need different revision sources. Edit binds the
+   current Concept heads; review submits the candidate Relation's stored
+   endpoint binding. Mixing them causes either stale edges or false conflicts.
+3. The publication service intentionally selects accepted/current heads. In a
+   real browser, an edited three-Concept/two-Relation graph therefore previewed
+   as publishable with only two Concepts/one Relation while its candidate was
+   pending. The UI now permits unrelated Relation work but blocks publication
+   while an active candidate or a repairable accepted/stale head remains,
+   preventing silent omission. Terminal merged/retired identities and relations
+   made obsolete by an explicitly rejected/terminal endpoint do not deadlock
+   publication.
+4. Saving unchanged Concept text would create a candidate revision and stale
+   every incident edge. Concept saves now require a real field change; Relation
+   saves require a rationale change or an endpoint rebind.
+5. Evidence review originally showed only an internal Chunk ID. It now displays
+   the typed Page/Slide/Time locator. Symmetric relation types render without a
+   directed arrow.
+6. The global 38-pixel button rule clipped Learning definitions and Draft queue
+   metadata. Feature-scoped auto-height rules fixed both without changing the
+   application-wide control system.
+
+### Acceptance and bounded verification
+
+The ignored CS336 engineering workspace was taken from GraphVersion v1 through
+one real edit/review/rebind/publish journey. Full Attention moved from revision
+2 to accepted revision 4; its prerequisite relation moved from stale revision
+3 to endpoint binding `(4, 2)` and accepted revision 5; CAS publication created
+v2. Published Trace still returned two hops, Learning still returned three
+layers, and the first edge opened the highlighted PDF page 65 quotation.
+
+Only two new component regressions were added: exact preview-CAS publication
+with stale-head/terminal-identity gating, and safe server-state reload after a
+`409`. Together with the existing graph
+workspace tests, the focused run passed `5` tests. The complete frontend suite
+passed `212` tests across `28` files; ESLint and the TypeScript/Vite production
+build pass. The public PDF and generated workspace remain ignored; this is not
+a human-reviewed gold graph or an accuracy claim.
+
+### Remaining boundary
+
+Grounded Chat does not yet consume Concept/path context. Draft evidence shows
+its Source locator but does not yet open the inspector directly from the editor.
+Durable browser E2E, narrow/keyboard/accessibility acceptance, 1k/10k path
+profiles, public graph-quality measurement, complete backend non-regression,
+merge to `main`, and a new desktop release remain required.

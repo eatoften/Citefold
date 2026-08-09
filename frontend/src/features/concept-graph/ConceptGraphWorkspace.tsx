@@ -12,6 +12,7 @@ import {
   getRelationshipTrace,
   listAllPublishedConcepts,
 } from './conceptGraphApi'
+import { ConceptGraphDraftReview } from './ConceptGraphDraftReview'
 import type {
   GraphEvidenceSelection,
   GraphVersionMetadata,
@@ -34,6 +35,7 @@ export type ConceptGraphWorkspaceProps = {
 }
 
 type View = 'overview' | 'local' | 'trace' | 'learning'
+type WorkspaceMode = 'published' | 'draft'
 type PathResult =
   | LocalGraphResult
   | RelationshipTraceResult
@@ -299,6 +301,7 @@ export function ConceptGraphWorkspace({
   onOpenEvidence,
 }: ConceptGraphWorkspaceProps) {
   const id = useId()
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('published')
   const [view, setView] = useState<View>('overview')
   const [graphState, setGraphState] = useState<GraphState>({ kind: 'idle' })
   const [pathState, setPathState] = useState<PathState>({ kind: 'idle' })
@@ -327,7 +330,7 @@ export function ConceptGraphWorkspace({
     setTraceTarget('')
     setLearningTarget('')
 
-    if (!selectedCourseId) {
+    if (workspaceMode !== 'published' || !selectedCourseId) {
       setGraphState({ kind: 'idle' })
       return
     }
@@ -394,7 +397,7 @@ export function ConceptGraphWorkspace({
       pathController.current?.abort()
       pathController.current = null
     }
-  }, [apiBaseUrl, refreshKey, selectedCourseId])
+  }, [apiBaseUrl, refreshKey, selectedCourseId, workspaceMode])
 
   const ready = graphState.kind === 'ready' ? graphState : null
   const concepts = ready?.concepts ?? []
@@ -457,21 +460,67 @@ export function ConceptGraphWorkspace({
     <div className="cg-workspace">
       <header className="cg-header">
         <div>
-          <p className="cg-kicker">Evidence-grounded understanding</p>
-          <h2>Concept graph</h2>
-          <p>Inspect Concepts, trace relationships, and open every edge's evidence.</p>
+          <p className="cg-kicker">
+            {workspaceMode === 'published'
+              ? 'Evidence-grounded understanding'
+              : 'Grounded authoring'}
+          </p>
+          <h2>
+            {workspaceMode === 'published' ? 'Concept graph' : 'Review draft'}
+          </h2>
+          <p>
+            {workspaceMode === 'published'
+              ? "Inspect Concepts, trace relationships, and open every edge's evidence."
+              : 'Review grounded candidates before they enter the published graph.'}
+          </p>
         </div>
         <div className="cg-header-actions">
-          <button
-            type="button"
-            disabled={!selectedCourseId || graphState.kind === 'loading'}
-            onClick={() => setRefreshKey((value) => value + 1)}
-          >
-            Refresh
-          </button>
+          <div className="cg-mode-switch" role="group" aria-label="Graph workspace">
+            <button
+              type="button"
+              aria-pressed={workspaceMode === 'published'}
+              onClick={() => setWorkspaceMode('published')}
+            >
+              Published
+            </button>
+            <button
+              type="button"
+              aria-pressed={workspaceMode === 'draft'}
+              onClick={() => setWorkspaceMode('draft')}
+            >
+              Review draft
+            </button>
+          </div>
+          {workspaceMode === 'published' && (
+            <button
+              type="button"
+              disabled={!selectedCourseId || graphState.kind === 'loading'}
+              onClick={() => setRefreshKey((value) => value + 1)}
+            >
+              Refresh
+            </button>
+          )}
         </div>
       </header>
 
+      {workspaceMode === 'draft' ? (
+        selectedCourseId ? (
+          <ConceptGraphDraftReview
+            apiBaseUrl={apiBaseUrl}
+            courseId={selectedCourseId}
+            onPublished={() => {
+              setWorkspaceMode('published')
+              setRefreshKey((value) => value + 1)
+            }}
+          />
+        ) : (
+          <section className="cg-state" role="status">
+            <h2>Select a course</h2>
+            <p>Choose a course to review its Concept graph draft.</p>
+          </section>
+        )
+      ) : (
+        <>
       {ready && <VersionIdentity version={ready.version} />}
       {graphState.kind === 'stale' && graphState.version && (
         <VersionIdentity version={graphState.version} />
@@ -811,6 +860,8 @@ export function ConceptGraphWorkspace({
               onOpenEvidence={onOpenEvidence}
             />
           </div>
+        </>
+      )}
         </>
       )}
     </div>

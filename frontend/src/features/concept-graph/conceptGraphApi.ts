@@ -1,5 +1,17 @@
 import type {
+  DraftConcept,
+  DraftConceptEditRequest,
+  DraftConceptPage,
+  DraftConceptReviewRequest,
+  DraftConceptSummary,
+  DraftRelation,
+  DraftRelationEditRequest,
+  DraftRelationPage,
+  DraftRelationReviewRequest,
+  DraftRelationSummary,
   GraphDirectionMode,
+  GraphPublicationPreview,
+  GraphPublicationRequest,
   GraphVersionMetadata,
   LearningPathResult,
   LocalGraphResult,
@@ -12,6 +24,11 @@ type ApiErrorDetail = {
   code?: unknown
   message?: unknown
   version?: unknown
+}
+
+type MutationOptions = {
+  method: 'POST' | 'PATCH'
+  body: unknown
 }
 
 export class ConceptGraphApiError extends Error {
@@ -45,10 +62,24 @@ async function request<T>(
   apiBaseUrl: string,
   path: string,
   signal?: AbortSignal,
+  mutation?: MutationOptions,
 ): Promise<T> {
+  const init: RequestInit = {
+    headers: mutation
+      ? {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        }
+      : { Accept: 'application/json' },
+    signal,
+  }
+  if (mutation) {
+    init.method = mutation.method
+    init.body = JSON.stringify(mutation.body)
+  }
   const response = await fetch(
     `${apiBaseUrl.replace(/\/$/, '')}${path}`,
-    { headers: { Accept: 'application/json' }, signal },
+    init,
   )
   if (response.ok) return response.json() as Promise<T>
 
@@ -73,6 +104,176 @@ async function request<T>(
     // Retain the status fallback when the server did not return JSON.
   }
   throw new ConceptGraphApiError(message, response.status, code, version)
+}
+
+export async function listAllDraftConcepts(
+  apiBaseUrl: string,
+  courseId: string,
+  signal?: AbortSignal,
+): Promise<DraftConceptSummary[]> {
+  const concepts: DraftConceptSummary[] = []
+  const seenCursors = new Set<string>()
+  let cursor: string | null = null
+  do {
+    const parameters = new URLSearchParams({ limit: '20' })
+    if (cursor) parameters.set('cursor', cursor)
+    const page = await request<DraftConceptPage>(
+      apiBaseUrl,
+      `/courses/${pathId(courseId)}/concepts?${parameters}`,
+      signal,
+    )
+    concepts.push(...page.items)
+    if (page.next_cursor && seenCursors.has(page.next_cursor)) {
+      throw new ConceptGraphApiError(
+        'Draft Concept pagination returned a repeated cursor.',
+        500,
+      )
+    }
+    if (page.next_cursor) seenCursors.add(page.next_cursor)
+    cursor = page.next_cursor
+  } while (cursor)
+  return concepts
+}
+
+export function getDraftConcept(
+  apiBaseUrl: string,
+  courseId: string,
+  conceptId: string,
+  signal?: AbortSignal,
+): Promise<DraftConcept> {
+  return request(
+    apiBaseUrl,
+    `/courses/${pathId(courseId)}/concepts/${pathId(conceptId)}`,
+    signal,
+  )
+}
+
+export function editDraftConcept(
+  apiBaseUrl: string,
+  courseId: string,
+  conceptId: string,
+  payload: DraftConceptEditRequest,
+  signal?: AbortSignal,
+): Promise<DraftConcept> {
+  return request(
+    apiBaseUrl,
+    `/courses/${pathId(courseId)}/concepts/${pathId(conceptId)}`,
+    signal,
+    { method: 'PATCH', body: payload },
+  )
+}
+
+export function reviewDraftConcept(
+  apiBaseUrl: string,
+  courseId: string,
+  conceptId: string,
+  payload: DraftConceptReviewRequest,
+  signal?: AbortSignal,
+): Promise<DraftConcept> {
+  return request(
+    apiBaseUrl,
+    `/courses/${pathId(courseId)}/concepts/${pathId(conceptId)}/review`,
+    signal,
+    { method: 'POST', body: payload },
+  )
+}
+
+export async function listAllDraftRelations(
+  apiBaseUrl: string,
+  courseId: string,
+  signal?: AbortSignal,
+): Promise<DraftRelationSummary[]> {
+  const relations: DraftRelationSummary[] = []
+  const seenCursors = new Set<string>()
+  let cursor: string | null = null
+  do {
+    const parameters = new URLSearchParams({ limit: '20' })
+    if (cursor) parameters.set('cursor', cursor)
+    const page = await request<DraftRelationPage>(
+      apiBaseUrl,
+      `/courses/${pathId(courseId)}/concept-relations?${parameters}`,
+      signal,
+    )
+    relations.push(...page.items)
+    if (page.next_cursor && seenCursors.has(page.next_cursor)) {
+      throw new ConceptGraphApiError(
+        'Draft relation pagination returned a repeated cursor.',
+        500,
+      )
+    }
+    if (page.next_cursor) seenCursors.add(page.next_cursor)
+    cursor = page.next_cursor
+  } while (cursor)
+  return relations
+}
+
+export function getDraftRelation(
+  apiBaseUrl: string,
+  courseId: string,
+  relationId: string,
+  signal?: AbortSignal,
+): Promise<DraftRelation> {
+  return request(
+    apiBaseUrl,
+    `/courses/${pathId(courseId)}/concept-relations/${pathId(relationId)}`,
+    signal,
+  )
+}
+
+export function editDraftRelation(
+  apiBaseUrl: string,
+  courseId: string,
+  relationId: string,
+  payload: DraftRelationEditRequest,
+  signal?: AbortSignal,
+): Promise<DraftRelation> {
+  return request(
+    apiBaseUrl,
+    `/courses/${pathId(courseId)}/concept-relations/${pathId(relationId)}`,
+    signal,
+    { method: 'PATCH', body: payload },
+  )
+}
+
+export function reviewDraftRelation(
+  apiBaseUrl: string,
+  courseId: string,
+  relationId: string,
+  payload: DraftRelationReviewRequest,
+  signal?: AbortSignal,
+): Promise<DraftRelation> {
+  return request(
+    apiBaseUrl,
+    `/courses/${pathId(courseId)}/concept-relations/${pathId(relationId)}/review`,
+    signal,
+    { method: 'POST', body: payload },
+  )
+}
+
+export function getGraphPublicationPreview(
+  apiBaseUrl: string,
+  courseId: string,
+  signal?: AbortSignal,
+): Promise<GraphPublicationPreview> {
+  return request(
+    apiBaseUrl,
+    `/courses/${pathId(courseId)}/concept-graph/publication-preview`,
+    signal,
+  )
+}
+
+export function publishGraphVersion(
+  apiBaseUrl: string,
+  courseId: string,
+  payload: GraphPublicationRequest,
+  signal?: AbortSignal,
+): Promise<GraphVersionMetadata> {
+  return request(
+    apiBaseUrl,
+    `/courses/${pathId(courseId)}/concept-graph/versions`,
+    signal,
+    { method: 'POST', body: payload },
+  )
 }
 
 export function getCurrentGraphVersion(

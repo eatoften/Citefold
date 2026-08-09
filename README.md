@@ -77,7 +77,11 @@ Implemented:
   stable Kahn Learning Path, with evidence-bearing DTOs and result hashes;
 - a G4 Studio Explore slice over the published Concept Graph: Overview, Local,
   Trace, and Learning views, relation rationale inspection, and server-owned
-  evidence navigation back to the exact Source location.
+  evidence navigation back to the exact Source location;
+- a G4 Draft Review workspace that edits complete evidence-bound Concept and
+  Relation revisions, exposes Source locators during review, repairs stale
+  endpoint bindings, records accept/reject decisions, previews the publication
+  snapshot, and publishes a new immutable GraphVersion with compare-and-swap.
 
 P0.4 reorganized the application around this product navigation:
 
@@ -151,9 +155,12 @@ engine and exact-version APIs. G2.4's Git-derived 72-hour readiness tooling is
 explicitly deferred while the product closes the visible graph loop. The first
 G4 product slice now replaces the CardRelation Explore entry with a published
 Concept Graph workspace and resolves Concept/Relation evidence through the
-same hardened Source inspector used by Chat. Automatic Understanding, real
-Relation gold, an Obsidian-style overview, durable browser E2E, public-course
-path evaluation, and performance acceptance remain roadmap work. See the
+same hardened Source inspector used by Chat. Its Draft Review mode now closes
+the Concept edit -> incident Relation invalidation -> current-endpoint rebind
+-> evidence review -> CAS publication loop. Automatic Understanding, real
+Relation gold, graph-aware Chat, an Obsidian-style overview, durable browser
+E2E, public-course path evaluation, and performance acceptance remain roadmap
+work. See the
 [active roadmap](docs/roadmap.md),
 [graph decision record](docs/decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md),
 [staged-human-gold decision](docs/decisions/ADR-0010-staged-human-gold-and-key-control-attestation.md),
@@ -602,7 +609,7 @@ gitignored.
 
 The latest complete backend regression, at the G3 checkpoint, passed `1125`
 tests with `7` skipped. The G4-focused path/publication/citation regression
-passes `36` tests with `1` skipped, and all `210` frontend tests pass. Python
+passes `36` tests with `1` skipped, and all `212` frontend tests pass. Python
 bytecode compilation, frontend ESLint, the TypeScript/Vite production build,
 `git diff --check`, and the production-dependency high-severity npm audit also
 pass. After removing the unreachable legacy force graph, the production build
@@ -622,6 +629,13 @@ each relation opened its evidence on PDF page 65 or 66; and Learning returned
 the three expected layers. The browser console had no warnings or errors. This
 is an automated-fixture/manual-browser engineering acceptance record, not
 human gold, an accuracy result, or a durable E2E suite.
+
+The Draft Review continuation was exercised against a fresh copy of that
+workspace: edit Full Attention at revision 2 -> accept revision 4 -> repair the
+stale prerequisite against endpoint revisions `(4, 2)` -> accept relation
+revision 5 -> publish GraphVersion v2. The published graph retained the same
+two-hop Trace, three Learning layers, and page-65 Source evidence. This remains
+a manual engineering acceptance over an imported fixture, not human gold.
 
 | Experiment | Main entry point | Record |
 | --- | --- | --- |
