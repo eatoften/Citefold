@@ -2,13 +2,12 @@
 
 Last updated: 2026-08-09
 
-这套笔记用于让项目维护者最终能够独立解释、修改、调试和重建 Video
-Course Cards 的关键纵向系统。它不是另一本产品路线图，也不是把框架文档
-复制一遍。
+这套笔记用于让项目维护者最终能够独立解释、修改、调试和重建 Citefold
+的关键纵向系统。它不是产品路线图，也不是把框架文档复制一遍。
 
-- [roadmap.md](../roadmap.md) 记录产品先做什么；
-- [project-mastery-plan.md](../project-mastery-plan.md) 记录掌握门槛；
 - [productization-log.md](../productization-log.md) 记录已经完成的工程事实；
+- [decisions](../decisions/) 记录重要架构选择与被拒绝的替代方案；
+- [modules](../modules/) 记录各纵向模块的实现契约；
 - 本目录记录“技术是什么、项目在哪里使用、为什么这样选、如何失败、如何
   测试，以及维护者是否真的会”。
 
@@ -18,14 +17,14 @@ Course Cards 的关键纵向系统。它不是另一本产品路线图，也不�
    ADR 和 commit，不能只写通用八股。
 2. **Codex 写出的内容默认是 Draft。** 维护者闭卷复述、完成亲手修改并通过验收
    后，才可以把对应掌握等级从 M0/M1 提升。
-3. **产品完成度和个人掌握度分开。** 已经有 681 个后端测试并不代表维护者会
+3. **产品完成度和个人掌握度分开。** 已经有大量自动化测试并不代表维护者会
    设计其事务；能背出 BFS 也不代表图谱证据链已经实现。
 4. **只记录有证据的技术。** 不为了简历加入 Kubernetes、微服务、Neo4j 或云
    架构；只有真实实现或测量后才能写进技术栈。
 5. **每次学习必须留下一个 ownership artifact。** 可接受形式包括数据流图、
    ER 图、状态机、测试、Bug 修复、性能记录、失败分析或用户独立 commit。
 
-掌握等级沿用 [M0-M4](../project-mastery-plan.md#mastery-levels)：
+掌握等级统一使用 M0-M4：
 
 ```text
 M0 未评估
@@ -41,7 +40,7 @@ M4 能比较方案、量化取舍并完成 system-design defense
 
 | 领域 | 当前技术 | 在项目中的责任 | 必须掌握的核心问题 | 代码入口 | 当前掌握 |
 | --- | --- | --- | --- | --- | --- |
-| 版本与交付 | Git, GitHub, conventional commits | 分支、阶段 commit、remote equality、release history | fast-forward/merge/rebase 区别；如何验证推送的是同一提交；如何回滚 | [release workflow](../../.github/workflows/windows-desktop-release.yml), [engineering log](../productization-log.md) | M0 |
+| 版本与交付 | Git, GitHub, conventional commits, GitHub Actions | 分支、阶段 commit、remote equality、change-level CI | fast-forward/merge/rebase 区别；如何验证推送的是同一提交；如何回滚 | [CI workflow](../../.github/workflows/ci.yml), [engineering log](../productization-log.md) | M0 |
 | 后端语言 | Python 3.11 | 领域模型、服务、store、任务、实验 | 类型边界、异常翻译、依赖注入、context manager、可测试纯函数 | [main.py](../../backend/app/main.py), [pyproject.toml](../../backend/pyproject.toml) | M0 |
 | HTTP/API | FastAPI, Pydantic | 本地 typed REST 边界、验证、错误码、OpenAPI | route/schema/service/store 分层；404/409/422/500；幂等请求 | [main.py](../../backend/app/main.py), [course_source.py](../../backend/app/course_source.py) | M0 |
 | 数据库 | SQLite, Python `sqlite3` | 本地 source of truth | keys、FK、unique、index、query plan、transaction、`BEGIN IMMEDIATE`、CAS | [db.py](../../backend/app/db.py), [migrations.py](../../backend/app/migrations.py) | M0 |
@@ -62,7 +61,6 @@ M4 能比较方案、量化取舍并完成 system-design defense
 | 前端测试 | Vitest, Testing Library, jsdom | 组件行为、路由、竞态和基础语义/键盘行为回归 | user-observable assertions、mock boundary、fake timers、Strict Mode；真实浏览器 E2E 与完整 accessibility audit 仍是缺口 | [vitest.config.ts](../../frontend/vitest.config.ts), [Concept Graph tests](../../frontend/src/features/concept-graph/ConceptGraphWorkspace.test.tsx) | M0 |
 | 概念路径 | relational graph + BFS/Kahn | evidence-grounded Local、Trace 与 prerequisite Learning Path | graph version、方向、确定性、bounded miss、复杂度 | [path engine](../modules/concept-graph-path-engine.md), [implementation](../../backend/app/concept_graph_path.py) | Draft/M0 |
 | 图谱证据工作区 | React typed state + shared CitationInspector | 展示 published Concept path，并让每条边回到原 Source | server-owned order、composite evidence identity、AbortController + epoch、snapshot-only drift | [workspace](../modules/concept-graph-evidence-workspace.md), [implementation](../../frontend/src/features/concept-graph/ConceptGraphWorkspace.tsx) | Draft/M0 |
-| 桌面运行时 | Tauri 2, Rust, PyInstaller | Windows 包装、本地 backend sidecar 生命周期 | process identity、port ownership、shutdown、managed paths、locked build | [backend.rs](../../frontend/src-tauri/src/backend.rs), [Cargo.toml](../../frontend/src-tauri/Cargo.toml) | M0 |
 | Topic 聚类 | scikit-learn `AgglomerativeClustering` | 从 Card 提议可编辑 Topic 分组 | feature scaling、distance threshold、cluster stability、proposal 不是真值 | [topic_suggestion_service.py](../../backend/app/topic_suggestion_service.py) | M0 |
 
 ### 版本与所有权来源
@@ -71,12 +69,10 @@ M4 能比较方案、量化取舍并完成 system-design defense
   [backend/pyproject.toml](../../backend/pyproject.toml) 和 `uv.lock`；
 - React/TypeScript/Vite/Vitest 来自
   [frontend/package.json](../../frontend/package.json) 和 `package-lock.json`；
-- Tauri/Rust 依赖来自
-  [Cargo.toml](../../frontend/src-tauri/Cargo.toml) 和 `Cargo.lock`；
 - FFmpeg/ffprobe、Ollama-compatible server 和本地模型属于 external runtime，
   不是 Python/Node 包；必须分别检查可执行文件、模型身份和失败状态；
-- RapidOCR 可能在内部使用其他库，但只有仓库直接声明和实际调用的依赖才
-  能作为本项目主动掌握/使用的技术栈来陈述。
+- 只有仓库直接声明和实际调用的依赖才能作为本项目主动掌握或使用的技术栈
+  来陈述。
 
 ### 当前没有使用或尚未达到的技术
 
@@ -88,11 +84,10 @@ M4 能比较方案、量化取舍并完成 system-design defense
 - React Router（项目使用自有 typed query-route/history contract）；
 - 直接 OpenCV/`cv2` 依赖；
 - Playwright 自动化浏览器 E2E；
-- 常规 PR/push 全栈 CI；
 - Ruff/mypy 后端静态质量门。
 
 其中一部分是有意识的当前设计（例如 SQLite 而不是 Neo4j），另一部分是
-P1.4/G4 的真实工程缺口（例如 change-level CI 和自动化 E2E）。面试时必须
+真实工程缺口（例如自动化浏览器 E2E 和公共部署）。面试时必须
 能区分“没有必要使用”和“尚未完成”。
 
 ## 深挖顺序

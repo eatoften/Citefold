@@ -583,8 +583,6 @@ open.
 
 ## Related records
 
-- [Active product roadmap](../roadmap.md)
-- [Project mastery plan](../project-mastery-plan.md)
 - [Draft graph annotation protocol](../graph-annotation-protocol.md)
 - [Technical-stack learning notebook](../learning/README.md)
 - [Graph as associative knowledge structure](../Graph%20as%20associative%20knowledge%20structure.md)

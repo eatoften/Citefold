@@ -1,12 +1,12 @@
 # Productization Log
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 This append-only log records verified product engineering work. It exists to
 preserve the reasoning behind the implementation, not to advertise unverified
-features. The forward-looking source of truth is
-[`roadmap.md`](roadmap.md); major architectural decisions are recorded in
-[`decisions`](decisions).
+features. It is a historical engineering record, not an active roadmap. Major
+architectural decisions are recorded in [`decisions`](decisions), and the
+maintainer learning path is kept in [`learning`](learning).
 
 ## Entry format
 
@@ -4643,3 +4643,30 @@ now loads it after successful evidence selection, immediately before
 generation, reducing the window in which a concurrent Source reprojection
 could leave a stale route attached to a newer evidence set. No new subsystem
 or graph cache was introduced.
+
+## Documentation scope correction - remove superseded plans
+
+**Status:** Complete; deleted files remain recoverable from Git history
+
+The repository accumulated several documents that described different moments
+as if each were the current plan: an early MVP progress sheet, two product/RAG
+roadmaps, a desktop packaging roadmap, a release checklist centered on a now
+withdrawn installer, a large portfolio mastery plan, and a paused adaptive
+retrieval proposal. Their useful decisions had already landed in code, ADRs,
+module contracts, the append-only log, or focused learning handoffs. Keeping all
+seven in the active tree made it harder to distinguish current implementation
+from abandoned sequencing.
+
+The cleanup removes those seven planning documents and their live links. It
+does not delete architecture records, implemented module documentation, the
+technical learning notebook, public-course evaluation evidence, RAG/Graph
+findings, or reproducible experiment artifacts. In particular,
+`docs/graph-annotation-protocol.md` remains byte-for-byte untouched because its
+path and SHA-256 are part of a frozen executable protocol checked by code and
+tests.
+
+The maintained learning entry point is now `docs/learning/README.md`. It defines
+the M0-M4 ownership scale locally and points to real code, ADRs, modules, tests,
+and failure boundaries. The root README describes the product rather than
+advertising internal plans. No runtime code, schema, dependency, model, test, or
+product behavior changed in this documentation-only cleanup.

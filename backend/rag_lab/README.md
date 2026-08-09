@@ -174,6 +174,7 @@ This smoke runner is development-only. It refuses the test split even after the
 existing formal review gate; confirmatory access remains blocked until the v2
 one-use access ledger and separated test-gold loader are implemented.
 
-The complete research thesis, falsification criteria, phases, and current
-limitations are recorded in
-`docs/Reasoning-guided adaptive retrieval research plan.md`.
+The retained historical findings and their limitations are summarized in
+`docs/RAG retrieval and graph study.md` and
+`docs/Graph as associative knowledge structure.md`. The controller smoke path
+remains development-only and is not a current product milestone.

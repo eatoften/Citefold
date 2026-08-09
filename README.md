@@ -4,7 +4,6 @@ Citefold is a local-first workspace for studying course videos and documents.
 It normalizes source material into one evidence model, supports multi-turn Chat
 with sentence-level citations, and provides Notes and a versioned Concept Graph.
 
-
 > **Status:** The core local workflow is implemented, but the project is not
 > release-complete. Some package and UI identifiers still use the legacy
 > **Video Course Cards** name. The current supported entry point is the browser
@@ -216,9 +215,8 @@ graph-quality metrics.
 - cloud sync, multi-user collaboration, and a plugin/API ecosystem. These are
   not implied by the current local personal-workspace scope.
 
-The active sequence is maintained in the [roadmap](docs/roadmap.md). Detailed
-tradeoffs and problems are recorded in the
-[engineering log](docs/productization-log.md), while
+Detailed implementation history, tradeoffs, and failures are recorded in the
+[engineering log](docs/productization-log.md). The
 [ADR-0008](docs/decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md)
 defines the graph and Source-authority boundary.
 
