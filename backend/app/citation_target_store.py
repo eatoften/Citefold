@@ -28,6 +28,10 @@ class CitationSnapshotRecord:
     current_chunk_ordinal: int | None
     current_chunk_active: bool | None
     context: tuple[CitationContextRecord, ...] = ()
+    projection_generation_id: str | None = None
+    current_projection_generation_id: str | None = None
+    current_source_status: str | None = None
+    source_root_current: bool | None = None
 
 
 @dataclass(frozen=True)

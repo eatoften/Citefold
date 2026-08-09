@@ -3,6 +3,20 @@ import type {
   SourceType,
 } from '../sources/sourceTypes'
 
+export type SourceEvidenceSnapshot = {
+  id: string
+  source_title: string
+  source_type: SourceType
+  quote: string
+  locator: SourceLocator
+}
+
+export type CitationTargetResolver = {
+  scopeKey: string
+  targetPath: string
+  contentPath: string
+}
+
 export type CitationTargetAvailability =
   | 'available'
   | 'snapshot_only'

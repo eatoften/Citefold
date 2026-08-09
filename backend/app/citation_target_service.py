@@ -202,7 +202,49 @@ def resolve_citation_target(
     *,
     media_url: str | None = None,
 ) -> CitationTargetResponse:
-    resolution = _resolve(course_id, citation_id, keep_open=False)
+    return _target_response(
+        _resolve(course_id, citation_id, keep_open=False),
+        media_url=media_url,
+    )
+
+
+def resolve_citation_content(
+    course_id: str,
+    citation_id: str,
+) -> ManagedCitationFile:
+    return _resolved_content(_resolve(course_id, citation_id, keep_open=True))
+
+
+def resolve_source_evidence_target(
+    course_id: str,
+    record: CitationSnapshotRecord,
+    *,
+    media_url: str | None = None,
+) -> CitationTargetResponse:
+    """Resolve another server-owned evidence snapshot through citation policy."""
+
+    return _target_response(
+        _resolve_snapshot(course_id, record, keep_open=False),
+        media_url=media_url,
+    )
+
+
+def resolve_source_evidence_content(
+    course_id: str,
+    record: CitationSnapshotRecord,
+) -> ManagedCitationFile:
+    """Open content for another server-owned evidence snapshot safely."""
+
+    return _resolved_content(
+        _resolve_snapshot(course_id, record, keep_open=True)
+    )
+
+
+def _target_response(
+    resolution: CitationResolution,
+    *,
+    media_url: str | None,
+) -> CitationTargetResponse:
     if resolution.managed_file is None:
         return resolution.target
     return resolution.target.model_copy(
@@ -213,11 +255,7 @@ def resolve_citation_target(
     )
 
 
-def resolve_citation_content(
-    course_id: str,
-    citation_id: str,
-) -> ManagedCitationFile:
-    resolution = _resolve(course_id, citation_id, keep_open=True)
+def _resolved_content(resolution: CitationResolution) -> ManagedCitationFile:
     if resolution.managed_file is not None:
         return resolution.managed_file
     raise CitationContentUnavailableError(
@@ -240,10 +278,20 @@ def _resolve(
     *,
     keep_open: bool,
 ) -> CitationResolution:
-    if get_course(course_id) is None:
-        raise CitationTargetNotFoundError("Citation not found.")
     record = get_citation_snapshot_for_course(course_id, citation_id)
     if record is None:
+        raise CitationTargetNotFoundError("Citation not found.")
+
+    return _resolve_snapshot(course_id, record, keep_open=keep_open)
+
+
+def _resolve_snapshot(
+    course_id: str,
+    record: CitationSnapshotRecord,
+    *,
+    keep_open: bool,
+) -> CitationResolution:
+    if get_course(course_id) is None:
         raise CitationTargetNotFoundError("Citation not found.")
 
     try:
@@ -253,6 +301,15 @@ def _resolve(
             record,
             reason="unsupported_locator",
             message="This historical citation uses an unsupported locator.",
+        )
+
+    projection_problem = _projection_source_problem(record)
+    if projection_problem is not None:
+        return _snapshot_only(
+            record,
+            reason=projection_problem[0],
+            message=projection_problem[1],
+            media_kind=_media_kind(record.source_type, locator),
         )
 
     if isinstance(locator, NotebookNoteSectionLocator):
@@ -451,6 +508,24 @@ def _resolve_notebook_note_snapshot(
         ),
         managed_file=None,
     )
+
+
+def _projection_source_problem(
+    record: CitationSnapshotRecord,
+) -> tuple[str, str] | None:
+    if record.projection_generation_id is None:
+        return None
+    if (
+        record.current_projection_generation_id
+        != record.projection_generation_id
+        or record.current_source_status != "ready"
+        or record.source_root_current is not True
+    ):
+        return (
+            "source_changed",
+            "The cited source changed after this evidence was published.",
+        )
+    return None
 
 
 def _canonical_source_problem(

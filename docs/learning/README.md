@@ -58,9 +58,9 @@ M4 能比较方案、量化取舍并完成 system-design defense
 | 本地数据恢复 | SQLite backup API, Trash, drafts | autosave、撤销、删除恢复、完整备份/恢复 | snapshot consistency、managed files、write-ahead fence、restart ownership | [workspace_backup.py](../../backend/app/workspace_backup.py), [backup tests](../../backend/tests/test_workspace_backup.py) | M0 |
 | 学习调度 | FSRS | 独立 ReviewItem 的间隔重复 | retrievability vs memory、scheduler state、rating transition、测试时钟 | [review_service.py](../../backend/app/review_service.py) | M0 |
 | 前端 | React 19, TypeScript 6, Vite 8 | Sources/Chat/Studio UI 与异步状态 | component boundary、effect cleanup、AbortController、stale response、typed routes | [App.tsx](../../frontend/src/App.tsx), [navigation contract](../../frontend/src/features/navigation/appRoute.ts) | M0 |
-| 前端测试 | Vitest, Testing Library, jsdom | 组件行为、路由、竞态和基础语义/键盘行为回归 | user-observable assertions、mock boundary、fake timers、Strict Mode；真实浏览器 E2E 与完整 accessibility audit 仍是缺口 | [vitest.config.ts](../../frontend/vitest.config.ts), [Graph tests](../../frontend/src/GraphView.test.tsx) | M0 |
-| 当前图探索 | react-force-graph-2d + CardRelation | similarity/manual/model-assisted Card 图 | force layout 只是视图；Card 不等于 Concept；候选边不等于事实 | [GraphView.tsx](../../frontend/src/GraphView.tsx), [card_relation_service.py](../../backend/app/card_relation_service.py) | Session 1 |
+| 前端测试 | Vitest, Testing Library, jsdom | 组件行为、路由、竞态和基础语义/键盘行为回归 | user-observable assertions、mock boundary、fake timers、Strict Mode；真实浏览器 E2E 与完整 accessibility audit 仍是缺口 | [vitest.config.ts](../../frontend/vitest.config.ts), [Concept Graph tests](../../frontend/src/features/concept-graph/ConceptGraphWorkspace.test.tsx) | M0 |
 | 概念路径 | relational graph + BFS/Kahn | evidence-grounded Local、Trace 与 prerequisite Learning Path | graph version、方向、确定性、bounded miss、复杂度 | [path engine](../modules/concept-graph-path-engine.md), [implementation](../../backend/app/concept_graph_path.py) | Draft/M0 |
+| 图谱证据工作区 | React typed state + shared CitationInspector | 展示 published Concept path，并让每条边回到原 Source | server-owned order、composite evidence identity、AbortController + epoch、snapshot-only drift | [workspace](../modules/concept-graph-evidence-workspace.md), [implementation](../../frontend/src/features/concept-graph/ConceptGraphWorkspace.tsx) | Draft/M0 |
 | 桌面运行时 | Tauri 2, Rust, PyInstaller | Windows 包装、本地 backend sidecar 生命周期 | process identity、port ownership、shutdown、managed paths、locked build | [backend.rs](../../frontend/src-tauri/src/backend.rs), [Cargo.toml](../../frontend/src-tauri/Cargo.toml) | M0 |
 | Topic 聚类 | scikit-learn `AgglomerativeClustering` | 从 Card 提议可编辑 Topic 分组 | feature scaling、distance threshold、cluster stability、proposal 不是真值 | [topic_suggestion_service.py](../../backend/app/topic_suggestion_service.py) | M0 |
 | ML/多模态实验 | PyTorch, ONNX Runtime, RapidOCR | OCR/CTC 与 RAG 的隔离、可复现实验 | split、artifact hash、overfit gate、metrics、negative result、product/research boundary | [multimodal lab](../../backend/multimodal_lab/README.md), [RAG study](../RAG%20retrieval%20and%20graph%20study.md) | M0 |
@@ -158,6 +158,7 @@ P1.4/G4 的真实工程缺口（例如 change-level CI 和自动化 E2E）。面
 | Session 2 | additive graph migration 与 ER/transaction contract | G1 | M1 -> M2 | Planned |
 | Session 3 | Concept API vertical slice 与 course isolation | G1 | M1 -> M2 | Planned |
 | [G3 handoff](g3-deterministic-path-engine-handoff.md) | BFS、方向、bounded Trace 与 Kahn Learning Path | G3 | M0 -> M2 | Draft |
+| [G4 handoff](g4-evidence-path-workspace-handoff.md) | React 异步状态、复合证据身份与安全回源 | G4 | M0 -> M2 | Draft |
 
 ## 专题深挖
 
@@ -169,6 +170,10 @@ P1.4/G4 的真实工程缺口（例如 change-level CI 和自动化 E2E）。面
 - [G3 确定性路径引擎](g3-deterministic-path-engine-handoff.md)
   （G3 backend，Draft/M0）：exact GraphVersion、BFS、Kahn、稳定破平局、
   authority failure，以及为什么 bounded miss 不等于 unreachable。
+- [G4 证据路径工作区](g4-evidence-path-workspace-handoff.md)
+  （G4 product slice，Draft/M0）：server-owned path order、React request
+  cancellation、Graph evidence composite identity、CitationInspector 复用与
+  Source drift 降级。
 
 ## 复习总账
 

@@ -374,8 +374,9 @@ and human acceptance.
 - clean installation and upgrade from the current schema both pass;
 - Card, Topic, Source, Chat, Note, task, and recovery data is not reset;
 - a failed migration leaves no partially published schema;
-- the existing CardRelation and Explore features remain compatible until an
-  explicit replacement gate.
+- existing Card, Topic, and CardRelation data/APIs remain compatible; the old
+  Explore UI may be removed only at an explicit G4 replacement gate after the
+  Concept path and evidence loop passes browser acceptance.
 
 ### Data integrity
 
@@ -536,7 +537,12 @@ Costs and risks:
   educational effectiveness.
 
 The mitigation is to keep each phase small, additive, independently tested,
-and reversible, and to retain the current Explore experience until G4 passes.
+and reversible. The old Explore experience was retained through G3. On
+2026-08-09, the first G4 Concept Path -> Relation -> Source slice passed manual
+browser acceptance and became the explicit product replacement; the now-dead
+CardRelation `GraphView` was removed while its Git history and backend data/API
+compatibility were preserved. Full G4 quality and release acceptance remain
+open.
 
 ## Related records
 

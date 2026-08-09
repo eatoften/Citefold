@@ -4,9 +4,10 @@ import hashlib
 import json
 import sqlite3
 from sqlite3 import IntegrityError, OperationalError
-from typing import Callable, TypeVar
+from typing import Callable, Literal, TypeVar
 
 from . import course_service
+from .citation_target_store import CitationSnapshotRecord
 from .concept_graph_publication import (
     GraphPublicationPreview,
     GraphPublicationRequest,
@@ -23,6 +24,7 @@ from .concept_graph_publication_store import (
     PublicationNotFoundError,
     PublicationOperationReuseError,
     PublicationTooLargeError,
+    get_version_evidence_snapshot,
     get_current_version,
     get_version,
     list_version_concepts,
@@ -199,6 +201,26 @@ def load_course_graph_snapshot(
     course = _require_course(course_id)
     return _run_store(
         lambda: load_version_graph_snapshot(course.id, version_number)
+    )
+
+
+def get_course_version_evidence_snapshot(
+    course_id: str,
+    version_number: int,
+    *,
+    owner_type: Literal["concept", "relation"],
+    owner_id: str,
+    evidence_id: str,
+) -> CitationSnapshotRecord:
+    course = _require_course(course_id)
+    return _run_store(
+        lambda: get_version_evidence_snapshot(
+            course.id,
+            version_number,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            evidence_id=evidence_id,
+        )
     )
 
 

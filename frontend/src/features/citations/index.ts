@@ -4,6 +4,7 @@ export {
   formatCitationTime,
   formatSourceLocator,
   pdfUrlAtPage,
+  resolveApiMediaUrl,
   resolveCitationMediaUrl,
   restoreCitationFocus,
   segmentCitationQuote,
@@ -15,4 +16,6 @@ export type {
   CitationTarget,
   CitationTargetAvailability,
   CitationTargetContextChunk,
+  CitationTargetResolver,
+  SourceEvidenceSnapshot,
 } from './citationTypes'

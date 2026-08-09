@@ -29,8 +29,9 @@ Published GraphVersion
 | Algorithms/DTO | `backend/app/concept_graph_path.py` | adjacency、BFS、Kahn、顺序和 hash |
 | Tests | `backend/tests/test_concept_graph_path*.py` | 算法反例与真实 API/SQLite 集成 |
 
-旧的 `card_relation_service.py` 和 `GraphView.tsx` 不是权威路径实现。它们是
-Card 发现图，可能包含 suggested/hidden 边，也没有 GraphVersion 和逐边证据。
+旧的 `card_relation_service.py` 和已在 G4 删除的 `GraphView.tsx` 不是权威路径
+实现。它们属于 Card 发现图，可能包含 suggested/hidden 边，也没有
+GraphVersion 和逐边证据；后端兼容数据仍不作为 Path 输入。
 
 ## 三个算法到底在算什么
 
@@ -79,12 +80,14 @@ layers 表示真正的先后约束；linearization 只是对互不依赖节点�
 
 每次请求目前都会完整校验、再次 hydrate，并重新建立 adjacency，没有跨请求
 cache。因此只能说算法和 API 已实现，不能说已经通过 1k/10k P95 性能门槛。
-G4 还需要：
+第一段 G4 产品纵切已经把 Explore 改成 Overview / Local / Trace / Learning，
+实现 server-owned Graph Evidence resolver，并在真实浏览器中完成一次
+Trace -> Relation -> PDF evidence 验收。接下来仍需要：
 
-- 把 Explore 改造成 Overview / Local / Trace / Learning；
-- 实现 server-owned Graph Evidence resolver，不能让前端用 `asset_id` 拼 URL；
-- 做窄屏、键盘、stale/unreachable/limits UI 和真实浏览器 E2E；
-- 在真实人工 gold 完成后，才做公开课程 path/locator 质量评测。
+- 做 Obsidian-style Overview 和更清晰的稳定路径布局；
+- 把手工浏览器旅程固化为一条自动化 E2E，并完成窄屏、键盘和 accessibility；
+- 在真实人工 gold 完成后，做公开课程 path/Locator 质量评测；
+- 测量 cold/warm 1k/10k 性能，再决定是否需要 cache。
 
 G2.4 的 Git 72 小时 readiness 工具被明确延后。这是产品优先级纠偏，不是
 删除人类 gold：先把用户可见的路径闭环做好，再回到 Pass B 和最终评测。

@@ -49,8 +49,8 @@ commit, and remote push are all complete.
 | G0 Graph contract and baseline | Relation semantics, evidence rules, evaluation scope, and non-goals are frozen | In progress |
 | G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | Complete - G1.1 candidates, G1.2 lifecycle/reliability, and G1.3 immutable publication implemented |
 | G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | In progress - G2.1 Concept tooling, shared G2.2 security primitives, and G2.3 Pass A software implemented; real reviewer-key registration, Concept seal, and Relation labels/seal absent |
-| G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | In progress - backend engine and exact-version APIs implemented; cache/performance acceptance and G4 UI pending |
-| G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | Planned |
+| G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | Product capability implemented and consumed by G4; cache/performance acceptance pending |
+| G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | In progress - Path/Relation/Source vertical slice and manual browser acceptance implemented; visual overview, durable E2E, public quality, accessibility, and performance gates pending |
 | P1.2 Studio | Study, Review, and Course Map become a coherent output library | Deferred until G4 |
 | P1.3 Product polish | Onboarding, previews, search, empty/error states, accessibility, localization | Deferred until G4 |
 | P1.4 Structural hardening | Large frontend slice extraction, shared API-client consolidation, and remaining release optimization | Deferred until G4 except release-blocking work |
@@ -69,10 +69,11 @@ or security work that blocks a G stage or safe release is handled when discovere
 
 After G2.3, implementation priority was corrected toward the user-visible
 vertical slice. G2.4's Git-derived 72-hour readiness and Pass B initialization
-remain specified but are explicitly deferred. The backend G3 path engine is
-implemented first; G4 Path View and graph-evidence navigation follow. Human
-gold and the deferred G2 authority work still must finish before public-course
-quality claims, but they no longer block building the product behavior.
+remain specified but are explicitly deferred. The backend G3 path engine and
+the first G4 Path View plus graph-evidence navigation slice are implemented.
+Human gold and the deferred G2 authority work still must finish before
+public-course quality claims, but they no longer block building the remaining
+product behavior.
 
 The architecture and alternatives are recorded in
 [ADR-0008](decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md).
@@ -234,7 +235,8 @@ Deliverables:
   Source/Chunk revision or hash checks that make old evidence ineligible immediately;
 - acceptance rechecks current evidence, uniqueness, revision, and acyclicity in
   one course-scoped serialized transaction;
-- old Card, Topic, CardRelation, and Explore behavior remains compatible;
+- old Card, Topic, and CardRelation data/APIs remained compatible through G1;
+  G4 later replaced only the obsolete Explore UI after its evidence loop passed;
 - migration, transaction, concurrency, invalidation, recovery, and API tests.
 
 #### G2 - Human-reviewed golden course graph
@@ -315,9 +317,10 @@ Path when its closure exceeds the node bound.
 
 G3 is not yet fully accepted as a measured product stage. Snapshot validation
 currently precedes a second hydration, adjacency is rebuilt per request, and
-there is no cross-request normalized cache or accepted 1k/10k profile. G4 UI,
-server-owned graph-evidence resolution, browser E2E, and public-course quality
-evaluation also remain pending.
+there is no cross-request normalized cache or accepted 1k/10k profile. The G4
+UI and server-owned graph-evidence resolver now consume the engine, and a real
+browser journey has been accepted manually. Durable browser E2E and
+public-course quality evaluation remain pending.
 
 Deliverables:
 
@@ -339,12 +342,23 @@ Similarity may propose candidates but is not a learning-order edge.
 
 Deliverables:
 
-- retain force layout for overview exploration, while Local, Trace, and Path
-  use stable left-to-right layered layouts;
-- make every node and edge open its rationale and original Source locator;
-- provide candidate review/edit, empty, unreachable, stale, loading, and error states;
-- pass browser E2E, desktop, narrow-screen, keyboard, accessibility,
-  performance, graph-integrity, citation, and complete non-regression checks.
+- [x] replace the legacy CardRelation Explore entry with a lazy-loaded,
+  exact-GraphVersion Concept workspace;
+- [x] expose Overview, bounded Local, deterministic Trace, and prerequisite
+  Learning modes without recomputing graph algorithms in React;
+- [x] make every displayed Concept and Relation inspectable and navigate its
+  immutable evidence through a server-owned resolver to the original Source;
+- [x] provide no-publication, empty, unreachable, limited, stale, loading, and
+  error states, including request cancellation and late-response isolation;
+- [x] manually accept a real PDF Trace -> Relation -> evidence journey, Escape
+  focus restoration, Local/Learning smoke paths, and a clean cold load;
+- [ ] add the Obsidian-style overview and richer stable path layout without
+  reviving the deleted CardRelation compatibility implementation;
+- [ ] provide Concept/Relation candidate review and edit from the product;
+- [ ] add one durable browser E2E and pass desktop, narrow-screen, keyboard,
+  and accessibility acceptance;
+- [ ] pass public graph-integrity/path/Locator quality, cold/warm performance,
+  complete non-regression, and release checks.
 
 G4 may support the bounded claim that paths on the frozen course graph are
 correct, reproducible, and traceable. It does not establish that the product

@@ -503,7 +503,7 @@ This rolling section is updated after each accepted session.
 - **Read first:** ADR-0008; `backend/app/course_source.py`;
   `backend/app/card_relation.py`; graph assembly in
   `backend/app/card_relation_service.py`.
-- **Draw:** current `Source -> Card -> CardRelation -> Explore` beside target
+- **Draw:** legacy `Source -> Card -> CardRelation -> Explore` beside current
   `Source revision -> ConceptEvidence -> reviewed Relation -> graph version -> path`.
 - **Maintainer task:** after the annotation-protocol skeleton is created, add
   three accepted relation examples and one deliberately rejected ambiguous

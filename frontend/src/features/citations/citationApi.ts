@@ -20,11 +20,20 @@ export async function fetchCitationTarget(
   citationId: string,
   signal?: AbortSignal,
 ): Promise<CitationTarget> {
+  return fetchCitationTargetAtPath(
+    apiBaseUrl,
+    `/courses/${encodeURIComponent(courseId)}/chat/citations/${encodeURIComponent(citationId)}/target`,
+    signal,
+  )
+}
+
+export async function fetchCitationTargetAtPath(
+  apiBaseUrl: string,
+  targetPath: string,
+  signal?: AbortSignal,
+): Promise<CitationTarget> {
   const response = await fetch(
-    apiUrl(
-      apiBaseUrl,
-      `/courses/${encodeURIComponent(courseId)}/chat/citations/${encodeURIComponent(citationId)}/target`,
-    ),
+    apiUrl(apiBaseUrl, targetPath),
     { signal },
   )
 

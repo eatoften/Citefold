@@ -4233,8 +4233,9 @@ semantic decision remain maintainer-owned.
 
 ## G3 backend - Deterministic Concept Graph paths
 
-**Status:** Backend implementation and focused tests complete locally; full
-regression, commit, push, G4 UI, and release acceptance remain pending
+**Status:** Backend implementation, full local regression, commit `c06a75c`,
+remote push, and GitHub CI complete; performance and release acceptance remain
+pending, while the first G4 UI slice is recorded below
 
 ### Product-priority correction
 
@@ -4299,3 +4300,72 @@ or superiority over NotebookLM.
 - independent review: no P0/P1, plus 100 generated DAGs cross-checked for
   Trace shortest-hop distance and Learning ancestor closure;
 - the sole warning remains the pre-existing Starlette/httpx deprecation.
+
+## G4 product slice - Evidence-backed Concept paths in Studio
+
+**Status:** User-visible vertical slice implemented and locally accepted;
+full G4 quality/performance/release gate remains open
+
+### Outcome
+
+Studio Explore now consumes the authoritative published Concept Graph instead
+of the CardRelation discovery prototype:
+
+```text
+course -> current GraphVersion -> Overview / Local / Trace / Learning
+-> inspect Concept or Relation -> immutable graph evidence identity
+-> server target/content resolver -> shared CitationInspector -> Source
+```
+
+The UI preserves the backend's exact path order and graph content hash. It
+distinguishes no publication, empty, Source-stale, unreachable, bounded,
+loading, and error outcomes. Every displayed Relation exposes its rationale and
+immutable evidence. The resolver looks evidence up by course, graph version,
+owner kind, owner ID, and evidence ID, then reuses the existing citation policy
+for course isolation, projection and Chunk currentness, typed Locator, managed
+root, file hash, no-follow opening, and Range responses. Source drift keeps the
+saved quote but returns `snapshot_only`; live content fails with `409`.
+
+`CitationInspector` was generalized to accept a Source evidence snapshot plus
+an optional server resolver, so Chat and Concept Graph evidence share one
+preview, degraded-state, context, keyboard-close, and focus-restoration path.
+No new frontend dependency, graph database, router, or global state framework
+was introduced.
+
+### Findings that changed the implementation
+
+1. The first graph effect cleanup aborted only publication loading. It now also
+   aborts an in-flight Path request and advances its epoch, preventing state
+   updates after course change or unmount.
+2. A malformed current Chunk Locator originally raised `500`. Current Locator
+   hydration now fails closed; target resolution preserves the historical
+   snapshot and content resolution returns `409`.
+3. The first integration duplicated the Studio heading and course selector.
+   The host now owns both, while the nested feature starts at `h2`.
+4. Replacing the product entry left the old `GraphView`, its tests and its sole
+   `react-force-graph-2d` dependency unreachable. They were deleted instead of
+   preserving a second graph product or adding a compatibility layer; Git
+   history remains the rollback mechanism.
+
+### Local acceptance
+
+- focused backend path/publication/citation suites: `36 passed, 1 skipped`;
+- complete post-removal frontend suite: `210 passed` across `27` files;
+- ESLint, TypeScript/Vite build, Python compileall, production-dependency npm
+  audit, and `git diff --check` pass;
+- clean real-browser PDF journey: Explore -> two-hop Trace -> Relation ->
+  evidence -> page 1, with the exact quote highlighted, Escape close, and
+  trigger focus restoration;
+- Local returned three Concepts/two Relations, Learning returned three
+  layers/two Relations, and the clean cold load had one page heading, one
+  course selector, and no console errors;
+- independent final review found no P0/P1 in the G4 diff.
+
+### Honest remaining boundary
+
+This checkpoint proves the useful Path -> Relation -> Source loop. It does not
+complete G4. An Obsidian-style Concept overview, richer stable path layout,
+candidate review/edit, durable browser E2E, narrow-screen/accessibility gates,
+public-course human gold and path/Locator metrics, 1k/10k cold/warm profiles,
+full backend non-regression on the final commit, and desktop release acceptance
+remain required.

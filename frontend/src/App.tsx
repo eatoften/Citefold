@@ -17,8 +17,13 @@ import {
 } from './backendBootstrap'
 import { CourseMapView } from './CourseMapView'
 import { restoreCitationFocus } from './features/citations/citationFormat'
+import type {
+  CitationTargetResolver,
+  SourceEvidenceSnapshot,
+} from './features/citations/citationTypes'
 import { type ChatCitation } from './features/chat'
 import { ChatWorkspace } from './features/chat/ChatWorkspace'
+import type { GraphEvidenceSelection } from './features/concept-graph'
 import {
   buildAppRouteUrl,
   canonicalizeAppRoute,
@@ -37,7 +42,6 @@ import {
 } from './features/reliability'
 import { CardsWorkspace } from './features/studio/CardsWorkspace'
 import { StudioWorkspace } from './features/studio/StudioWorkspace'
-import { GraphView } from './GraphView'
 import { ReviewView } from './ReviewView'
 import './App.css'
 
@@ -54,11 +58,21 @@ const CitationInspector = lazy(() =>
     default: module.CitationInspector,
   })),
 )
+const ConceptGraphWorkspace = lazy(() =>
+  import('./features/concept-graph').then((module) => ({
+    default: module.ConceptGraphWorkspace,
+  })),
+)
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8001'
 
 const DEFAULT_COURSE_ID = 'uncategorized'
+
+type EvidenceInspectorState = {
+  snapshot: SourceEvidenceSnapshot
+  resolver: CitationTargetResolver | null
+}
 
 type JobStatus =
   | 'uploaded'
@@ -617,8 +631,8 @@ function App() {
   )
   const [lastStudioTool, setLastStudioTool] =
     useState<StudioTool>('cards')
-  const [activeCitation, setActiveCitation] =
-    useState<ChatCitation | null>(null)
+  const [activeEvidence, setActiveEvidence] =
+    useState<EvidenceInspectorState | null>(null)
   const [chatConversationByCourse, setChatConversationByCourse] =
     useState<Record<string, string>>({})
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -738,12 +752,66 @@ function App() {
   ) {
     citationTriggerRef.current = trigger
     citationCourseIdRef.current = selectedCourseId
-    setActiveCitation(citation)
+    setActiveEvidence({ snapshot: citation, resolver: null })
+  }
+
+  function openGraphEvidenceInspector(
+    selection: GraphEvidenceSelection,
+    trigger: HTMLButtonElement,
+  ) {
+    const { identity, evidence } = selection
+    if (identity.course_id !== selectedCourseId) {
+      setErrorMessage(
+        'The selected graph evidence belongs to another course.',
+      )
+      return
+    }
+    const ownerType = identity.owner.kind === 'concept'
+      ? 'concepts'
+      : 'relations'
+    const ownerId = identity.owner.kind === 'concept'
+      ? identity.owner.concept_id
+      : identity.owner.relation_id
+    const basePath = [
+      '',
+      'courses',
+      encodeURIComponent(identity.course_id),
+      'concept-graph',
+      'versions',
+      String(identity.graph_version),
+      ownerType,
+      encodeURIComponent(ownerId),
+      'evidence',
+      encodeURIComponent(identity.evidence_id),
+    ].join('/')
+    citationTriggerRef.current = trigger
+    citationCourseIdRef.current = selectedCourseId
+    setActiveEvidence({
+      snapshot: {
+        id: evidence.evidence_id,
+        source_title: evidence.source_title,
+        source_type: evidence.source_type,
+        quote: evidence.quote,
+        locator: evidence.locator,
+      },
+      resolver: {
+        scopeKey: [
+          'graph',
+          identity.course_id,
+          identity.graph_version,
+          identity.owner.kind,
+          ownerId,
+          identity.evidence_id,
+        ].join(':'),
+        targetPath: `${basePath}/target`,
+        contentPath: `${basePath}/content`,
+      },
+    })
   }
 
   function closeCitationInspector() {
     const trigger = citationTriggerRef.current
-    setActiveCitation(null)
+    setActiveEvidence(null)
     citationTriggerRef.current = null
     citationCourseIdRef.current = null
     window.setTimeout(() => {
@@ -753,14 +821,14 @@ function App() {
 
   useEffect(() => {
     if (
-      activeCitation &&
+      activeEvidence &&
       citationCourseIdRef.current !== selectedCourseId
     ) {
-      setActiveCitation(null)
+      setActiveEvidence(null)
       citationTriggerRef.current = null
       citationCourseIdRef.current = null
     }
-  }, [activeCitation, selectedCourseId])
+  }, [activeEvidence, selectedCourseId])
 
   const selectedSegments = useMemo(() => {
     if (!transcript || !selectedRange) {
@@ -5076,26 +5144,19 @@ function App() {
               </div>
             ) : appRoute.tool === 'explore' ? (
               <div className="graph-shell">
-                <GraphView
-                  apiBaseUrl={API_BASE_URL}
-                  courses={courses}
-                  selectedCourseId={selectedCourseId}
-                  selectedModel={selectedModel}
-                  showCourseSelector={false}
-                  initialCardId={appRoute.cardId}
-                  onSelectCourse={selectCourse}
-                  onCardRouteChange={(cardId, mode) =>
-                    commitAppRoute(
-                      {
-                        view: 'studio',
-                        tool: 'explore',
-                        cardId,
-                      },
-                      mode,
-                    )
+                <Suspense
+                  fallback={
+                    <div className="study-empty">
+                      Loading Concept graph
+                    </div>
                   }
-                  onOpenWorkspaceCard={openWorkspaceCard}
-                />
+                >
+                  <ConceptGraphWorkspace
+                    apiBaseUrl={API_BASE_URL}
+                    selectedCourseId={selectedCourseId}
+                    onOpenEvidence={openGraphEvidenceInspector}
+                  />
+                </Suspense>
               </div>
             ) : (
               <CardsWorkspace
@@ -5152,12 +5213,13 @@ function App() {
           })
         }}
       />
-      {activeCitation && (
+      {activeEvidence && (
         <Suspense fallback={null}>
           <CitationInspector
             apiBaseUrl={API_BASE_URL}
             courseId={selectedCourseId}
-            citation={activeCitation}
+            citation={activeEvidence.snapshot}
+            resolver={activeEvidence.resolver}
             onClose={closeCitationInspector}
           />
         </Suspense>

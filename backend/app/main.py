@@ -5,13 +5,14 @@ from ipaddress import ip_address
 import os
 from pathlib import Path
 import secrets
-from typing import TypeVar
+from typing import Annotated, Literal, TypeVar
 from uuid import uuid4
 
 from fastapi import (
     FastAPI,
     Form,
     HTTPException,
+    Path as ApiPath,
     Query,
     Request,
     UploadFile,
@@ -29,6 +30,7 @@ from . import card_relation_service
 from . import card_service
 from . import chat_service
 from . import citation_target_service
+from . import concept_graph_publication_service
 from . import course_source_service
 from . import course_service
 from . import export_service
@@ -73,8 +75,10 @@ from .chat import (
 )
 from .citation_target import CitationTargetResponse
 from .citation_content_response import build_citation_content_response
+from .citation_target_store import CitationSnapshotRecord
 from .concept_graph_api import router as concept_graph_router
 from .concept_graph_publication_api import (
+    raise_concept_graph_publication_http_error,
     router as concept_graph_publication_router,
 )
 from .concept_graph_path_api import router as concept_graph_path_router
@@ -2514,6 +2518,117 @@ def get_chat_citation_content(
         managed_file = citation_target_service.resolve_citation_content(
             course_id,
             citation_id,
+        )
+    except citation_target_service.CitationTargetServiceError as exc:
+        raise_citation_target_http_error(exc)
+    return build_citation_content_response(
+        managed_file,
+        method=request.method,
+        range_header=request.headers.get("range"),
+    )
+
+
+GraphEvidenceResourceId = Annotated[
+    str,
+    ApiPath(min_length=1, max_length=200),
+]
+GraphEvidenceVersion = Annotated[int, ApiPath(ge=1)]
+
+
+def _published_graph_evidence_snapshot(
+    course_id: str,
+    version_number: int,
+    owner_type: Literal["concepts", "relations"],
+    owner_id: str,
+    evidence_id: str,
+) -> CitationSnapshotRecord:
+    try:
+        return concept_graph_publication_service.get_course_version_evidence_snapshot(
+            course_id,
+            version_number,
+            owner_type=("concept" if owner_type == "concepts" else "relation"),
+            owner_id=owner_id,
+            evidence_id=evidence_id,
+        )
+    except (
+        concept_graph_publication_service.ConceptGraphPublicationServiceError
+    ) as exc:
+        raise_concept_graph_publication_http_error(exc)
+
+
+@app.get(
+    (
+        "/courses/{course_id}/concept-graph/versions/{version_number}/"
+        "{owner_type}/{owner_id}/evidence/{evidence_id}/target"
+    ),
+    response_model=CitationTargetResponse,
+)
+def get_published_graph_evidence_target(
+    course_id: GraphEvidenceResourceId,
+    version_number: GraphEvidenceVersion,
+    owner_type: Literal["concepts", "relations"],
+    owner_id: GraphEvidenceResourceId,
+    evidence_id: GraphEvidenceResourceId,
+    request: Request,
+    response: Response,
+) -> CitationTargetResponse:
+    require_loopback_client(request)
+    response.headers["Cache-Control"] = "private, no-store"
+    media_url = str(
+        request.url_for(
+            "get_published_graph_evidence_content",
+            course_id=course_id,
+            version_number=version_number,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            evidence_id=evidence_id,
+        )
+    )
+    record = _published_graph_evidence_snapshot(
+        course_id,
+        version_number,
+        owner_type,
+        owner_id,
+        evidence_id,
+    )
+    try:
+        return citation_target_service.resolve_source_evidence_target(
+            course_id,
+            record,
+            media_url=media_url,
+        )
+    except citation_target_service.CitationTargetServiceError as exc:
+        raise_citation_target_http_error(exc)
+
+
+@app.api_route(
+    (
+        "/courses/{course_id}/concept-graph/versions/{version_number}/"
+        "{owner_type}/{owner_id}/evidence/{evidence_id}/content"
+    ),
+    methods=["GET", "HEAD"],
+    name="get_published_graph_evidence_content",
+)
+def get_published_graph_evidence_content(
+    course_id: GraphEvidenceResourceId,
+    version_number: GraphEvidenceVersion,
+    owner_type: Literal["concepts", "relations"],
+    owner_id: GraphEvidenceResourceId,
+    evidence_id: GraphEvidenceResourceId,
+    request: Request,
+) -> Response:
+    require_loopback_client(request)
+    record = _published_graph_evidence_snapshot(
+        course_id,
+        version_number,
+        owner_type,
+        owner_id,
+        evidence_id,
+    )
+    try:
+        managed_file = citation_target_service.resolve_source_evidence_content(
+            course_id,
+            record,
         )
     except citation_target_service.CitationTargetServiceError as exc:
         raise_citation_target_http_error(exc)

@@ -89,6 +89,23 @@ export function resolveCitationMediaUrl(
   courseId: string,
   citationId: string,
 ): string | null {
+  const expectedPath = [
+    '',
+    'courses',
+    encodeURIComponent(courseId),
+    'chat',
+    'citations',
+    encodeURIComponent(citationId),
+    'content',
+  ].join('/')
+  return resolveApiMediaUrl(apiBaseUrl, mediaUrl, expectedPath)
+}
+
+export function resolveApiMediaUrl(
+  apiBaseUrl: string,
+  mediaUrl: string | null,
+  expectedPath: string,
+): string | null {
   if (!mediaUrl) return null
   try {
     const apiBase = new URL(apiBaseUrl)
@@ -97,15 +114,6 @@ export function resolveCitationMediaUrl(
     }
     const normalizedBase = `${apiBase.toString().replace(/\/+$/, '')}/`
     const resolved = new URL(mediaUrl, normalizedBase)
-    const expectedPath = [
-      '',
-      'courses',
-      encodeURIComponent(courseId),
-      'chat',
-      'citations',
-      encodeURIComponent(citationId),
-      'content',
-    ].join('/')
     if (
       resolved.protocol !== 'http:' &&
       resolved.protocol !== 'https:'

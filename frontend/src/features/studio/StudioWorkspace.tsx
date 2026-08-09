@@ -48,7 +48,7 @@ const STUDIO_TOOL_DETAILS: Record<StudioTool, StudioToolDetails> = {
   explore: {
     label: 'Explore',
     description:
-      'Inspect and curate relationships across course concepts.',
+      'Trace published Concepts and verify every relationship against its Source.',
   },
 }
 

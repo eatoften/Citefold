@@ -27,7 +27,7 @@ def get_publication_preview(course_id: ResourceId) -> GraphPublicationPreview:
     try:
         return publication_service.preview_course_publication(course_id)
     except publication_service.ConceptGraphPublicationServiceError as exc:
-        _raise_http_error(exc)
+        raise_concept_graph_publication_http_error(exc)
 
 
 @router.post(
@@ -42,7 +42,7 @@ def publish_graph_version(
     try:
         return publication_service.publish_course_version(course_id, request)
     except publication_service.ConceptGraphPublicationServiceError as exc:
-        _raise_http_error(exc)
+        raise_concept_graph_publication_http_error(exc)
 
 
 @router.get(
@@ -59,7 +59,7 @@ def list_graph_versions(
             course_id, limit=limit, cursor=cursor
         )
     except publication_service.ConceptGraphPublicationServiceError as exc:
-        _raise_http_error(exc)
+        raise_concept_graph_publication_http_error(exc)
 
 
 @router.get(
@@ -70,7 +70,7 @@ def get_current_graph_version(course_id: ResourceId) -> GraphVersionMetadata:
     try:
         return publication_service.get_current_course_version(course_id)
     except publication_service.ConceptGraphPublicationServiceError as exc:
-        _raise_http_error(exc)
+        raise_concept_graph_publication_http_error(exc)
 
 
 @router.get(
@@ -86,7 +86,7 @@ def get_graph_version(
             course_id, version_number
         )
     except publication_service.ConceptGraphPublicationServiceError as exc:
-        _raise_http_error(exc)
+        raise_concept_graph_publication_http_error(exc)
 
 
 @router.get(
@@ -110,7 +110,7 @@ def list_graph_version_concepts(
             cursor=cursor,
         )
     except publication_service.ConceptGraphPublicationServiceError as exc:
-        _raise_http_error(exc)
+        raise_concept_graph_publication_http_error(exc)
 
 
 @router.get(
@@ -134,10 +134,10 @@ def list_graph_version_relations(
             cursor=cursor,
         )
     except publication_service.ConceptGraphPublicationServiceError as exc:
-        _raise_http_error(exc)
+        raise_concept_graph_publication_http_error(exc)
 
 
-def _raise_http_error(
+def raise_concept_graph_publication_http_error(
     exc: publication_service.ConceptGraphPublicationServiceError,
 ) -> None:
     if isinstance(

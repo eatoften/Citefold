@@ -8,8 +8,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 from sqlite3 import Connection, Row
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
+from .citation_target_store import (
+    CitationContextRecord,
+    CitationSnapshotRecord,
+)
 from .concept_graph import canonicalize_relation_endpoints
 from .concept_graph_publication import (
     GraphPublicationCounts,
@@ -465,6 +469,74 @@ def list_version_relations(
         return PublishedRelationPage(items=items, next_cursor=next_cursor)
 
 
+def get_version_evidence_snapshot(
+    course_id: str,
+    version_number: int,
+    *,
+    owner_type: Literal["concept", "relation"],
+    owner_id: str,
+    evidence_id: str,
+) -> CitationSnapshotRecord:
+    """Load one integrity-checked published evidence item and live Source view."""
+
+    ensure_db()
+    with connect() as conn:
+        conn.execute("BEGIN")
+        _require_active_course(conn, course_id)
+        _verify_version_counts(conn, course_id, version_number)
+        if owner_type == "concept":
+            row = conn.execute(
+                """
+                SELECT * FROM concept_graph_version_concepts
+                WHERE course_id = ? AND version_number = ? AND concept_id = ?
+                """,
+                (course_id, version_number, owner_id),
+            ).fetchone()
+            owners = _published_concepts_from_rows(
+                conn,
+                course_id,
+                version_number,
+                [row] if row is not None else [],
+            )
+        else:
+            row = conn.execute(
+                """
+                SELECT * FROM concept_graph_version_relations
+                WHERE course_id = ? AND version_number = ? AND relation_id = ?
+                """,
+                (course_id, version_number, owner_id),
+            ).fetchone()
+            owners = _published_relations_from_rows(
+                conn,
+                course_id,
+                version_number,
+                [row] if row is not None else [],
+            )
+        if not owners:
+            raise PublicationNotFoundError(
+                "Published Concept graph evidence not found."
+            )
+        evidence = next(
+            (
+                item
+                for item in owners[0].evidence
+                if item.evidence_id == evidence_id
+            ),
+            None,
+        )
+        if evidence is None:
+            raise PublicationNotFoundError(
+                "Published Concept graph evidence not found."
+            )
+        return _citation_snapshot_for_published_evidence(
+            conn,
+            course_id=course_id,
+            owner_type=owner_type,
+            owner_id=owner_id,
+            evidence=evidence,
+        )
+
+
 def load_version_graph_snapshot(
     course_id: str,
     version_number: int,
@@ -574,6 +646,127 @@ def _require_active_course(conn: Connection, course_id: str) -> None:
     ).fetchone()
     if row is None:
         raise PublicationNotFoundError("Course not found.")
+
+
+def _citation_snapshot_for_published_evidence(
+    conn: Connection,
+    *,
+    course_id: str,
+    owner_type: Literal["concept", "relation"],
+    owner_id: str,
+    evidence: PublishedEvidence,
+) -> CitationSnapshotRecord:
+    source_row = conn.execute(
+        f"""
+        SELECT sources.course_id AS source_course_id,
+               sources.origin_type AS source_origin_type,
+               sources.origin_id AS source_origin_id,
+               sources.source_type AS current_source_type,
+               sources.content_status AS current_source_status,
+               sources.projection_generation_id
+                   AS current_projection_generation_id,
+               chunks.id AS current_chunk_id,
+               chunks.text AS current_chunk_text,
+               chunks.text_hash AS current_chunk_text_hash,
+               chunks.locator_json AS current_chunk_locator_json,
+               chunks.ordinal AS current_chunk_ordinal,
+               CASE WHEN {_source_root_is_current_sql("sources")}
+                    THEN 1 ELSE 0 END AS source_root_current
+        FROM sources
+        LEFT JOIN source_chunks AS chunks
+            ON chunks.id = ?
+           AND chunks.source_id = sources.id
+           AND chunks.is_active = 1
+        WHERE sources.id = ? AND sources.course_id = ?
+        """,
+        (evidence.chunk_id, evidence.source_id, course_id),
+    ).fetchone()
+
+    current = dict(source_row) if source_row is not None else {}
+    current_text = current.get("current_chunk_text")
+    stored_current_hash = current.get("current_chunk_text_hash")
+    actual_current_hash = (
+        hash_source_chunk_text(current_text) if current_text is not None else None
+    )
+    current_hash = (
+        actual_current_hash
+        if actual_current_hash == stored_current_hash
+        else None
+    )
+    current_locator = (
+        _safe_locator_object(current["current_chunk_locator_json"])
+        if current.get("current_chunk_locator_json") is not None
+        else None
+    )
+    current_ordinal = current.get("current_chunk_ordinal")
+    context: tuple[CitationContextRecord, ...] = ()
+    if current_ordinal is not None:
+        context_rows = conn.execute(
+            """
+            SELECT id, ordinal, text, locator_json
+            FROM source_chunks
+            WHERE source_id = ? AND is_active = 1
+              AND ordinal BETWEEN ? AND ?
+            ORDER BY ordinal, id
+            """,
+            (
+                evidence.source_id,
+                max(0, current_ordinal - 1),
+                current_ordinal + 1,
+            ),
+        ).fetchall()
+        context_items: list[CitationContextRecord] = []
+        for row in context_rows:
+            locator = _safe_locator_object(row["locator_json"])
+            if locator is None:
+                continue
+            context_items.append(
+                CitationContextRecord(
+                    chunk_id=str(row["id"]),
+                    ordinal=int(row["ordinal"]),
+                    text=str(row["text"]),
+                    locator=locator,
+                )
+            )
+        context = tuple(context_items)
+
+    return CitationSnapshotRecord(
+        citation_id=evidence.evidence_id,
+        message_id=f"{owner_type}:{owner_id}",
+        source_id=evidence.source_id,
+        chunk_id=evidence.chunk_id,
+        chunk_text_hash=evidence.chunk_text_hash,
+        source_title=evidence.source_title,
+        source_type=evidence.source_type,
+        quote=evidence.quote,
+        locator=evidence.locator.model_dump(mode="json"),
+        source_course_id=current.get("source_course_id"),
+        source_origin_type=current.get("source_origin_type"),
+        source_origin_id=current.get("source_origin_id"),
+        current_source_type=current.get("current_source_type"),
+        current_chunk_text=current_text,
+        current_chunk_text_hash=current_hash,
+        current_chunk_locator=current_locator,
+        current_chunk_ordinal=current_ordinal,
+        current_chunk_active=current.get("current_chunk_id") is not None,
+        context=context,
+        projection_generation_id=evidence.projection_generation_id,
+        current_projection_generation_id=current.get(
+            "current_projection_generation_id"
+        ),
+        current_source_status=current.get("current_source_status"),
+        source_root_current=bool(current.get("source_root_current")),
+    )
+
+
+def _safe_locator_object(value: object) -> dict[str, object] | None:
+    try:
+        parsed = json.loads(str(value))
+        if not isinstance(parsed, dict):
+            return None
+        return json.loads(canonical_source_locator_json(parsed))
+    except (TypeError, ValueError):
+        return None
 
 
 def _build_draft_snapshot(conn: Connection, course_id: str) -> DraftSnapshot:

@@ -1,6 +1,7 @@
 # Concept Graph Deterministic Path Engine
 
-- **Status:** G3 backend slice implemented; G4 product integration pending
+- **Status:** G3 backend slice implemented and consumed by the G4 product slice;
+  cache/performance acceptance remains pending
 - **Architecture owner:**
   [ADR-0008](../decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md)
 - **Implementation:** `backend/app/concept_graph_path.py`,
@@ -107,10 +108,10 @@ latency are excluded.
 Node and edge payloads reuse `PublishedConcept` and `PublishedRelation` rather
 than inventing a second evidence schema. They include immutable quote, Chunk
 hash, projection generation, typed Source Locator, rationale, support basis,
-review provenance, and relation evidence roles. This makes the result
-inspectable, but it does **not** yet make the Locator clickable: G4 still needs
-a server-owned graph-evidence target/content resolver keyed by course, version,
-owner kind, owner ID, and evidence ID.
+review provenance, and relation evidence roles. The G4 product slice now makes
+that evidence clickable through a server-owned target/content resolver keyed by
+course, version, owner kind, owner ID, and evidence ID. See the
+[Concept Graph Evidence Workspace](concept-graph-evidence-workspace.md).
 
 | Condition | HTTP result |
 | --- | --- |
@@ -170,6 +171,7 @@ and Learning ancestor closure over 100 generated DAGs. The only warning was the
 pre-existing Starlette/httpx deprecation.
 
 This checkpoint supports the claim that a tested deterministic backend path
-engine exists. It does not provide the G4 Path View, clickable graph evidence,
-browser E2E, a public-course golden graph, measured path accuracy, measured
-latency, improved learning outcomes, or superiority over NotebookLM.
+engine exists and is used by the G4 Path View. A manual real-browser evidence
+journey exists, but durable automated browser E2E, a public-course golden graph,
+measured path accuracy, measured latency, improved learning outcomes, and any
+claim of superiority over NotebookLM remain absent.

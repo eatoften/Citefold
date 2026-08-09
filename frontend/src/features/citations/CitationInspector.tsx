@@ -13,32 +13,39 @@ import {
   useRef,
   useState,
 } from 'react'
-import type { ChatCitation } from '../chat/chatTypes'
-import type { SourceLocator } from '../sources/sourceTypes'
-import { fetchCitationTarget } from './citationApi'
+import type {
+  SourceLocator,
+  SourceType,
+} from '../sources/sourceTypes'
+import { fetchCitationTargetAtPath } from './citationApi'
 import {
   formatSourceLocator,
   pdfUrlAtPage,
-  resolveCitationMediaUrl,
+  resolveApiMediaUrl,
   segmentCitationQuote,
   seekMediaToLocator,
 } from './citationFormat'
-import type { CitationTarget } from './citationTypes'
+import type {
+  CitationTarget,
+  CitationTargetResolver,
+  SourceEvidenceSnapshot,
+} from './citationTypes'
 import './CitationInspector.css'
 
 export type CitationInspectorProps = {
   apiBaseUrl: string
   courseId: string | null
-  citation: ChatCitation | null
+  citation: SourceEvidenceSnapshot | null
+  resolver?: CitationTargetResolver | null
   onClose: () => void
 }
 
 type OpeningScope = {
-  citationId: string
+  scopeKey: string
   courseId: string | null
 }
 
-function sourceIcon(sourceType: ChatCitation['source_type']) {
+function sourceIcon(sourceType: SourceType) {
   return sourceType === 'video' || sourceType === 'audio' ? (
     <Video aria-hidden="true" size={18} />
   ) : (
@@ -47,7 +54,7 @@ function sourceIcon(sourceType: ChatCitation['source_type']) {
 }
 
 function targetLocator(
-  citation: ChatCitation,
+  citation: SourceEvidenceSnapshot,
   target: CitationTarget | null,
 ): SourceLocator {
   return target?.locator ?? citation.locator
@@ -70,6 +77,7 @@ export function CitationInspector({
   apiBaseUrl,
   courseId,
   citation,
+  resolver,
   onClose,
 }: CitationInspectorProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
@@ -80,18 +88,30 @@ export function CitationInspector({
   const [mediaError, setMediaError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [requestVersion, setRequestVersion] = useState(0)
+  const targetResolver = useMemo<CitationTargetResolver | null>(() => {
+    if (!citation || !courseId) return null
+    if (resolver) return resolver
+    const course = encodeURIComponent(courseId)
+    const citationId = encodeURIComponent(citation.id)
+    const basePath = `/courses/${course}/chat/citations/${citationId}`
+    return {
+      scopeKey: `chat:${citation.id}`,
+      targetPath: `${basePath}/target`,
+      contentPath: `${basePath}/content`,
+    }
+  }, [citation, courseId, resolver])
 
   useEffect(() => {
-    if (!citation) {
+    if (!citation || !targetResolver) {
       openingScopeRef.current = null
       return
     }
     if (
       !openingScopeRef.current ||
-      openingScopeRef.current.citationId !== citation.id
+      openingScopeRef.current.scopeKey !== targetResolver.scopeKey
     ) {
       openingScopeRef.current = {
-        citationId: citation.id,
+        scopeKey: targetResolver.scopeKey,
         courseId,
       }
       return
@@ -99,7 +119,7 @@ export function CitationInspector({
     if (openingScopeRef.current.courseId !== courseId) {
       onClose()
     }
-  }, [citation, courseId, onClose])
+  }, [citation, courseId, onClose, targetResolver])
 
   useEffect(() => {
     if (!citation) return
@@ -134,6 +154,11 @@ export function CitationInspector({
       )
       return
     }
+    if (!targetResolver) {
+      setIsLoading(false)
+      setRequestError('The source resolver is unavailable.')
+      return
+    }
     if (
       openingScopeRef.current &&
       openingScopeRef.current.courseId !== courseId
@@ -145,10 +170,9 @@ export function CitationInspector({
     const controller = new AbortController()
     let cancelled = false
     setIsLoading(true)
-    void fetchCitationTarget(
+    void fetchCitationTargetAtPath(
       apiBaseUrl,
-      courseId,
-      citation.id,
+      targetResolver.targetPath,
       controller.signal,
     )
       .then((nextTarget) => {
@@ -171,20 +195,19 @@ export function CitationInspector({
       cancelled = true
       controller.abort()
     }
-  }, [apiBaseUrl, citation, courseId, requestVersion])
+  }, [apiBaseUrl, citation, courseId, requestVersion, targetResolver])
 
   const locator = citation
     ? targetLocator(citation, target)
     : null
   const mediaUrl = useMemo(
     () =>
-      resolveCitationMediaUrl(
+      resolveApiMediaUrl(
         apiBaseUrl,
         target?.media_url ?? null,
-        courseId ?? '',
-        citation?.id ?? '',
+        targetResolver?.contentPath ?? '',
       ),
-    [apiBaseUrl, citation?.id, courseId, target?.media_url],
+    [apiBaseUrl, target?.media_url, targetResolver?.contentPath],
   )
   const pdfUrl = useMemo(
     () =>
@@ -276,7 +299,7 @@ export function CitationInspector({
             </div>
             <blockquote>{quote}</blockquote>
             <small>
-              Saved with the answer so it remains verifiable even if the
+              Saved with the grounded result so it remains verifiable even if the
               original file changes.
             </small>
           </section>

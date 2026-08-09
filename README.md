@@ -74,7 +74,10 @@ Implemented:
   workspace backup/import/restore covering SQLite and managed local files.
 - a G3 backend path engine over exact immutable GraphVersions: bounded Local
   BFS, deterministic shortest Relationship Trace, prerequisite closure and
-  stable Kahn Learning Path, with evidence-bearing DTOs and result hashes.
+  stable Kahn Learning Path, with evidence-bearing DTOs and result hashes;
+- a G4 Studio Explore slice over the published Concept Graph: Overview, Local,
+  Trace, and Learning views, relation rationale inspection, and server-owned
+  evidence navigation back to the exact Source location.
 
 P0.4 reorganized the application around this product navigation:
 
@@ -145,10 +148,12 @@ revocation, no-overwrite publication, and seal-last recovery. There is
 deliberately no reveal command before Pass B. This is software machinery, not
 a real human Pass A result. G3 now implements the backend deterministic path
 engine and exact-version APIs. G2.4's Git-derived 72-hour readiness tooling is
-explicitly deferred while the product closes the visible graph loop. Automatic
-Understanding, Relation gold, the G4 Path View, graph-evidence resolver,
-public-course path evaluation, and performance acceptance remain roadmap work; the
-current Explore graph is still a sparse CardRelation discovery baseline. See the
+explicitly deferred while the product closes the visible graph loop. The first
+G4 product slice now replaces the CardRelation Explore entry with a published
+Concept Graph workspace and resolves Concept/Relation evidence through the
+same hardened Source inspector used by Chat. Automatic Understanding, real
+Relation gold, an Obsidian-style overview, durable browser E2E, public-course
+path evaluation, and performance acceptance remain roadmap work. See the
 [active roadmap](docs/roadmap.md),
 [graph decision record](docs/decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md),
 [staged-human-gold decision](docs/decisions/ADR-0010-staged-human-gold-and-key-control-attestation.md),
@@ -161,6 +166,8 @@ current Explore graph is still a sparse CardRelation discovery baseline. See the
 [Relation Pass A workflow](docs/modules/golden-graph-relation-pass-a-workflow.md),
 [G3 deterministic path engine](docs/modules/concept-graph-path-engine.md),
 [G3 maintainer handoff](docs/learning/g3-deterministic-path-engine-handoff.md),
+[G4 evidence workspace](docs/modules/concept-graph-evidence-workspace.md),
+[G4 maintainer handoff](docs/learning/g4-evidence-path-workspace-handoff.md),
 [learning and mastery plan](docs/project-mastery-plan.md), and
 [append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.
@@ -204,13 +211,13 @@ with at least five independent sealed lecture clusters.
 > merge/retirement lifecycle. G1.2d adds durable initial-create receipts, and
 > G1.3 publishes immutable authoritative GraphVersions with fail-closed Source
 > authority. G2.1 supplies a separate evaluation-only human Concept handoff,
-> but no real reviewer-key policy or authorized worksheet exists yet. G3 now
+> but no real reviewer-key policy or authorized worksheet exists yet. G3
 > supplies deterministic backend Local, Trace, and Learning queries over one
-> exact active/current GraphVersion. The G4 UI and server-owned Graph Evidence
-> resolver do not yet exist. The
-> current automatic Card pipeline still reads video
-> `TranscriptChunk` objects directly; no candidate is an accepted graph fact;
-> and Explore still renders a Card-to-Card `CardRelation` graph.
+> exact active/current GraphVersion. The first G4 UI slice consumes those APIs,
+> and its server-owned Graph Evidence resolver returns to the canonical Source
+> or degrades to the immutable snapshot after Source drift. The current
+> automatic Card pipeline still reads video `TranscriptChunk` objects directly,
+> and no model candidate is an accepted graph fact.
 
 Every imported material enters through a modality-specific adapter and is
 normalized into the canonical `CourseSource` / `CourseSourceChunk` / typed
@@ -574,19 +581,26 @@ cd backend
 uv run pytest
 ```
 
-Current product verification: `681 passed, 1 skipped, 1 warning` in the full
-backend suite and `214 passed` across 27 frontend test files. Python bytecode
-compilation, the uv lock check, frontend ESLint, the TypeScript/Vite production
-build, Cargo formatting, locked check, and 6 locked tests, and the
-high-severity npm audit also pass. The production build reports one known
-optimization warning:
-the main JavaScript chunk is `588.23 kB` after minification.
+The latest complete backend regression, at the G3 checkpoint, passed `1125`
+tests with `7` skipped. The G4-focused path/publication/citation regression
+passes `36` tests with `1` skipped, and all `210` frontend tests pass. Python
+bytecode compilation, frontend ESLint, the TypeScript/Vite production build,
+`git diff --check`, and the production-dependency high-severity npm audit also
+pass. After removing the unreachable legacy force graph, the production build
+has no oversized-chunk warning; the main JavaScript chunk is approximately
+`376.48 kB` after minification.
 
 The P1.1 acceptance journey was also exercised in a real browser at desktop
 and narrow widths: create Note -> publish Source -> index -> ask grounded Chat
 question -> open the citation -> save the answer as a Note -> delete and Undo
 or restore it from Recovery. Both viewports completed without horizontal
 overflow or console errors.
+
+The G4 product slice was exercised in a clean real browser over a seeded PDF:
+Explore -> two-hop Trace -> relation rationale -> evidence -> PDF page 1. The
+exact quote was highlighted, Escape restored focus, Local and Learning returned
+their expected server-owned structures, and the cold load had no console
+errors. This is a manual acceptance record, not yet a durable E2E suite.
 
 | Experiment | Main entry point | Record |
 | --- | --- | --- |

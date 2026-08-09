@@ -62,7 +62,12 @@ Code path:
 | Source APIs | Source routes around `list_course_sources()` in [main.py](../../backend/app/main.py) |
 | Source UI | [SourcesLibrary.tsx](../../frontend/src/features/sources/SourcesLibrary.tsx) |
 
-## Current pipeline B: video Cards and CardRelation Explore
+## Legacy pipeline B: video Cards and CardRelation Explore
+
+> G4 已将这个前端 Explore 入口替换为 published Concept Graph workspace，旧的
+> `GraphView.tsx`、测试和 force-graph 依赖已经删除。下面保留的是历史数据流，
+> 用于理解为什么 CardRelation 不能作为权威 Concept Graph；CardRelation 后端
+> 数据/API 仍兼容，但不再是 Studio Explore 的输入。
 
 ```text
 Video transcript
@@ -114,8 +119,7 @@ Code path:
 | Create similarity candidates | `recompute_course_card_relations()` in [card_relation_service.py](../../backend/app/card_relation_service.py) |
 | Store relation lifecycle | [card_relation_store.py](../../backend/app/card_relation_store.py) and `card_relations` schema in [db.py](../../backend/app/db.py) |
 | Expose graph API | `GET/POST /courses/{course_id}/card-relations` in [main.py](../../backend/app/main.py) |
-| Mirror the API type | [graphTypes.ts](../../frontend/src/graphTypes.ts) |
-| Load/filter/edit/render | [GraphView.tsx](../../frontend/src/GraphView.tsx) |
+| Historical frontend type and renderer | 已从工作树删除；参见 [G4 implementation log](../productization-log.md#g4-product-slice---evidence-backed-concept-paths-in-studio) |
 
 Current CardRelation strengths:
 
@@ -218,12 +222,13 @@ symbols:
 7. [card_relation_store.py](../../backend/app/card_relation_store.py):
    upsert, candidate replacement, query, update; then inspect the SQL in
    [db.py](../../backend/app/db.py).
-8. [GraphView.tsx](../../frontend/src/GraphView.tsx): load with abort/epoch,
-   filters/adjacency, mutations, force renderer, and inspector.
+8. 从 Git 历史查看已删除的 `frontend/src/GraphView.tsx`：load with abort/epoch、
+   filters/adjacency、mutations、force renderer 和 inspector；不要把它恢复为
+   新 Concept Graph 的兼容层。
 9. Read one proof at each boundary rather than trusting prose:
    [test_course_sources.py](../../backend/tests/test_course_sources.py),
    [test_card_relations_api.py](../../backend/tests/test_card_relations_api.py),
-   and [GraphView.test.tsx](../../frontend/src/GraphView.test.tsx).
+   以及 Git 历史中的 `frontend/src/GraphView.test.tsx`。
 
 ## Maintainer exercise A: draw the current system
 
