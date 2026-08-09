@@ -172,3 +172,12 @@ P1.4/G4 的真实工程缺口（例如 change-level CI 和自动化 E2E）。面
 
 | Date | Topic | Closed-book result | User-owned artifact | Tests/commit | Mastery | Next review |
 | --- | --- | --- | --- | --- | --- | --- |
+
+## G2.1 human-annotation handoff
+
+- [从可复现 Source 到真实人工 Concept 清单](g2-human-annotation-handoff.md)
+  （G2.1，Draft/M0）：private worksheet、redacted artifact DAG、external
+  key-control attestation、complete pair universe，以及
+  `ConceptInventorySeal != GoldBundleSeal` 的诚实边界。
+- 当前真实 CS336 reviewer-key policy 和 authorized worksheet 都尚未建立；工具
+  实现和测试结果不自动提升 mastery，也不构成 accuracy/path evidence。

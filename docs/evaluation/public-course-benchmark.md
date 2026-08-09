@@ -1,12 +1,14 @@
 # Public Course Benchmark Contract
 
-- **Status:** G0.2a infrastructure implemented; CS336 instance draft; no
-  held-out result has been opened
+- **Status:** CS336 Lecture 3 Source/protocol frozen; G2.1 Concept tooling
+  implemented; reviewer-key registration/human labels not started; no
+  held-out result opened
 - **Date registered:** 2026-08-08
 - **Decision:** evaluate the unified Evidence/Understanding architecture on
   pinned public course materials without assuming that public access grants
   redistribution rights
 - **Acquisition implementation:** [Public Course Benchmark Acquisition](../modules/public-course-benchmark-acquisition.md)
+- **Human annotation implementation:** [G2.1 Human Annotation Workflow](../modules/golden-graph-human-annotation-workflow.md)
 
 ## Decision and claim boundary
 
@@ -20,6 +22,16 @@ It does not claim improved exam scores, universal educational quality,
 foundation-model generalization, or superiority over NotebookLM. Public course
 content may already occur in model training data. Results remain scoped to the
 registered sources, labels, software, prompts, models, and hardware.
+
+Current real checkpoint: the exact 68-page CS336 Lecture 3 Source slice and
+protocol are frozen, and the two-step reviewer-policy plus four-step Concept
+workflow is implemented. No real reviewer-key policy has been registered in a
+prior commit, so no authorized real worksheet or human label exists. Therefore no
+`ConceptInventorySeal`, `GoldBundleSeal`, automatic proposal accuracy,
+graph-quality result, or path result exists. OpenSSH
+approval in the later workflow proves control of an allowed key only; this
+single-maintainer local process remains self-attested rather than independently
+verified human/blind annotation.
 
 ## Course sources and licensing policy
 

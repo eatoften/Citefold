@@ -1,8 +1,9 @@
 # Golden Graph Evaluation Protocol
 
-- **Program:** G0.2a
-- **Status:** G0.2a infrastructure implemented; CS336 instance draft; Source
-  scope, human labels, and sealed evaluation remain unfrozen
+- **Program:** G0.2 / G2.1 upstream boundary
+- **Status:** G0.2 protocol and 68-page CS336 Source slice frozen; G2.1
+  Concept workflow implemented; reviewer-key registration and human labels
+  not started
 - **Depends on:**
   [public-course acquisition](public-course-benchmark-acquisition.md),
   [graph annotation rules](../graph-annotation-protocol.md), and
@@ -14,7 +15,10 @@
 
 G0.2 turns the evaluation plan into a machine-enforced reproducibility and
 leakage boundary. It does not annotate the course, generate Concepts, publish a
-graph, or run a sealed benchmark.
+graph, or run a sealed benchmark. G2.1 now consumes this boundary through the
+[human annotation workflow](golden-graph-human-annotation-workflow.md), but the
+implemented software does not itself register a real reviewer key or add a
+human label.
 
 ```text
 pinned acquisition manifest + exact asset identity
@@ -291,9 +295,13 @@ relabeled as a closed-world graph benchmark.
 
 G0.2 is closed by the fixed whole-deck scope, independently replayed redacted
 Source/Chunk/summary leaves, complete confidence floors, and frozen protocol.
-G2 now creates the
-Concept inventory, complete pair universe,
-blinded Pass A/B artifacts, adjudication, alias table, and semantic gold export.
+G2.1 now provides the private Concept worksheet, Concept/alias commitment,
+external key-control attestation, immutable Concept-only seal, complete pair
+universe, and strict reload. No authorized real worksheet exists, so none of
+its public seal artifacts exists yet. The maintainer must first commit the real
+reviewer-key policy, then initialize and author the Concept inventory before
+delayed Pass A/B artifacts, adjudication, and semantic gold export can be
+created.
 Only after that separate gold freeze may G3 path evaluation use the fixture;
 G3 owns the independently frozen synthetic performance authority required by
 the 1k/10k latency metrics. The currently registered sealed-transfer partition

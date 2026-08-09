@@ -3841,3 +3841,148 @@ private materialization reloaded against the frozen protocol with the same
 68-page/68-Chunk inventory. No PDF or Source text entered Git. This closes the
 G0.2 evaluation-input freeze; it does not create human Concepts/Relations or
 authorize any accuracy, path-quality, held-out, or educational-effect claim.
+
+## G2.1 - Staged human Concept-inventory handoff
+
+**Status:** Tooling implemented and locally revalidated; real reviewer-key
+registration and human annotation not started
+
+### Outcome and non-outcome
+
+This checkpoint turns the frozen G0.2 Source slice into a human-owned Concept
+annotation workflow without asking a model to generate or approve gold. It
+implements strict private worksheet authoring, redacted Concept/alias
+preparation, detached OpenSSH approval, immutable Concept-stage publication,
+complete pair enumeration, and deep reload.
+
+It deliberately stops before human authority. No real CS336 reviewer-key
+policy has been committed, no policy-authorized worksheet exists, and there
+are zero human labels. Consequently no `ConceptInventorySeal`,
+`GoldBundleSeal`, Concept/Relation accuracy, agreement, graph-quality, or path
+result exists.
+
+### Artifact and trust design
+
+```text
+frozen protocol + private Source materialization
++ reviewer-key policy from a prior reachable Git commit
+-> ignored policy-bound mutable worksheet
+-> ignored redacted inventory / alias / seal-request candidates
+-> external signature with the registered key
+-> six immutable public Concept-stage leaves
+-> complete pair manifest for later delayed Relation review
+```
+
+The public leaves are the Concept inventory, alias table, seal request,
+detached attestation, Concept-only seal, and pair manifest. The seal carries an
+explicit not-a-gold-bundle status. Exact Source quotes remain in ignored local
+authoring data; public evidence contains logical identifiers, UTF-8 byte
+spans, and hashes only.
+
+The reviewer policy is a separate public trust root. Its canonical JSON and
+sidecar must already exist as exact blobs at a named full Git commit that is an
+ancestor of current HEAD. It binds the frozen protocol, reviewer ID, allowed
+SSHSIG namespaces, one canonical Ed25519 allowed-signers line, its hash, and
+the key fingerprint. Worksheet and Concept-stage artifacts then bind the
+policy hash and registration commit.
+
+New authoring additionally requires the same policy and sidecar at current
+`HEAD`, the index, and the working tree. Committed removal revokes new use.
+Historical verification reconstructs the prior bytes from the registration
+commit, preserving auditability of old seals without reactivating the key.
+
+This establishes that a repository-registered key approved exact bytes. It
+does not authenticate reviewer humanity, real-world identity, prediction
+blindness, timestamp truth, or semantic correctness. The single-maintainer
+workflow is self-attested.
+
+### Main implementation choices
+
+- Python 3.11 and strict/frozen Pydantic DTOs keep worksheet, inventory, alias,
+  attestation, seal, and pair shapes explicit and immutable after validation.
+- Canonical UTF-8 JSON, SHA-256 sidecars, bounded stable-file reads, and atomic
+  no-replace publication make identities replayable and conflicts fail closed.
+- Mutable Source-bearing authoring stays below the verified Git-ignored data
+  boundary; public output receives a recursive privacy scan before any leaf is
+  exposed.
+- Preparation resolves private exact quotes against the frozen private Source
+  bytes. Repeated text requires an explicit page-global byte start.
+- Sealing re-derives all prepared artifacts from the current worksheet before
+  accepting a signature. Public publication preflights the whole leaf set,
+  then reloads the full DAG after publication.
+- OpenSSH verification uses fixed trusted system executable locations and a
+  minimal subprocess environment; `PATH` and loader/Git/SSH injection do not
+  select the production verifier.
+- The complete unordered pair universe is derived deterministically from the
+  fixed Concept keys before Relation decisions, preventing positive-pair
+  cherry-picking.
+
+### Adversarial findings that changed the design
+
+1. The initial `allowed_signers` input was self-authorizing: a caller could
+   generate a fresh key, supply its matching policy, and obtain a valid seal.
+   G2.1 now requires a separately committed `ReviewerKeyPolicyAuthority` and
+   matches signer, namespace, policy hash, and fingerprint during both sealing
+   and reload.
+2. A bare `ssh-keygen` lookup plus inherited environment allowed executable or
+   dynamic-loader substitution. Production verification now selects a trusted
+   absolute system path and sends a minimal allowlisted environment; explicit
+   binary injection remains test-only and requires an absolute path.
+3. Checking only the final private file did not prove every parent remained
+   under the intended ignored/untracked boundary. Private artifact operations
+   now validate lexical/resolved containment, repository ownership, link and
+   file type, and Git ignore/tracking status at the boundary.
+4. Publishing six leaves sequentially could discover an immutable conflict
+   after earlier leaves had appeared. A complete preflight now validates every
+   destination and public payload before the first publication; strict reload
+   still owns convergence/recovery verification.
+5. A shallow forbidden-key/string check could miss nested or fragmented
+   Source copies. The public scanner now traverses the complete payload and
+   rejects sensitive keys, local/private paths, long Source substrings, and
+   token-window copies before publication.
+6. Fields such as `proposal_origin=human` and a timestamp could be read as
+   software-authenticated facts. Artifact naming and receipts now preserve
+   them as reviewer declarations and explicitly retain
+   `software_authenticated_reviewer_identity=false` and
+   `software_authenticated_prediction_blindness=false`.
+7. Raw CLI exception text could echo a private path or quote. The command
+   boundary now maps failures to bounded error classes while detailed private
+   validation remains inside tests/local debugging boundaries.
+8. The old direct `O_EXCL` target write exposed an in-progress, potentially
+   zero-byte target to concurrent readers. Publication now writes and syncs a
+   complete same-directory staging file, then performs an atomic no-replace
+   install. A bounded 0.5-second reconciliation applies only to the remaining
+   identical-install race; a persistent unsafe or conflicting leaf still fails
+   closed. The original concurrency regression passes again.
+9. Treating any reachable historical key as active meant a committed policy
+   removal did not revoke new signing. The workflow now separates active
+   current-state authority from historical verification capability.
+10. Reviewer-policy history checks still invoked bare `git` in an inherited
+    executable environment. Git plumbing now uses a trusted absolute machine
+    path and a minimal allowlisted environment, matching the SSH boundary.
+11. Public-value privacy checks were tightened for default-ignorable Unicode,
+    nested percent-encoding, POSIX system paths, and Concept keys, closing
+    alternate spellings that could conceal a local path or copied Source text.
+12. Decoding only two percent-encoding layers left reversible Source text and
+    deeper encoded paths outside the copy scanner. Public Concept prose has no
+    product requirement for URL escapes, so the boundary now rejects any
+    `%HH` escape while preserving ordinary percentages such as `100%`.
+
+### Verification and honest claim boundary
+
+The first pre-hardening focused implementation run reported `25 passed, 1
+skipped`. That number is historical, not the acceptance result: reviewer-policy
+and security changes expanded the focused result to `55 passed, 1 skipped`
+after the publication-race and percent-escape fixes. The complete local backend
+regression reports `1028 passed, 7 skipped, 1 warning`; remote change-level CI
+remains the push gate. Isolated follow-up evidence includes `12 passed` for the
+reviewer-policy authority and `11 passed, 1 skipped` for the hardened OpenSSH
+boundary; the skip remains environment-capability dependent. The final focused
+and full-regression results are part of this Git checkpoint.
+
+The maintained workflow contract and user-owned exercise are documented in
+[Golden Graph Human Annotation Workflow](modules/golden-graph-human-annotation-workflow.md),
+[ADR-0010](decisions/ADR-0010-staged-human-gold-and-key-control-attestation.md),
+and the [G2 learning handoff](learning/g2-human-annotation-handoff.md). The
+hash-bound [Graph Annotation Protocol](graph-annotation-protocol.md) was not
+edited; a semantic change requires a new protocol identity.

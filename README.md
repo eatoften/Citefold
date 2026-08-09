@@ -123,14 +123,23 @@ drift. G1.3 now revalidates the complete reviewed draft and current Source
 authority inside one serialized transaction, then seals a content-hashed,
 self-contained GraphVersion behind active-version and draft-manifest CAS.
 Historical versions remain auditable, while `/current` fails closed when its
-Source authority drifts. Automatic Understanding, deterministic paths, and the
-evidence-first graph UI remain roadmap work; the current Explore graph is still
-a sparse CardRelation discovery baseline. See the
+Source authority drifts. G2.1 now implements the private human Concept
+worksheet, redacted seal preparation, external OpenSSH key-control
+attestation, immutable six-leaf Concept-stage publication, complete Relation
+pair enumeration, and strict reload. It requires a reviewer public-key policy
+whose exact bytes were committed before annotation. No real CS336 reviewer-key
+policy has been registered, so no authorized worksheet or human label exists;
+no `ConceptInventorySeal`, `GoldBundleSeal`, accuracy result, or path result
+exists. Automatic Understanding, Relation gold, deterministic paths, and the
+evidence-first graph UI remain roadmap work; the current Explore graph is still a sparse
+CardRelation discovery baseline. See the
 [active roadmap](docs/roadmap.md),
 [graph decision record](docs/decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md),
+[staged-human-gold decision](docs/decisions/ADR-0010-staged-human-gold-and-key-control-attestation.md),
 [G1 substrate contract](docs/modules/concept-graph-substrate.md),
 [Source projection generation contract](docs/modules/source-projection-generation.md),
 [immutable graph publication contract](docs/modules/concept-graph-publication.md),
+[G2.1 human annotation workflow](docs/modules/golden-graph-human-annotation-workflow.md),
 [learning and mastery plan](docs/project-mastery-plan.md), and
 [append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.
@@ -146,11 +155,14 @@ registered claim rules, and no-overwrite freeze authority. The
 [G0.2b Source-slice builder](docs/modules/golden-graph-source-slice-builder.md)
 adds bounded PDF projection, exact verified-code execution, production-compatible
 Source/Locator identities, redacted derivation leaves, and a reloadable ignored
-private materialization. The CS336 Lecture 3 artifact is still deliberately a
-draft build specification and reports **no accuracy result**: its whole 68-page
-Source slice and immutable protocol are now frozen, but later human gold must
-be independently sealed before path results,
-and later evaluation must keep four downstream authorities separate: the
+private materialization. The CS336 Lecture 3 whole 68-page Source slice and
+protocol are frozen and independently replayed, but they report **no accuracy
+result**. G2.1 has implemented the Concept sealing machinery, including a
+prior-commit reviewer-key trust root, but the maintainer must register the real
+policy and author the human labels. Later Relation gold must be independently
+sealed before path results.
+
+The evaluation contract keeps four downstream authorities separate: the
 protocol definition plus Source-slice freeze, a partition-bound
 `GoldBundleSeal`, an automatic-proposal/Chat run family (`RunSpecSeal` plus
 sealed `PredictionBundle`/`ResultBundle`), and an append-only access ledger.
@@ -170,7 +182,9 @@ with at least five independent sealed lecture clusters.
 > draft lifecycle, and G1.2c gives Concept identities an auditable
 > merge/retirement lifecycle. G1.2d adds durable initial-create receipts, and
 > G1.3 publishes immutable authoritative GraphVersions with fail-closed Source
-> authority. The current automatic Card pipeline still reads video
+> authority. G2.1 supplies a separate evaluation-only human Concept handoff,
+> but no real reviewer-key policy or authorized worksheet exists yet. The
+> current automatic Card pipeline still reads video
 > `TranscriptChunk` objects directly; no candidate is an accepted graph fact;
 > and Explore still renders a Card-to-Card `CardRelation` graph.
 

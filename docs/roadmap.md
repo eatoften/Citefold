@@ -48,7 +48,7 @@ commit, and remote push are all complete.
 | P1.1 Notebook Notes | Free notes, save-answer-to-note, and note-to-source workflows | Complete |
 | G0 Graph contract and baseline | Relation semantics, evidence rules, evaluation scope, and non-goals are frozen | In progress |
 | G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | Complete - G1.1 candidates, G1.2 lifecycle/reliability, and G1.3 immutable publication implemented |
-| G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | Planned |
+| G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | In progress - G2.1 tooling implemented; reviewer-key registration and human work not started |
 | G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | Planned |
 | G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | Planned |
 | P1.2 Studio | Study, Review, and Course Map become a coherent output library | Deferred until G4 |
@@ -109,9 +109,16 @@ and independently replays the fixed 68-page Lecture 3 parser/chunker output,
 redacted semantic Source/Chunk/build-summary leaves, and immutable protocol.
 No Source text is committed.
 
-The G0 evaluation-input freeze is complete. G2 must next create and separately seal
-human label lineage and aliases; future automatic-proposal/Chat evaluation must
-separately create a pre-annotation `RunSpecSeal`, a post-gold sealed
+The G0 evaluation-input freeze is complete. G2.1 now implements the private
+Concept worksheet, redacted preparation, external key-control attestation,
+immutable Concept-stage DAG, complete pair enumeration, and strict reload. The
+workflow now requires a reviewer-key policy committed before annotation. No
+real CS336 policy or authorized worksheet exists, so there are zero human
+labels and no `ConceptInventorySeal` or `GoldBundleSeal`. The maintainer must
+next register that trust root, then author and separately seal human Concept
+lineage and aliases; future
+automatic-proposal/Chat evaluation must separately create a pre-annotation
+`RunSpecSeal`, a post-gold sealed
 `PredictionBundle`/`ResultBundle` that references it, and an append-only access
 ledger before any held-out project result is opened.
 
@@ -223,6 +230,19 @@ Deliverables:
 - migration, transaction, concurrency, invalidation, recovery, and API tests.
 
 #### G2 - Human-reviewed golden course graph
+
+Current checkpoint: the
+[G2.1 human annotation workflow](modules/golden-graph-human-annotation-workflow.md)
+implements `prepare-reviewer-key-policy`, `verify-reviewer-key-policy`,
+`init-concepts`, `prepare-concept-seal`, `seal-concepts`, and
+`verify-concepts`. It separates ignored Source-bearing authoring from a
+redacted six-leaf public Concept DAG, treats OpenSSH signatures as key-control
+evidence only, requires its public key policy to pre-exist in reachable Git
+history, and derives the exhaustive pair manifest before Relation review. No
+real CS336 reviewer-key policy or authorized worksheet exists. This is a
+software checkpoint, not a human-label, gold-graph, accuracy, agreement, or
+path-quality result. The staged authority decision is recorded in
+[ADR-0010](decisions/ADR-0010-staged-human-gold-and-key-control-attestation.md).
 
 Deliverables:
 
