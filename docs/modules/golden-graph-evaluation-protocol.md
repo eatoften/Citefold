@@ -191,8 +191,9 @@ A matching asset hash proves byte identity, not PDF safety. The G0.2b Source
 catalog builder enforces parser resource limits and records exclusions for
 image-only or failed pages. It cannot turn an unverified OCR transcription
 into ordinary PDF text evidence. G0.2a validates structural lineage and
-registered hashes; the real G0.2b raw-PDF-to-page and page-to-Chunk replay must
-still publish its receipt before the CS336 Source slice freezes.
+registered hashes. G0.2b now records the completed raw-PDF-to-page and
+page-to-Chunk build plus an identical detached-worktree replay before the CS336
+Source slice freeze.
 
 ## Canonical artifact contract
 
@@ -288,9 +289,9 @@ relabeled as a closed-world graph benchmark.
 
 ## Next gates
 
-G0.2 closes only after the maintainer selects the exact Lecture 3 pages and the
-bounded builder emits canonical dependency, Source, and Chunk leaves; the
-statistical confidence floors must also be complete. G2 then creates the
+G0.2 is closed by the fixed whole-deck scope, independently replayed redacted
+Source/Chunk/summary leaves, complete confidence floors, and frozen protocol.
+G2 now creates the
 Concept inventory, complete pair universe,
 blinded Pass A/B artifacts, adjudication, alias table, and semantic gold export.
 Only after that separate gold freeze may G3 path evaluation use the fixture;

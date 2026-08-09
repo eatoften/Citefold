@@ -1,8 +1,8 @@
 # Golden Graph Source-Slice Builder
 
 - **Program:** G0.2b
-- **Status:** builder and whole-deck CS336 build specification implemented;
-  the real published slice leaves and protocol freeze are still pending
+- **Status:** complete for the deterministic CS336 Source slice, independent
+  replay, and protocol freeze; human gold remains a separate G2 gate
 - **Depends on:**
   [public-course acquisition](public-course-benchmark-acquisition.md) and
   [golden-graph evaluation protocol](golden-graph-evaluation-protocol.md)
@@ -235,11 +235,31 @@ closure, asset, and tool checks before issuing output authority.
 | derivation lineage | historical commit blobs remain verifiable while current code/runtime drift blocks only replay readiness | builder/command stale-import tests, protocol Git-blob validation, and C1-build/C2-publish/C3-evolution regression |
 | authority integrity | private/public Chunk text, offsets, ordinals, counts, and hashes must agree | constructor guard plus tampered-private-text issuer test; broader mutation matrix remains a useful extension |
 | failure atomicity | worker timeout cleans private temp; max-Chunk failure emits no partial authority; public conflict never overwrites | builder timeout/limit/writer tests |
-| real CS336 replay | identical redacted leaf hashes from the exact registered whole Lecture 3 deck | 68-page build specification fixed; recorded publication/replay pending |
-| protocol freeze | redacted leaves and confidence floors accepted by the frozen protocol loader | pending G0.2 completion |
+| real CS336 replay | identical redacted leaf hashes from the exact registered whole Lecture 3 deck | initial clean build and detached clean-worktree replay produced identical catalog, Chunk, and summary hashes |
+| protocol freeze | redacted leaves and confidence floors accepted by historical and strict loaders | complete; frozen protocol SHA-256 `e09c9128...8174f` |
 
 The synthetic tests prove contracts and failure behavior. They do not establish
 CS336 Concept/Relation accuracy or benchmark validity.
+
+## Recorded CS336 G0.2 outcome
+
+| Identity | Frozen value |
+| --- | --- |
+| Derivation commit | `cd0651624a39edc1b932a12f1fe0f63c8d398ca3` |
+| Whole-deck inventory | 68 pages included, 0 excluded, 0 blank, 0 parse failures |
+| Chunk inventory | 68 page-local Chunks |
+| Semantic Source catalog | `18c49f521502cc207f0342ad67c527db71cf695759c4fb7342eb40eaa3638b50` |
+| Semantic Chunk manifest | `6e238c534f3d63fb49c495588b3bca37e9717b412ad6bf23560ed8afa8b66b09` |
+| Source-slice build summary | `ae2876c4d4354810ea8cee482f52d5a3016531219f3897d2167d5a0bb56333ff` |
+| Bound draft artifact | `f08162714e32b8b0e41a7d619e96da4bd7c2d473db07956442d9d59c3ace41a4` |
+| Frozen protocol | `e09c91283a44e9cf2ebb6094a6ecbc6dec85d5f32c4dc82c1a5c65135838174f` |
+
+The initial publication and a no-write replay in a temporary detached worktree
+at the same derivation commit produced the same three redacted hashes. The
+temporary worktree, copied private PDF, and isolated environment were removed
+after comparison. The ignored private materialization then reloaded against
+the frozen protocol with 68 pages and 68 Chunks. These are reproducibility and
+lineage results, not model or graph-quality metrics.
 
 ## Decisions, issues, and learning notes
 

@@ -1,7 +1,7 @@
 # ADR-0009: Build Deterministic, Redacted Source Slices for Evaluation
 
-- **Status:** Accepted; G0.2b builder and whole-deck specification implemented,
-  real CS336 slice/freeze pending
+- **Status:** Accepted and implemented; real CS336 whole-deck slice replayed
+  and protocol frozen
 - **Date:** 2026-08-08
 - **Decision owners:** Project maintainer and Codex implementation agent
 
@@ -241,8 +241,10 @@ Costs and limitations:
   floors validate.
 
 The implementation gates through failure cleanup have automated coverage. The
-real-CS336 replay and protocol freeze remain G0.2 acceptance work. Human
-Concept/Relation gold and model metrics remain G2 and later work.
+real CS336 build and detached replay produced identical catalog, Chunk, and
+summary hashes, and the protocol froze as
+`e09c91283a44e9cf2ebb6094a6ecbc6dec85d5f32c4dc82c1a5c65135838174f`.
+Human Concept/Relation gold and model metrics remain G2 and later work.
 
 ## Related records
 

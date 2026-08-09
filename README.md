@@ -147,8 +147,9 @@ registered claim rules, and no-overwrite freeze authority. The
 adds bounded PDF projection, exact verified-code execution, production-compatible
 Source/Locator identities, redacted derivation leaves, and a reloadable ignored
 private materialization. The CS336 Lecture 3 artifact is still deliberately a
-draft and reports **no accuracy result**: its whole 68-page scope is registered,
-but the derived leaves and later human gold must be frozen before path results,
+draft build specification and reports **no accuracy result**: its whole 68-page
+Source slice and immutable protocol are now frozen, but later human gold must
+be independently sealed before path results,
 and later evaluation must keep four downstream authorities separate: the
 protocol definition plus Source-slice freeze, a partition-bound
 `GoldBundleSeal`, an automatic-proposal/Chat run family (`RunSpecSeal` plus

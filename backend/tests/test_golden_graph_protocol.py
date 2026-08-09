@@ -68,6 +68,12 @@ CS336_DRAFT = (
     / "protocols"
     / "cs336-sp25-lecture-03-v1.draft.json"
 )
+CS336_FROZEN = (
+    BACKEND_ROOT
+    / "golden_graph"
+    / "protocols"
+    / "cs336-sp25-lecture-03-golden-graph-v1.frozen.json"
+)
 
 STATISTICAL_TARGETS = {
     "concept_inventory_coverage",
@@ -104,7 +110,7 @@ def _allow_explicit_non_git_synthetic_revision(
     )
 
 
-def test_cs336_lecture_3_build_ready_draft_waits_for_derived_leaves() -> None:
+def test_cs336_lecture_3_source_slice_is_bound_and_frozen() -> None:
     protocol = load_protocol(CS336_DRAFT)
     authority = load_manifest_authority(CS336_MANIFEST)
 
@@ -117,9 +123,18 @@ def test_cs336_lecture_3_build_ready_draft_waits_for_derived_leaves() -> None:
     assert protocol.page_scope.excluded_pages == ()
     assert protocol.projection.parser is not None
     assert protocol.projection.chunker is not None
-    assert protocol.projection.semantic_source_catalog_sha256 is None
-    assert protocol.projection.chunk_manifest_sha256 is None
-    assert protocol.projection.source_slice_build_summary_sha256 is None
+    assert (
+        protocol.projection.semantic_source_catalog_sha256
+        == "18c49f521502cc207f0342ad67c527db71cf695759c4fb7342eb40eaa3638b50"
+    )
+    assert (
+        protocol.projection.chunk_manifest_sha256
+        == "6e238c534f3d63fb49c495588b3bca37e9717b412ad6bf23560ed8afa8b66b09"
+    )
+    assert (
+        protocol.projection.source_slice_build_summary_sha256
+        == "ae2876c4d4354810ea8cee482f52d5a3016531219f3897d2167d5a0bb56333ff"
+    )
     assert protocol.review.annotation_guide_sha256 == hashlib.sha256(
         (REPOSITORY_ROOT / protocol.review.annotation_guide_path).read_bytes()
     ).hexdigest()
@@ -131,18 +146,34 @@ def test_cs336_lecture_3_build_ready_draft_waits_for_derived_leaves() -> None:
         == 50
     )
 
-    with pytest.raises(GoldenGraphProtocolError, match="semantic Source catalog"):
-        validate_protocol_for_freeze(
-            protocol, authority, repository_root=REPOSITORY_ROOT
-        )
+    validate_protocol_for_freeze(
+        protocol,
+        authority,
+        repository_root=REPOSITORY_ROOT,
+    )
+    historical = load_historical_frozen_protocol(
+        CS336_FROZEN,
+        authority,
+        repository_root=REPOSITORY_ROOT,
+    )
+    strict = load_frozen_protocol(
+        CS336_FROZEN,
+        authority,
+        repository_root=REPOSITORY_ROOT,
+    )
+    assert historical.protocol_sha256 == (
+        "e09c91283a44e9cf2ebb6094a6ecbc6dec85d5f32c4dc82c1a5c65135838174f"
+    )
+    assert strict == historical
 
     # A serialized status label cannot bypass the authority service.
     bare_frozen = protocol.model_copy(update={"protocol_status": "frozen"})
     assert not isinstance(bare_frozen, FrozenProtocolAuthority)
-    with pytest.raises(GoldenGraphProtocolError, match="semantic Source catalog"):
-        validate_protocol_for_freeze(
-            bare_frozen, authority, repository_root=REPOSITORY_ROOT
-        )
+    validate_protocol_for_freeze(
+        bare_frozen,
+        authority,
+        repository_root=REPOSITORY_ROOT,
+    )
 
 
 def test_protocol_envelopes_require_explicit_fixed_and_nullable_keys(

@@ -3734,9 +3734,8 @@ slice freezes may G2 generate empty blinded annotation packets.
 
 ## G0.2b - Deterministic redacted Source-slice derivation
 
-**Status:** Builder, protocol adapter, whole-deck build specification, and
-failure contracts implemented; real artifact publication/replay and freeze are
-the next checkpoint
+**Status:** Complete; builder, independent whole-deck replay, redacted public
+leaves, private materialization reload, and protocol freeze verified
 
 ### Architecture and ownership decision
 
@@ -3827,8 +3826,18 @@ only; licensed Source text remains under ignored `backend/data/`.
 - no human gold, Concept/Relation accuracy, grounded-Chat accuracy, path
   quality, held-out generalization, or educational-effectiveness claim exists.
 
-The next checkpoint commits and pushes this derivation code/specification,
-waits for CI, then rebuilds from that clean commit to publish the three redacted
-leaves plus the ignored private envelope. Only the following commit can bind
-those output hashes and freeze the G0.2 protocol without a circular code/output
-identity.
+The derivation implementation was committed as `cd06516` and its GitHub
+Change-level CI run `31287458081` passed Backend, Frontend, and Desktop/Rust.
+The exact registered PDF was then built from that clean commit and replayed
+without writes in a temporary detached worktree at the same commit. Both runs
+produced 68 included pages, 68 Chunks, no blank/failed pages, and identical
+catalog (`18c49f...8b50`), Chunk (`6e238c...6b09`), and summary
+(`ae2876...33ff`) hashes. The temporary worktree and copied private input were
+removed after comparison.
+
+The bound draft (`f0816271...41a4`) then issued frozen protocol
+`e09c9128...8174f`. Historical and strict loaders agreed, and the ignored
+private materialization reloaded against the frozen protocol with the same
+68-page/68-Chunk inventory. No PDF or Source text entered Git. This closes the
+G0.2 evaluation-input freeze; it does not create human Concepts/Relations or
+authorize any accuracy, path-quality, held-out, or educational-effect claim.
