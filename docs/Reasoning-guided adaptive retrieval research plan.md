@@ -257,19 +257,12 @@ The current questions and graph are pending independent human review. The
 existing multi-hop slice mostly combines two cards; it is not yet a benchmark
 of iterative missing-prerequisite discovery.
 
-### 4.5 Multimodal baseline
+### 4.5 Multimodal boundary
 
-`backend/multimodal_lab` already contains controlled work for:
-
-- transition and stable-page detection;
-- native page text and RapidOCR;
-- handwritten CNN-CTC and ViT-CTC readers;
-- an OCR-to-card cascade.
-
-The visual research pipeline is not integrated into product RAG. Current RAG
-snapshots do not contain source units, slide images, equations, code regions, or
-generic multimodal evidence nodes. OCR output is still reduced to text before
-card generation.
+The product currently normalizes extracted text from videos and documents into
+canonical Source Chunks. It does not claim a learned visual reader or a general
+multimodal retrieval result. Slide images, equations, code regions, and generic
+visual evidence nodes remain outside the current RAG benchmark.
 
 ## 5. Research Code Architecture Lessons
 

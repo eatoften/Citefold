@@ -4499,3 +4499,147 @@ its Source locator but does not yet open the inspector directly from the editor.
 Durable browser E2E, narrow/keyboard/accessibility acceptance, 1k/10k path
 profiles, public graph-quality measurement, complete backend non-regression,
 merge to `main`, and a new desktop release remain required.
+
+## G4.3 Graph-guided Grounded Chat - Published path, Source authority
+
+**Status:** Bounded user-visible integration implemented and browser-accepted;
+broader graph retrieval, model-quality evaluation, durable E2E, and the full G4
+quality/performance/release gate remain open
+
+### Outcome and exact data flow
+
+Grounded Chat can now explain the exact published path it used as context
+without turning derived graph structure into factual evidence:
+
+```text
+current user question + immutable selected-Source snapshot
+-> exact preferred-name/alias match for exactly two Concepts
+-> active + Source-current published GraphVersion
+-> every route owner fully contained by the selected Sources
+-> deterministic bidirectional Relationship Trace (6 hops / 32 nodes max)
+-> normal MiniLM Source search, ranking, failure, and refusal behavior
+-> grounded-chat-v2: E* Source evidence + untrusted graph path context
+-> existing strict JSON validation and citation CAS publication
+-> immutable message metadata graph_context
+-> defensive React disclosure of version, route, support basis, and direction
+```
+
+The graph context stores schema version, course, GraphVersion/content hash,
+deterministic result hash, exact Concept/revision sequence, and every
+Relation/revision/type/support-basis/traversal direction. It is message JSON
+metadata, not a new database column or a citation. Historical answers therefore
+retain the route they saw even after a later GraphVersion is published.
+
+### Decisions that keep the Source-first boundary honest
+
+1. **Dense retrieval remains the only evidence retrieval.** An early version
+   inserted graph-linked Chunks ahead of MiniLM results, assigned artificial
+   near-`1.0` scores, and treated graph Chunks as an embedding-failure fallback.
+   That changed the accepted Dense baseline and made citation scores dishonest.
+   The final implementation removes graph evidence fusion entirely. A semantic
+   search failure is still the existing retryable `503`; Graph context cannot
+   turn it into a successful answer.
+2. **Derived information must be completely Source-scoped.** Checking that a
+   Concept or Relation had *some* evidence in a selected Source could expose a
+   name or edge partly derived from an unselected Source. Every owner on the
+   route must now have non-empty evidence and all of it must belong to the
+   turn's selected-Source snapshot; otherwise Chat falls back to Source-only.
+3. **Routing is deliberately narrow.** Only the current question participates
+   in matching, not the multi-turn semantic retrieval query. It must name
+   exactly two Concepts; one-name neighborhoods, three-plus-anchor heuristics,
+   entity linking, and Graph-for-all routing remain unimplemented rather than
+   silently guessing intent.
+4. **Relation semantics stay visible.** The prompt and UI carry
+   `support_basis`; the prompt instructs the model to describe
+   `pedagogical_inference` only as a published organizational suggestion.
+   Reverse traversal is also explicit in the prompt and UI. Whether a live
+   model follows those semantic instructions remains model-quality work.
+5. **The UI parses persisted metadata as untrusted legacy data.** Unknown
+   schema/strategy/relation values, bad hashes, duplicate IDs, discontinuous
+   ordinals, or non-adjacent endpoints hide the disclosure rather than render a
+   false route. React text nodes provide escaping; native `details/summary`
+   preserves keyboard behavior; the route becomes a single-column sequence at
+   narrow widths.
+
+This slice adds no migration, graph database, task type, client cache, state
+framework, entity linker, retriever abstraction, or evaluation framework. It
+reuses Pydantic, the immutable SQLite GraphVersion store, the deterministic BFS
+Trace engine, existing MiniLM retrieval, strict grounded-answer validation,
+chat message metadata, and the React Chat feature boundary.
+
+### Browser acceptance and truthful claim boundary
+
+The ignored CS336 Lecture 3 engineering workspace used the real hash-pinned
+68-page PDF, production Source/Chunk projection, cached MiniLM index, active
+GraphVersion v2, deterministic two-hop
+`Full Attention -> Sparse Attention -> Sliding-window Attention` Trace, Chat
+state machine, SQLite persistence, citation snapshots, Source resolver, and
+React UI. MiniLM returned the canonical PDF page-65 and page-66 Chunks inside
+the bounded evidence set. The browser showed the two cited sentences, reopened
+the immutable page-65/page-66 quotations and PDF locations, exposed both
+`prerequisite / pedagogical_inference` steps, and retained the route and
+citations after reload without horizontal overflow.
+
+Only the generation call was replaced by the deterministic
+`cs336-evidence-script-v1` strict-JSON oracle. Local `qwen3:4b` was not used as
+acceptance evidence because it did not reliably satisfy the strict grounded
+JSON contract. The browser run therefore demonstrates successful-path
+integration, persistence, citation navigation, and UI behavior under a
+contract-compliant oracle; focused negative tests cover structural citation
+and output validation. It does **not** prove live-model semantic compliance,
+Qwen quality, hallucination rate, graph accuracy, retrieval improvement, human
+review, or an ablation result. The three-Concept/two-Relation graph remains an
+imported engineering fixture, not human gold.
+
+### Verification and remaining boundary
+
+- focused graph-path/Chat API/prompt regression: `44 passed`;
+- focused Chat disclosure regression: `11 passed`;
+- risk-corresponding backend regression: `158 passed, 1 skipped`;
+- complete frontend regression: `213 passed` across `28` files;
+- frontend ESLint, Python bytecode compilation, the production build, and
+  `git diff --check` pass; the main JavaScript chunk is `380.31 kB` minified;
+- a clean complete-backend run made continued progress through the slow Windows
+  Git/attestation fixtures but did not finish within 30 minutes. It returned no
+  failure result and is deliberately **not** reported as a passing full suite;
+- independent backend and frontend review found and closed the mixed-Source,
+  artificial-score/fallback, support-basis, reverse-direction, truth-label, and
+  narrow-layout defects described above.
+
+Still open: a durable browser E2E, broader accessibility acceptance, a real
+human graph, public graph/path quality metrics, semantic-versus-graph ablation,
+LLM output-quality evaluation, full-snapshot Graph hydration profiling/cache,
+1k/10k path performance, complete release checks, merge to `main`, and a new
+desktop release.
+
+## Repository scope correction - remove the isolated CNN/ViT reader study
+
+**Status:** Removed from the active tree; recoverable from Git history
+
+The handwritten CNN-CTC/ViT-CTC comparison was an isolated research exercise,
+not a dependency of Source ingestion, Chat, Notes, or the Concept Graph. Its
+large code/test/document footprint made the repository look broader without
+improving the product's central evidence-grounded claim. Keeping it would also
+encourage counting unrelated experiments and tests as product maturity.
+
+The cleanup removes the complete `backend/multimodal_lab` package, its 24
+dedicated backend test files, seven Multimodal study/plan documents, and seven
+Assignment 1-5 result/annotation artifacts. The direct RapidOCR, ONNX Runtime,
+and Pillow declarations were removed from `pyproject.toml`; the lock refresh
+eliminated the RapidOCR-specific dependency chain, while ONNX Runtime and
+Pillow remain only as transitive requirements of `faster-whisper` and
+`python-pptx`. Product video transcription, document parsing, canonical
+Sources, MiniLM retrieval, RAG experiments, and graph work remain unchanged.
+Scanned-document OCR is still explicitly unsupported by the product parser
+rather than implied by an unused research dependency.
+
+No replacement benchmark, model, framework, or test suite was added. At the
+maintainer's request, this scope correction used only reference/diff checks;
+the next normal CI run remains the integration gate.
+
+A post-acceptance Graph-guided Chat review also found a small authority race:
+the optional GraphVersion was loaded before Source retrieval. The final code
+now loads it after successful evidence selection, immediately before
+generation, reducing the window in which a concurrent Source reprojection
+could leave a stale route attached to a newer evidence set. No new subsystem
+or graph cache was introduced.
