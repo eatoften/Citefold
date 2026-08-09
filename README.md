@@ -1,41 +1,26 @@
-<h1 align="center">Citefold</h1>
+# Citefold
 
-<p align="center">
-  <strong>A local-first, evidence-grounded personal intelligence workspace.</strong>
-</p>
+Citefold is a local-first workspace for studying course videos and documents.
+It normalizes source material into one evidence model, supports multi-turn Chat
+with sentence-level citations, and provides Notes and a versioned Concept Graph.
 
-<p align="center">
-  Turn course videos and documents into verifiable conversations, notes, and
-  concept paths that lead back to the original source.
-</p>
+[Roadmap](docs/roadmap.md) | [Architecture decisions](docs/decisions/) |
+[Engineering log](docs/productization-log.md) |
+[Learning notes](docs/project-mastery-plan.md) |
+[Windows release](https://github.com/eatoften/Citefold/releases/latest)
 
-<p align="center">
-  <a href="docs/roadmap.md">Roadmap</a> ·
-  <a href="docs/decisions/ADR-0001-source-first-local-course-notebook.md">Architecture</a> ·
-  <a href="docs/productization-log.md">Engineering log</a> ·
-  <a href="docs/project-mastery-plan.md">Learning plan</a> ·
-  <a href="https://github.com/eatoften/Video_Course_Cards/releases/latest">Windows release</a>
-</p>
+> **Status:** The core local workflow is implemented, but the project is not
+> release-complete. Some package and UI identifiers still use the legacy
+> **Video Course Cards** name. The published `v0.1.1` Windows build predates the
+> latest Concept Graph workflow.
 
-> **Status: working product vertical slice, not release-complete.** **Citefold**
-> is the proposed product name; repository, package, and UI identifiers still
-> carry the legacy **Video Course Cards** name until a deliberate migration.
-> The published `v0.1.1` Windows build also predates the latest graph workflow.
+## Core data model
 
-## Why Citefold
-
-Citefold is built around one narrow requirement: a generated answer must keep
-its path back to evidence.
-
-- an original video, PDF, slide deck, document, or note is a **Source**;
-- a `CourseSourceChunk` plus a typed `Locator` is the canonical evidence unit;
-- Cards, Concepts, Relations, summaries, and graph paths are **derived
-  interpretations**, not truth;
-- every factual Chat sentence must cite a server-owned Source snapshot that can
-  reopen the video timestamp, PDF page, slide, or document paragraph.
-
-The product name reflects that contract: synthesized knowledge should always
-be able to *fold back* to a citation.
+- A video, PDF, slide deck, document, or published Note is a `CourseSource`.
+- A `CourseSourceChunk` with a typed `Locator` is the canonical evidence unit.
+- Cards, Concepts, Relations, summaries, and graph paths are derived data.
+- Chat citations are server-owned snapshots that resolve to a video timestamp,
+  PDF page, slide, or document paragraph.
 
 ## Product loop
 
@@ -187,7 +172,7 @@ For the packaged application, see [desktop setup and release constraints](docs/t
 | `docs/modules/` | Module contracts and implementation notes |
 | `docs/learning/` | Technical-stack notes and maintainer handoffs |
 
-## Engineering choices worth discussing
+## Implementation decisions
 
 - **Canonical projection:** modality adapters converge on one Source/Chunk/
   Locator contract, so Chat and future Understanding pipelines do not invent
