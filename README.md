@@ -1,4 +1,4 @@
-# Citefold
+#                                 Citefold
 
 Citefold is a local-first workspace for studying course videos and documents.
 It normalizes source material into one evidence model, supports multi-turn Chat
