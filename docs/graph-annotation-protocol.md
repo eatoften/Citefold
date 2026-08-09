@@ -17,9 +17,10 @@ current-evidence, and immutable-publication substrate.
 The human annotation protocol is not yet frozen. The executable G0.2
 [evaluation protocol boundary](modules/golden-graph-evaluation-protocol.md)
 now freezes machine-checkable schemas, numeric targets, claim scope, and Source
-lineage rules, but it intentionally cannot choose the Lecture 3 page scope or
-write human labels. The maintainer still owns that Source decision, the example
-worksheet, both delayed passes, and adjudication.
+lineage rules. The Lecture 3 Source scope is protocol-owned and uses the whole
+verified 68-page deck; it is not a human label. The maintainer still owns the
+example worksheet, both delayed Concept/Relation passes, adjudication, and the
+later human attestation that makes a gold seal possible.
 
 ## Claim boundary
 

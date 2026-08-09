@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 import hashlib
 import importlib.metadata
 import json
@@ -23,6 +24,7 @@ from golden_graph.bindings import (
     PdfParserConfigV1,
     SemanticSourceCatalog,
     SourceCatalogPage,
+    SourceSliceBuildSummary,
     Utf8ChunkerConfigV1,
 )
 from golden_graph.canonical_io import (
@@ -39,10 +41,14 @@ from golden_graph.protocol import (
     FrozenProtocolAuthority,
     GoldenGraphProtocolError,
     ManifestAuthority,
+    ReplayReadyFrozenProtocolAuthority,
     freeze_protocol,
     load_frozen_protocol,
+    load_historical_frozen_protocol,
     load_manifest_authority,
     load_protocol,
+    require_current_replay_readiness,
+    source_slice_build_spec_sha256,
     validate_protocol_for_freeze,
 )
 from golden_graph.schemas import GoldenGraphProtocol, MetricId
@@ -76,7 +82,29 @@ STATISTICAL_TARGETS = {
 }
 
 
-def test_cs336_lecture_3_draft_loads_but_cannot_freeze_without_guesses() -> None:
+@pytest.fixture(autouse=True)
+def _allow_explicit_non_git_synthetic_revision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unit fixtures use an explicit seam; production validation fails closed."""
+
+    original = protocol_module._validate_derivation_project_commit
+
+    def validate(**kwargs) -> None:
+        repository_root = kwargs["repository_root"]
+        commit_sha = kwargs["commit_sha"]
+        if not (repository_root / ".git").exists() and commit_sha == "1" * 40:
+            return
+        original(**kwargs)
+
+    monkeypatch.setattr(
+        protocol_module,
+        "_validate_derivation_project_commit",
+        validate,
+    )
+
+
+def test_cs336_lecture_3_build_ready_draft_waits_for_derived_leaves() -> None:
     protocol = load_protocol(CS336_DRAFT)
     authority = load_manifest_authority(CS336_MANIFEST)
 
@@ -84,8 +112,14 @@ def test_cs336_lecture_3_draft_loads_but_cannot_freeze_without_guesses() -> None
     assert protocol.claim_scope == "authoring_engineering_fixture"
     assert protocol.acquisition.asset_id == "lecture-03-architecture"
     assert protocol.acquisition.partition == "authoring"
-    assert protocol.page_scope.included_pages is None
-    assert protocol.projection.parser is None
+    assert protocol.page_scope.asset_page_count == 68
+    assert protocol.page_scope.included_pages == tuple(range(1, 69))
+    assert protocol.page_scope.excluded_pages == ()
+    assert protocol.projection.parser is not None
+    assert protocol.projection.chunker is not None
+    assert protocol.projection.semantic_source_catalog_sha256 is None
+    assert protocol.projection.chunk_manifest_sha256 is None
+    assert protocol.projection.source_slice_build_summary_sha256 is None
     assert protocol.review.annotation_guide_sha256 == hashlib.sha256(
         (REPOSITORY_ROOT / protocol.review.annotation_guide_path).read_bytes()
     ).hexdigest()
@@ -97,7 +131,7 @@ def test_cs336_lecture_3_draft_loads_but_cannot_freeze_without_guesses() -> None
         == 50
     )
 
-    with pytest.raises(GoldenGraphProtocolError, match="page scope"):
+    with pytest.raises(GoldenGraphProtocolError, match="semantic Source catalog"):
         validate_protocol_for_freeze(
             protocol, authority, repository_root=REPOSITORY_ROOT
         )
@@ -105,7 +139,7 @@ def test_cs336_lecture_3_draft_loads_but_cannot_freeze_without_guesses() -> None
     # A serialized status label cannot bypass the authority service.
     bare_frozen = protocol.model_copy(update={"protocol_status": "frozen"})
     assert not isinstance(bare_frozen, FrozenProtocolAuthority)
-    with pytest.raises(GoldenGraphProtocolError, match="page scope"):
+    with pytest.raises(GoldenGraphProtocolError, match="semantic Source catalog"):
         validate_protocol_for_freeze(
             bare_frozen, authority, repository_root=REPOSITORY_ROOT
         )
@@ -184,6 +218,18 @@ def test_protocol_envelopes_require_explicit_fixed_and_nullable_keys(
             ("chunks", 0, "locators", 0),
             "offset_unit",
         ),
+        (
+            SourceSliceBuildSummary,
+            projection["source_slice_build_summary_path"],
+            (),
+            "project_repository_commit_sha",
+        ),
+        (
+            SourceSliceBuildSummary,
+            projection["source_slice_build_summary_path"],
+            (),
+            "build_spec_protocol_sha256",
+        ),
     ):
         decoded, _digest_value = load_hashed_canonical_json(tmp_path / logical_path)
         bound_cases.append((model, decoded, parent_path, required_key))
@@ -243,6 +289,18 @@ def test_synthetic_binding_protocol_can_receive_protocol_freeze_authority(
         "changed",
         encoding="utf-8",
     )
+    historical = load_historical_frozen_protocol(
+        output_path,
+        authority,
+        repository_root=tmp_path,
+    )
+    assert historical.protocol_sha256 == receipt.protocol_sha256
+    with pytest.raises(GoldenGraphProtocolError, match="parser implementation"):
+        validate_protocol_for_freeze(
+            historical.protocol,
+            authority,
+            repository_root=tmp_path,
+        )
     with pytest.raises(GoldenGraphProtocolError, match="parser implementation"):
         load_frozen_protocol(
             output_path,
@@ -279,6 +337,39 @@ def test_complete_freeze_succeeds_with_every_bound_leaf_git_tracked(
         check=True,
         capture_output=True,
     )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(tmp_path),
+            "-c",
+            "user.name=Protocol Test",
+            "-c",
+            "user.email=protocol-test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "synthetic derivation revision",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    project_commit = subprocess.run(
+        ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    _rebind_source_slice_summary(
+        tmp_path,
+        payload,
+        project_repository_commit_sha=project_commit,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "--all"],
+        check=True,
+        capture_output=True,
+    )
     protocol = GoldenGraphProtocol.model_validate(payload)
 
     receipt = freeze_protocol(
@@ -289,6 +380,175 @@ def test_complete_freeze_succeeds_with_every_bound_leaf_git_tracked(
     )
 
     assert receipt.protocol.protocol_status == "frozen"
+
+
+def test_historical_authority_survives_later_orchestration_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority, payload = _synthetic_protocol(tmp_path)
+    subprocess.run(
+        ["git", "init", "--quiet", str(tmp_path)],
+        check=True,
+        capture_output=True,
+    )
+
+    def commit(message: str) -> str:
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "--all"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "-c",
+                "user.name=Protocol Test",
+                "-c",
+                "user.email=protocol-test@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                message,
+            ],
+            check=True,
+            capture_output=True,
+        )
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+    build_commit = commit("synthetic derivation revision")
+    _rebind_source_slice_summary(
+        tmp_path,
+        payload,
+        project_repository_commit_sha=build_commit,
+    )
+    protocol = GoldenGraphProtocol.model_validate(payload)
+    output_path = _frozen_output_path(tmp_path, protocol.protocol_id)
+    frozen = freeze_protocol(
+        protocol,
+        output_path,
+        authority,
+        repository_root=tmp_path,
+    )
+    publication_commit = commit("publish synthetic frozen protocol")
+
+    forged_authority = ManifestAuthority(
+        manifest=replace(authority.manifest, registered_at="2099-01-01"),
+        manifest_sha256=authority.manifest_sha256,
+        manifest_path=authority.manifest_path,
+    )
+    with pytest.raises(
+        GoldenGraphProtocolError,
+        match="recorded manifest blob",
+    ):
+        load_historical_frozen_protocol(
+            output_path,
+            forged_authority,
+            repository_root=tmp_path,
+        )
+
+    import benchmark_acquisition.fetch as fetch_module
+
+    def missing_asset(*_args, **_kwargs):
+        raise fetch_module.AcquisitionError("synthetic asset unavailable")
+
+    monkeypatch.setattr(fetch_module, "verify_registered_asset", missing_asset)
+    with pytest.raises(GoldenGraphProtocolError, match="asset is not replay-ready"):
+        require_current_replay_readiness(
+            frozen,
+            authority,
+            repository_root=tmp_path,
+        )
+    monkeypatch.setattr(
+        fetch_module,
+        "verify_registered_asset",
+        lambda *_args, **_kwargs: object(),
+    )
+    replay_ready = require_current_replay_readiness(
+        frozen,
+        authority,
+        repository_root=tmp_path,
+    )
+    assert isinstance(replay_ready, ReplayReadyFrozenProtocolAuthority)
+    assert replay_ready.recorded_project_commit_sha == build_commit
+    assert replay_ready.current_project_commit_sha == publication_commit
+
+    unrelated_leaf = tmp_path / "unrelated-evolution.txt"
+    unrelated_leaf.write_text("unrelated", encoding="utf-8")
+    alternate_commit = commit("create unrelated descendant")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "checkout", "--quiet", "--detach", publication_commit],
+        check=True,
+        capture_output=True,
+    )
+    original_validate = protocol_module.validate_protocol_for_freeze
+
+    def validate_then_switch_head(*args, **kwargs) -> None:
+        original_validate(*args, **kwargs)
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "checkout", "--quiet", "--detach", alternate_commit],
+            check=True,
+            capture_output=True,
+        )
+
+    monkeypatch.setattr(
+        protocol_module,
+        "validate_protocol_for_freeze",
+        validate_then_switch_head,
+    )
+    with pytest.raises(GoldenGraphProtocolError, match="HEAD changed"):
+        require_current_replay_readiness(
+            frozen,
+            authority,
+            repository_root=tmp_path,
+        )
+    monkeypatch.setattr(
+        protocol_module,
+        "validate_protocol_for_freeze",
+        original_validate,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "checkout", "--quiet", "--detach", publication_commit],
+        check=True,
+        capture_output=True,
+    )
+
+    dirty_leaf = tmp_path / "untracked-replay-drift.txt"
+    dirty_leaf.write_text("dirty", encoding="utf-8")
+    with pytest.raises(GoldenGraphProtocolError, match="clean Git worktree"):
+        require_current_replay_readiness(
+            frozen,
+            authority,
+            repository_root=tmp_path,
+        )
+    dirty_leaf.unlink()
+
+    orchestration_path = tmp_path / protocol_module.V1_SOURCE_SLICE_ORCHESTRATION_PATHS[0]
+    orchestration_path.write_bytes(orchestration_path.read_bytes() + b"# evolved\n")
+    commit("evolve source-slice orchestration")
+
+    historical = load_historical_frozen_protocol(
+        output_path,
+        authority,
+        repository_root=tmp_path,
+    )
+    assert historical.protocol_sha256 == frozen.protocol_sha256
+    with pytest.raises(
+        GoldenGraphProtocolError,
+        match="differs from the recorded project commit",
+    ):
+        require_current_replay_readiness(
+            historical,
+            authority,
+            repository_root=tmp_path,
+        )
 
 
 def test_freeze_binds_manifest_path_and_every_registered_asset_identity(
@@ -407,6 +667,98 @@ def test_freeze_verifies_tool_config_dependency_and_projection_files(
     with pytest.raises(GoldenGraphProtocolError, match="parser implementation"):
         validate_protocol_for_freeze(
             protocol, authority, repository_root=tmp_path
+        )
+
+
+@pytest.mark.parametrize(
+    ("field_name", "replacement", "message"),
+    [
+        ("build_spec_protocol_sha256", "e" * 64, "derivation identity"),
+        ("manifest_sha256", "f" * 64, "derivation identity"),
+        ("chunk_count", 2, "inventory"),
+        (
+            "project_repository_commit_sha",
+            "0" * 40,
+            "commit cannot be a placeholder",
+        ),
+    ],
+)
+def test_freeze_cross_checks_source_slice_build_summary(
+    tmp_path: Path,
+    field_name: str,
+    replacement: object,
+    message: str,
+) -> None:
+    authority, payload = _synthetic_protocol(tmp_path)
+    summary_path = (
+        tmp_path / payload["projection"]["source_slice_build_summary_path"]
+    )
+    summary, _digest_value = load_hashed_canonical_json(summary_path)
+    summary[field_name] = replacement
+    payload["projection"]["source_slice_build_summary_sha256"] = (
+        write_draft_hashed_canonical_json(summary_path, summary)
+    )
+
+    with pytest.raises(GoldenGraphProtocolError, match=message):
+        validate_protocol_for_freeze(
+            GoldenGraphProtocol.model_validate(payload),
+            authority,
+            repository_root=tmp_path,
+        )
+
+
+def test_build_spec_hash_normalizes_only_derived_outputs_and_status(
+    tmp_path: Path,
+) -> None:
+    _authority, payload = _synthetic_protocol(tmp_path)
+    protocol = GoldenGraphProtocol.model_validate(payload)
+    baseline = source_slice_build_spec_sha256(protocol)
+    rebound = GoldenGraphProtocol.model_validate(
+        protocol.model_copy(
+            update={
+                "protocol_status": "frozen",
+                "projection": protocol.projection.model_copy(
+                    update={
+                        "semantic_source_catalog_sha256": "a" * 64,
+                        "chunk_manifest_sha256": "b" * 64,
+                        "source_slice_build_summary_sha256": "c" * 64,
+                    }
+                ),
+            }
+        ).model_dump(mode="python", exclude_none=False)
+    )
+    changed_scope = GoldenGraphProtocol.model_validate(
+        protocol.model_copy(
+            update={
+                "page_scope": protocol.page_scope.model_copy(
+                    update={"inclusion_reason": "Different registered scope."}
+                )
+            }
+        ).model_dump(mode="python", exclude_none=False)
+    )
+
+    assert source_slice_build_spec_sha256(rebound) == baseline
+    assert source_slice_build_spec_sha256(changed_scope) != baseline
+
+
+def test_derivation_commit_validation_fails_closed_without_git(
+    tmp_path: Path,
+) -> None:
+    authority, payload = _synthetic_protocol(tmp_path)
+    summary_path = (
+        tmp_path / payload["projection"]["source_slice_build_summary_path"]
+    )
+    summary, _digest_value = load_hashed_canonical_json(summary_path)
+    summary["project_repository_commit_sha"] = "2" * 40
+    payload["projection"]["source_slice_build_summary_sha256"] = (
+        write_draft_hashed_canonical_json(summary_path, summary)
+    )
+
+    with pytest.raises(GoldenGraphProtocolError, match="Git repository"):
+        validate_protocol_for_freeze(
+            GoldenGraphProtocol.model_validate(payload),
+            authority,
+            repository_root=tmp_path,
         )
 
 
@@ -911,6 +1263,7 @@ def test_chunk_content_hash_can_repeat_at_distinct_occurrences(tmp_path: Path) -
     payload["projection"]["chunk_manifest_sha256"] = (
         write_draft_hashed_canonical_json(chunk_path, chunks)
     )
+    _rebind_source_slice_summary(tmp_path, payload)
     validate_protocol_for_freeze(
         GoldenGraphProtocol.model_validate(payload),
         authority,
@@ -969,6 +1322,7 @@ def test_chunk_union_must_cover_every_included_page_byte(
     payload["projection"]["chunk_manifest_sha256"] = (
         write_draft_hashed_canonical_json(chunk_path, chunks)
     )
+    _rebind_source_slice_summary(tmp_path, payload)
     protocol = GoldenGraphProtocol.model_validate(payload)
 
     if message is None:
@@ -1256,6 +1610,11 @@ def test_concurrent_conflicting_freezes_never_overwrite_the_winner(
     authority, payload = _synthetic_protocol(tmp_path)
     changed = _deep_copy(payload)
     changed["page_scope"]["inclusion_reason"] = "A competing immutable meaning."
+    _fork_source_slice_summary(
+        tmp_path,
+        changed,
+        "source-slice-build-summary-competing.json",
+    )
     protocols = [
         GoldenGraphProtocol.model_validate(payload),
         GoldenGraphProtocol.model_validate(changed),
@@ -1313,6 +1672,11 @@ def test_freeze_repairs_exact_crash_remnant_and_rejects_conflicting_identity(
 
     changed = _deep_copy(payload)
     changed["page_scope"]["inclusion_reason"] = "A different immutable meaning."
+    _fork_source_slice_summary(
+        tmp_path,
+        changed,
+        "source-slice-build-summary-different.json",
+    )
     with pytest.raises(GoldenGraphProtocolError, match="conflicts"):
         freeze_protocol(
             GoldenGraphProtocol.model_validate(changed),
@@ -1645,8 +2009,15 @@ def _synthetic_protocol(
         "backend/golden_graph/artifacts/synthetic/chunker-config.json": (
             canonical_json_bytes(chunker_config)
         ),
+        "backend/golden_graph/source_slice_builder.py": b"# synthetic builder\n",
+        "backend/golden_graph/source_slice_command.py": b"# synthetic command\n",
         "docs/graph-annotation-protocol.md": b"# Synthetic annotation guide\n",
     }
+    for logical_path in protocol_module.V1_SOURCE_SLICE_ORCHESTRATION_PATHS:
+        files.setdefault(
+            logical_path,
+            f"# synthetic orchestration leaf: {logical_path}\n".encode("utf-8"),
+        )
     for logical_path, body in files.items():
         path = repository_root / logical_path
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1758,6 +2129,39 @@ def _synthetic_protocol(
         / "chunks.json",
         chunk_payload,
     )
+    summary_payload = {
+        "schema_version": 1,
+        "artifact_role": "golden_graph_source_slice_build_summary",
+        "project_repository_commit_sha": "1" * 40,
+        "build_spec_protocol_sha256": "0" * 64,
+        "corpus_id": manifest.corpus_id,
+        "asset_id": asset.asset_id,
+        "manifest_sha256": authority.manifest_sha256,
+        "raw_asset_sha256": asset.sha256,
+        "parser_config_sha256": parser_tool["config_sha256"],
+        "chunker_config_sha256": chunker_tool["config_sha256"],
+        "parser_implementation_sha256": parser_tool["implementation_sha256"],
+        "chunker_implementation_sha256": chunker_tool["implementation_sha256"],
+        "dependency_snapshot_sha256": dependency_digest,
+        "uv_lock_sha256": _digest(files["backend/uv.lock"]),
+        "semantic_source_catalog_sha256": catalog_digest,
+        "chunk_manifest_sha256": chunk_digest,
+        "page_count": 2,
+        "included_page_count": 1,
+        "excluded_page_count": 1,
+        "blank_page_count": 0,
+        "parse_failed_page_count": 0,
+        "chunk_count": 1,
+    }
+    summary_digest = write_draft_hashed_canonical_json(
+        repository_root
+        / "backend"
+        / "golden_graph"
+        / "artifacts"
+        / "synthetic"
+        / "source-slice-build-summary.json",
+        summary_payload,
+    )
     payload: dict[str, object] = {
         "schema_version": 1,
         "artifact_role": "golden_graph_protocol",
@@ -1798,6 +2202,11 @@ def _synthetic_protocol(
             "semantic_source_catalog_sha256": catalog_digest,
             "chunk_manifest_path": "backend/golden_graph/artifacts/synthetic/chunks.json",
             "chunk_manifest_sha256": chunk_digest,
+            "source_slice_build_summary_path": (
+                "backend/golden_graph/artifacts/synthetic/"
+                "source-slice-build-summary.json"
+            ),
+            "source_slice_build_summary_sha256": summary_digest,
         },
         "ontology": {
             "relation_types": [
@@ -1900,6 +2309,22 @@ def _synthetic_protocol(
             "counterfactual_fixture_is_closed_world_gold": False,
         },
     }
+    summary_payload["build_spec_protocol_sha256"] = (
+        source_slice_build_spec_sha256(
+            GoldenGraphProtocol.model_validate(payload)
+        )
+    )
+    payload["projection"]["source_slice_build_summary_sha256"] = (
+        write_draft_hashed_canonical_json(
+            repository_root
+            / "backend"
+            / "golden_graph"
+            / "artifacts"
+            / "synthetic"
+            / "source-slice-build-summary.json",
+            summary_payload,
+        )
+    )
     return authority, payload
 
 
@@ -1923,6 +2348,74 @@ def _tool_payload(
         "config_path": config_path,
         "config_sha256": _digest(files[config_path]),
     }
+
+
+def _rebind_source_slice_summary(
+    repository_root: Path,
+    payload: dict[str, object],
+    *,
+    project_repository_commit_sha: str | None = None,
+) -> None:
+    """Keep a synthetic derivation receipt aligned after a deliberate mutation."""
+
+    projection = payload["projection"]
+    summary_path = repository_root / projection["source_slice_build_summary_path"]
+    summary, _digest_value = load_hashed_canonical_json(summary_path)
+    catalog, _catalog_digest = load_hashed_canonical_json(
+        repository_root / projection["source_catalog_path"]
+    )
+    chunks, _chunks_digest = load_hashed_canonical_json(
+        repository_root / projection["chunk_manifest_path"]
+    )
+    status_counts = {
+        status: sum(page["status"] == status for page in catalog["pages"])
+        for status in ("included", "excluded", "blank", "parse_failed")
+    }
+    if project_repository_commit_sha is not None:
+        summary["project_repository_commit_sha"] = project_repository_commit_sha
+    summary["build_spec_protocol_sha256"] = source_slice_build_spec_sha256(
+        GoldenGraphProtocol.model_validate(payload)
+    )
+    summary.update(
+        {
+            "semantic_source_catalog_sha256": projection[
+                "semantic_source_catalog_sha256"
+            ],
+            "chunk_manifest_sha256": projection["chunk_manifest_sha256"],
+            "page_count": catalog["page_count"],
+            "included_page_count": status_counts["included"],
+            "excluded_page_count": status_counts["excluded"],
+            "blank_page_count": status_counts["blank"],
+            "parse_failed_page_count": status_counts["parse_failed"],
+            "chunk_count": len(chunks["chunks"]),
+        }
+    )
+    projection["source_slice_build_summary_sha256"] = (
+        write_draft_hashed_canonical_json(summary_path, summary)
+    )
+
+
+def _fork_source_slice_summary(
+    repository_root: Path,
+    payload: dict[str, object],
+    filename: str,
+) -> None:
+    projection = payload["projection"]
+    current_path = repository_root / projection["source_slice_build_summary_path"]
+    summary, _digest_value = load_hashed_canonical_json(current_path)
+    logical_path = (
+        Path(projection["source_slice_build_summary_path"])
+        .with_name(filename)
+        .as_posix()
+    )
+    projection["source_slice_build_summary_path"] = logical_path
+    projection["source_slice_build_summary_sha256"] = (
+        write_draft_hashed_canonical_json(
+            repository_root / logical_path,
+            summary,
+        )
+    )
+    _rebind_source_slice_summary(repository_root, payload)
 
 
 def _target_payloads(*, frozen: bool) -> list[dict[str, object]]:

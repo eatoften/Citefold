@@ -158,6 +158,14 @@ P1.4/G4 的真实工程缺口（例如 change-level CI 和自动化 E2E）。面
 | Session 2 | additive graph migration 与 ER/transaction contract | G1 | M1 -> M2 | Planned |
 | Session 3 | Concept API vertical slice 与 course isolation | G1 | M1 -> M2 | Planned |
 
+## 专题深挖
+
+专题笔记跟随真实模块实现，但不自动提升个人掌握等级：
+
+- [可复现、可审计的 Source Slice](deep-dive-reproducible-source-slices.md)
+  （G0.2b，Draft/M0）：canonical bytes、Git provenance、public/private
+  boundary、historical authority 与 replay readiness。
+
 ## 复习总账
 
 只在维护者实际完成后追加，不预填完成状态：

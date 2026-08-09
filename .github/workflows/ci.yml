@@ -31,6 +31,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Frozen evaluation receipts intentionally bind the clean parent
+          # commit that performed the derivation.  A shallow clone cannot
+          # validate that provenance chain.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up Python

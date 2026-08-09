@@ -3731,3 +3731,104 @@ G0.2b implements the bounded PDF-to-semantic-Source catalog builder and private
 materialization boundary. The maintainer then selects the Lecture 3 page scope;
 the system records that decision without guessing it. Only after that Source
 slice freezes may G2 generate empty blinded annotation packets.
+
+## G0.2b - Deterministic redacted Source-slice derivation
+
+**Status:** Builder, protocol adapter, whole-deck build specification, and
+failure contracts implemented; real artifact publication/replay and freeze are
+the next checkpoint
+
+### Architecture and ownership decision
+
+The draft protocol, not a CLI flag or a model, is the sole Source-slice build
+specification. For CS336 Lecture 3 v1 it now registers all 68 physical pages.
+The deterministic parser already classified every page as successfully parsed
+and non-blank, so this whole-deck rule avoids topical cherry-picking while
+keeping human Concept/Relation judgments separate for G2.
+
+```text
+tracked ManifestAuthority + registered draft protocol
+-> exact read-only authoring asset verification
+-> clean project Git revision
+-> isolated parser from captured verified bytes
+-> normalized private page inventory
+-> page-local UTF-8 Chunker from captured verified bytes
+-> redacted catalog + Chunk manifest + derivation summary
+-> production-compatible CourseSource/CourseSourceChunk projection
+-> ignored, reloadable private materialization
+```
+
+The implementation uses Python 3.11, Pydantic strict/frozen DTOs, `pypdf`
+6.14.2, Unicode 14.0.0 NFKC normalization, canonical JSON/SHA-256 sidecars,
+subprocess isolation with a whole-worker timeout, UTF-8 byte locators, Git
+revision/object verification, and the production Source ID/projection-manifest
+functions. Public artifacts contain identities, statuses, hashes, and locators
+only; licensed Source text remains under ignored `backend/data/`.
+
+### Red-team defects closed before publication
+
+1. Catalog and Chunk leaves were structurally self-consistent but lacked an
+   orchestration receipt. `ProjectionIdentity` now binds a strict build-summary
+   path/hash; freeze cross-checks acquisition, tools/configs/dependencies,
+   catalog, Chunks, counts, and a reachable clean project commit.
+2. The first evaluation Source ID and projection hash did not satisfy the
+   product store. The adapter now uses `source_id_for_asset` and the production
+   projection-manifest algorithm, while keeping the golden Chunk-manifest hash
+   as separate evaluation metadata.
+3. Runtime locators originally lost exact UTF-8 offsets after persistence.
+   `PdfPageLocator.metadata` now carries logical page, half-open offsets, unit,
+   and both golden catalog/manifest bindings, all revalidated before authority
+   issuance and after private reload.
+4. Private text could appear in Pydantic errors or object representations.
+   Private models hide validation input, Source-bearing fields have redacted
+   reprs, and boundary errors replace private validation details.
+5. A verify-then-reopen parser race and stale imported Chunker could execute
+   bytes different from the recorded hashes. The parser runs from an exclusive
+   private snapshot of captured bytes; the Chunker is dynamically loaded from
+   the same kind of verified byte receipt.
+6. A process-local-only authority could not resume G2. A strict, bounded,
+   atomic/convergent, no-overwrite private envelope now round-trips the canonical
+   Source projection under a gitignored path without entering CLI receipts or
+   the product database.
+7. The first private loader trusted an internally self-consistent envelope and
+   sidecar but had no external authority. The envelope now binds protocol ID
+   and normalized build-spec hash; writer/loader require the exact protocol,
+   deterministic filename, scope/tool/acquisition bindings, three public leaf
+   identities, and Git-ignored/untracked storage.
+8. A public-write flag initially retained licensed private text as an implicit
+   side effect, and a clean check did not cover stale imported orchestration
+   dependencies. Public/private writes are now independent default-off flags;
+   builder and command capture/recheck one shared v1 source closure, while
+   freeze compares every closure leaf to the recorded Git commit and fails
+   closed outside a Git worktree.
+9. Historical protocol loading originally reused the publication gate. Any
+   later builder refactor, Python/pypdf upgrade, `uv.lock` change, or guide edit
+   could therefore make an already frozen experiment unreadable. Historical
+   `FrozenProtocolAuthority` now validates exact bounded blobs from the
+   recorded commit without consulting current implementation/runtime bytes;
+   the stronger `ReplayReadyFrozenProtocolAuthority` separately requires the
+   current tracked closure, runtime, clean worktree, and exact private PDF.
+   Freeze and crash recovery repeat the current-environment gate after durable
+   publication. A C1-build/C2-publish/C3-code-evolution regression proves the
+   old authority remains loadable while replay readiness fails closed.
+
+### Verification and honest boundary
+
+- protocol, builder, primitives, and command focused suite:
+  `122 passed, 2 skipped`;
+- full backend regression: `973 passed, 6 skipped`; one existing
+  Starlette/httpx deprecation warning remains;
+- exact-tool snapshot, dirty-revision, product compatibility, locator,
+  redaction, private round-trip/tamper/path, triple-hash, and no-leakage cases
+  are automated;
+- compile/import, line-length, and `git diff --check` gates pass;
+- the registered public PDF was previously dry-run as 68 pages / 68 Chunks,
+  but that observation is not yet a frozen public benchmark result;
+- no human gold, Concept/Relation accuracy, grounded-Chat accuracy, path
+  quality, held-out generalization, or educational-effectiveness claim exists.
+
+The next checkpoint commits and pushes this derivation code/specification,
+waits for CI, then rebuilds from that clean commit to publish the three redacted
+leaves plus the ignored private envelope. Only the following commit can bind
+those output hashes and freeze the G0.2 protocol without a circular code/output
+identity.

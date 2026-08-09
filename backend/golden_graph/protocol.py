@@ -32,6 +32,7 @@ from .bindings import (
     DependencySnapshot,
     PdfParserConfigV1,
     SemanticSourceCatalog,
+    SourceSliceBuildSummary,
     Utf8ChunkerConfigV1,
 )
 from .canonical_io import (
@@ -171,7 +172,24 @@ _ZERO_SHA256 = "0" * 64
 _MAX_BOUND_ARTIFACT_BYTES = 128 * 1024 * 1024
 _FROZEN_PROTOCOL_DIRECTORY = Path("backend/golden_graph/protocols")
 _PUBLIC_BINDING_PREFIX = ("backend", "golden_graph", "artifacts")
+V1_SOURCE_SLICE_ORCHESTRATION_PATHS = (
+    "backend/golden_graph/source_slice_command.py",
+    "backend/golden_graph/source_slice_builder.py",
+    "backend/golden_graph/bindings.py",
+    "backend/golden_graph/canonical_io.py",
+    "backend/golden_graph/private_projection.py",
+    "backend/golden_graph/protocol.py",
+    "backend/golden_graph/schemas.py",
+    "backend/app/concept_graph.py",
+    "backend/app/course_source.py",
+    "backend/app/job.py",
+    "backend/app/source_asset.py",
+    "backend/app/source_projection_identity.py",
+    "backend/benchmark_acquisition/fetch.py",
+    "backend/benchmark_acquisition/manifest.py",
+)
 _FROZEN_AUTHORITY_TOKEN = object()
+_REPLAY_READY_AUTHORITY_TOKEN = object()
 _V1_RELATION_TYPES = get_args(V1ConceptRelationType)
 _V1_SUPPORT_BASES = get_args(V1RelationSupportBasis)
 _V1_SUPPORT_ROLES = get_args(V1RelationEvidenceSupportRole)
@@ -201,11 +219,13 @@ class ManifestAuthority:
 
 @dataclass(frozen=True, slots=True)
 class FrozenProtocolAuthority:
-    """Receipt proving full validation of one persisted protocol artifact.
+    """Receipt proving historical validation of one persisted protocol artifact.
 
     A bare ``GoldenGraphProtocol(protocol_status='frozen')`` is data, not this
     authority. It is also not a later gold-bundle seal receipt. Consumers that
     require a frozen protocol must re-load its canonical artifact and leaves.
+    This receipt deliberately says nothing about whether the current checkout,
+    Python runtime, or private raw asset can replay the derivation now.
     """
 
     protocol: GoldenGraphProtocol
@@ -217,7 +237,7 @@ class FrozenProtocolAuthority:
     def __post_init__(self) -> None:
         if self._validation_token is not _FROZEN_AUTHORITY_TOKEN:
             raise ValueError(
-                "FrozenProtocolAuthority must come from load_frozen_protocol"
+                "FrozenProtocolAuthority must come from a frozen protocol loader"
             )
         if self.protocol.protocol_status != "frozen":
             raise ValueError("Frozen authority cannot contain a draft protocol")
@@ -231,6 +251,31 @@ class FrozenProtocolAuthority:
                 raise ValueError(f"{label} must be lowercase SHA-256")
         if not self.artifact_path.is_absolute():
             raise ValueError("Frozen authority artifact_path must be absolute")
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayReadyFrozenProtocolAuthority:
+    """Ephemeral receipt that the current environment can replay a frozen slice."""
+
+    frozen: FrozenProtocolAuthority
+    recorded_project_commit_sha: str
+    current_project_commit_sha: str
+    _validation_token: object = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._validation_token is not _REPLAY_READY_AUTHORITY_TOKEN:
+            raise ValueError(
+                "ReplayReadyFrozenProtocolAuthority must come from "
+                "require_current_replay_readiness"
+            )
+        for label, digest in (
+            ("recorded_project_commit_sha", self.recorded_project_commit_sha),
+            ("current_project_commit_sha", self.current_project_commit_sha),
+        ):
+            if len(digest) != 40 or any(
+                character not in "0123456789abcdef" for character in digest
+            ):
+                raise ValueError(f"{label} must be a lowercase full Git SHA")
 
 
 def load_manifest_authority(
@@ -296,6 +341,31 @@ def load_protocol(path: Path) -> GoldenGraphProtocol:
         raise GoldenGraphProtocolError(
             f"Invalid golden-graph protocol {path.name}: {exc}"
         ) from exc
+
+
+def source_slice_build_spec_sha256(protocol: GoldenGraphProtocol) -> str:
+    """Hash the protocol semantics that existed before derived leaves.
+
+    Publication necessarily fills three output hashes and later changes the
+    status to ``frozen``.  Normalizing only those output fields lets a private
+    materialization produced during bootstrap remain verifiable against the
+    final frozen protocol without weakening any input, scope, tool, review, or
+    evaluation contract.
+    """
+
+    try:
+        payload = protocol.model_dump(mode="python", exclude_none=False)
+        payload["protocol_status"] = "draft"
+        projection = payload["projection"]
+        projection["semantic_source_catalog_sha256"] = None
+        projection["chunk_manifest_sha256"] = None
+        projection["source_slice_build_summary_sha256"] = None
+        normalized = GoldenGraphProtocol.model_validate(payload)
+    except (KeyError, TypeError, ValueError, ValidationError) as exc:
+        raise GoldenGraphProtocolError(
+            "Cannot derive canonical Source-slice build specification"
+        ) from exc
+    return hashlib.sha256(canonical_json_bytes(normalized)).hexdigest()
 
 
 def freeze_protocol(
@@ -379,20 +449,34 @@ def freeze_protocol(
         # A process crash or durable sidecar failure may leave the exact JSON.
         # The next identical call repairs it after byte-for-byte verification.
         raise
-    return load_frozen_protocol(
+    frozen_authority = load_historical_frozen_protocol(
         output_path,
         authority,
         repository_root=root,
     )
+    # Publication must not return an authority if the checkout/runtime drifted
+    # between the pre-publication gate and the durable write.
+    validate_protocol_for_freeze(
+        frozen_authority.protocol,
+        authority,
+        repository_root=root,
+    )
+    return frozen_authority
 
 
-def load_frozen_protocol(
+def load_historical_frozen_protocol(
     path: Path,
     authority: ManifestAuthority,
     *,
     repository_root: Path | None = None,
 ) -> FrozenProtocolAuthority:
-    """Re-read exact frozen bytes and all bound leaves into an authority receipt."""
+    """Load immutable historical authority without requiring replay readiness.
+
+    Public evidence leaves and the recorded Git derivation remain mandatory.
+    Current source files, dependency installations, and Python/Unicode runtime
+    may have evolved; callers that intend to rerun the slice must additionally
+    call :func:`require_current_replay_readiness`.
+    """
 
     root = (repository_root or Path(__file__).resolve().parents[2]).resolve()
     _require_frozen_protocol_directory(path, repository_root=root)
@@ -416,10 +500,11 @@ def load_frozen_protocol(
         raise GoldenGraphProtocolError(
             "Frozen protocol artifact path differs from its protocol identity"
         )
-    validate_protocol_for_freeze(
+    _validate_protocol_authority(
         protocol,
         authority,
         repository_root=root,
+        require_current_replay_environment=False,
     )
     return FrozenProtocolAuthority(
         protocol=protocol,
@@ -430,13 +515,102 @@ def load_frozen_protocol(
     )
 
 
+def load_frozen_protocol(
+    path: Path,
+    authority: ManifestAuthority,
+    *,
+    repository_root: Path | None = None,
+) -> FrozenProtocolAuthority:
+    """Compatibility loader requiring both history and the current live gate.
+
+    New historical consumers should call ``load_historical_frozen_protocol``
+    explicitly.  Keeping this older name strict prevents existing callers from
+    silently receiving a weaker capability after the authority split.
+    """
+
+    root = (repository_root or Path(__file__).resolve().parents[2]).resolve()
+    frozen = load_historical_frozen_protocol(
+        path,
+        authority,
+        repository_root=root,
+    )
+    validate_protocol_for_freeze(
+        frozen.protocol,
+        authority,
+        repository_root=root,
+    )
+    return frozen
+
+
+def require_current_replay_readiness(
+    frozen: FrozenProtocolAuthority,
+    authority: ManifestAuthority,
+    *,
+    repository_root: Path | None = None,
+) -> ReplayReadyFrozenProtocolAuthority:
+    """Require current derivation code/runtime and the private asset to be ready.
+
+    The receipt is intentionally ephemeral.  The builder repeats its own
+    pre/post checks, and only a completed rebuild can establish output equality.
+    """
+
+    root = (repository_root or Path(__file__).resolve().parents[2]).resolve()
+    current_head = _require_clean_current_git_head(root)
+    reloaded = load_historical_frozen_protocol(
+        frozen.artifact_path,
+        authority,
+        repository_root=root,
+    )
+    if reloaded != frozen:
+        raise GoldenGraphProtocolError(
+            "Frozen authority differs from its current persisted artifact"
+        )
+    validate_protocol_for_freeze(
+        reloaded.protocol,
+        authority,
+        repository_root=root,
+    )
+    from benchmark_acquisition.fetch import (  # Local import avoids a cycle.
+        AcquisitionError,
+        verify_registered_asset,
+    )
+
+    try:
+        verify_registered_asset(
+            authority.manifest,
+            reloaded.protocol.acquisition.asset_id,
+            root,
+            allowed_partitions=("authoring",),
+        )
+    except AcquisitionError as exc:
+        raise GoldenGraphProtocolError(
+            "Current private acquisition asset is not replay-ready"
+        ) from exc
+    if _require_clean_current_git_head(root) != current_head:
+        raise GoldenGraphProtocolError(
+            "Repository HEAD changed during replay-readiness validation"
+        )
+    summary = _load_binding(
+        root,
+        reloaded.protocol.projection.source_slice_build_summary_path,
+        reloaded.protocol.projection.source_slice_build_summary_sha256,
+        SourceSliceBuildSummary,
+    )
+    return ReplayReadyFrozenProtocolAuthority(
+        frozen=reloaded,
+        recorded_project_commit_sha=summary.project_repository_commit_sha,
+        current_project_commit_sha=current_head,
+        _validation_token=_REPLAY_READY_AUTHORITY_TOKEN,
+    )
+
+
 def validate_protocol_for_freeze(
     protocol: GoldenGraphProtocol,
     authority: ManifestAuthority,
     *,
     repository_root: Path | None = None,
 ) -> None:
-    """Fail closed unless the protocol is reproducible and embargo-safe."""
+    """Fail closed unless publication inputs and current runtime are ready."""
 
     root = (repository_root or Path(__file__).resolve().parents[2]).resolve()
     reloaded_authority = load_manifest_authority(
@@ -447,7 +621,25 @@ def validate_protocol_for_freeze(
         raise GoldenGraphProtocolError(
             "Acquisition authority differs from its current repository artifact"
         )
-    manifest = reloaded_authority.manifest
+    _validate_protocol_authority(
+        protocol,
+        reloaded_authority,
+        repository_root=root,
+        require_current_replay_environment=True,
+    )
+
+
+def _validate_protocol_authority(
+    protocol: GoldenGraphProtocol,
+    authority: ManifestAuthority,
+    *,
+    repository_root: Path,
+    require_current_replay_environment: bool,
+) -> None:
+    """Validate stable protocol meaning, optionally against the live runtime."""
+
+    root = repository_root
+    manifest = authority.manifest
     acquisition = protocol.acquisition
     if acquisition.manifest_path != authority.manifest_path:
         raise GoldenGraphProtocolError("Acquisition manifest path mismatch")
@@ -486,13 +678,22 @@ def validate_protocol_for_freeze(
         )
 
     _validate_page_scope(protocol)
-    _validate_projection(
+    source_slice_summary = _validate_projection(
         protocol,
         repository_root=root,
         registered_asset_bytes=asset.byte_size,
+        acquisition_manifest=manifest,
+        require_current_replay_environment=require_current_replay_environment,
     )
-    _validate_ontology(protocol)
-    _validate_review(protocol, repository_root=root)
+    _validate_ontology(
+        protocol,
+        require_current_replay_environment=require_current_replay_environment,
+    )
+    _validate_review(
+        protocol,
+        repository_root=root,
+        require_current_replay_environment=require_current_replay_environment,
+    )
     _validate_evaluation(protocol)
 
     rights = protocol.rights
@@ -510,6 +711,10 @@ def validate_protocol_for_freeze(
         raise GoldenGraphProtocolError(
             "Path evaluation must remain embargoed until the gold fixture freezes"
         )
+    _validate_source_slice_build_spec_binding(
+        protocol,
+        summary=source_slice_summary,
+    )
 
 
 def _validate_page_scope(protocol: GoldenGraphProtocol) -> None:
@@ -544,12 +749,15 @@ def _validate_projection(
     *,
     repository_root: Path | None,
     registered_asset_bytes: int,
-) -> None:
+    acquisition_manifest: CorpusManifest,
+    require_current_replay_environment: bool,
+) -> SourceSliceBuildSummary:
     projection = protocol.projection
     for logical_path in (
         projection.dependency_snapshot_path,
         projection.source_catalog_path,
         projection.chunk_manifest_path,
+        projection.source_slice_build_summary_path,
     ):
         if PurePosixPath(logical_path).parts[:3] != _PUBLIC_BINDING_PREFIX:
             raise GoldenGraphProtocolError(
@@ -560,6 +768,9 @@ def _validate_projection(
         "dependency snapshot": projection.dependency_snapshot_sha256,
         "semantic Source catalog": projection.semantic_source_catalog_sha256,
         "Chunk manifest": projection.chunk_manifest_sha256,
+        "Source-slice build summary": (
+            projection.source_slice_build_summary_sha256
+        ),
     }
     if projection.parser is None or projection.chunker is None:
         raise GoldenGraphProtocolError(
@@ -595,11 +806,13 @@ def _validate_projection(
             )
 
     root = (repository_root or Path(__file__).resolve().parents[2]).resolve()
-    locked_versions = _load_uv_lock_versions(
-        root,
-        projection.uv_lock_path,
-        projection.uv_lock_sha256,
-    )
+    locked_versions = None
+    if require_current_replay_environment:
+        locked_versions = _load_uv_lock_versions(
+            root,
+            projection.uv_lock_path,
+            projection.uv_lock_sha256,
+        )
     dependencies = _load_binding(
         root,
         projection.dependency_snapshot_path,
@@ -617,6 +830,12 @@ def _validate_projection(
         projection.chunk_manifest_path,
         projection.chunk_manifest_sha256,
         ChunkManifest,
+    )
+    summary = _load_binding(
+        root,
+        projection.source_slice_build_summary_path,
+        projection.source_slice_build_summary_sha256,
+        SourceSliceBuildSummary,
     )
     parser_config = _load_binding(
         root,
@@ -642,13 +861,24 @@ def _validate_projection(
             "Dependency snapshot must contain exactly the v1 parser and chunker "
             "tool distributions"
         )
-    _validate_tool_lock_versions(tools, locked_versions)
     for label, tool in (("parser", projection.parser), ("chunker", projection.chunker)):
-        if _sha256_repository_file(root, tool.implementation_path) != tool.implementation_sha256:
-            raise GoldenGraphProtocolError(f"{label} implementation SHA-256 mismatch")
-        if _sha256_repository_file(root, tool.config_path) != tool.config_sha256:
-            raise GoldenGraphProtocolError(f"{label} config SHA-256 mismatch")
-        _validate_tool_distribution(tool, dependencies)
+        if require_current_replay_environment:
+            if (
+                _sha256_repository_file(root, tool.implementation_path)
+                != tool.implementation_sha256
+            ):
+                raise GoldenGraphProtocolError(
+                    f"{label} implementation SHA-256 mismatch"
+                )
+            if _sha256_repository_file(root, tool.config_path) != tool.config_sha256:
+                raise GoldenGraphProtocolError(f"{label} config SHA-256 mismatch")
+        _validate_tool_distribution(
+            tool,
+            dependencies,
+            require_installed=require_current_replay_environment,
+        )
+    if locked_versions is not None:
+        _validate_tool_lock_versions(tools, locked_versions)
     if projection.parser.distribution_name != "pypdf":
         raise GoldenGraphProtocolError(
             "The v1 PDF parser must bind the installed pypdf distribution"
@@ -662,14 +892,15 @@ def _validate_projection(
             "Parser byte limit is smaller than the registered PDF"
         )
 
-    if dependencies.python_version != platform.python_version():
-        raise GoldenGraphProtocolError(
-            "Dependency snapshot Python version differs from the freeze runtime"
-        )
-    if dependencies.unicode_database_version != unicodedata.unidata_version:
-        raise GoldenGraphProtocolError(
-            "Dependency snapshot Unicode database differs from the freeze runtime"
-        )
+    if require_current_replay_environment:
+        if dependencies.python_version != platform.python_version():
+            raise GoldenGraphProtocolError(
+                "Dependency snapshot Python version differs from the freeze runtime"
+            )
+        if dependencies.unicode_database_version != unicodedata.unidata_version:
+            raise GoldenGraphProtocolError(
+                "Dependency snapshot Unicode database differs from the freeze runtime"
+            )
     acquisition = protocol.acquisition
     catalog_identity = (catalog.corpus_id, catalog.asset_id, catalog.raw_asset_sha256)
     expected_identity = (
@@ -770,9 +1001,443 @@ def _validate_projection(
             intervals,
             maximum_overlap=chunker_config.overlap_utf8_bytes,
         )
+    _validate_source_slice_build_summary(
+        protocol=protocol,
+        summary=summary,
+        catalog=catalog,
+        chunks=chunks,
+        repository_root=root,
+        acquisition_manifest=acquisition_manifest,
+        require_current_replay_environment=require_current_replay_environment,
+    )
+    return summary
 
 
-def _validate_ontology(protocol: GoldenGraphProtocol) -> None:
+def _validate_source_slice_build_summary(
+    *,
+    protocol: GoldenGraphProtocol,
+    summary: SourceSliceBuildSummary,
+    catalog: SemanticSourceCatalog,
+    chunks: ChunkManifest,
+    repository_root: Path,
+    acquisition_manifest: CorpusManifest,
+    require_current_replay_environment: bool,
+) -> None:
+    """Require one derivation receipt to agree with every frozen authority.
+
+    Catalog and Chunk leaves can be made internally self-consistent without
+    proving which orchestration code produced them.  The summary closes that
+    gap by binding all derivation leaves and the exact clean project commit.
+    """
+
+    projection = protocol.projection
+    acquisition = protocol.acquisition
+    parser = projection.parser
+    chunker = projection.chunker
+    dependency_sha256 = projection.dependency_snapshot_sha256
+    catalog_sha256 = projection.semantic_source_catalog_sha256
+    chunks_sha256 = projection.chunk_manifest_sha256
+    if (
+        parser is None
+        or chunker is None
+        or dependency_sha256 is None
+        or catalog_sha256 is None
+        or chunks_sha256 is None
+    ):
+        raise GoldenGraphProtocolError(
+            "Source-slice summary requires complete projection identities"
+        )
+
+    actual_identity = (
+        summary.corpus_id,
+        summary.asset_id,
+        summary.manifest_sha256,
+        summary.raw_asset_sha256,
+        summary.parser_config_sha256,
+        summary.chunker_config_sha256,
+        summary.parser_implementation_sha256,
+        summary.chunker_implementation_sha256,
+        summary.dependency_snapshot_sha256,
+        summary.uv_lock_sha256,
+        summary.semantic_source_catalog_sha256,
+        summary.chunk_manifest_sha256,
+    )
+    expected_identity = (
+        acquisition.corpus_id,
+        acquisition.asset_id,
+        acquisition.manifest_sha256,
+        acquisition.raw_sha256,
+        parser.config_sha256,
+        chunker.config_sha256,
+        parser.implementation_sha256,
+        chunker.implementation_sha256,
+        dependency_sha256,
+        projection.uv_lock_sha256,
+        catalog_sha256,
+        chunks_sha256,
+    )
+    if actual_identity != expected_identity:
+        raise GoldenGraphProtocolError(
+            "Source-slice build summary derivation identity mismatch"
+        )
+
+    status_counts = {
+        status: sum(page.status == status for page in catalog.pages)
+        for status in ("included", "excluded", "blank", "parse_failed")
+    }
+    if (
+        summary.page_count,
+        summary.included_page_count,
+        summary.excluded_page_count,
+        summary.blank_page_count,
+        summary.parse_failed_page_count,
+        summary.chunk_count,
+    ) != (
+        catalog.page_count,
+        status_counts["included"],
+        status_counts["excluded"],
+        status_counts["blank"],
+        status_counts["parse_failed"],
+        len(chunks.chunks),
+    ):
+        raise GoldenGraphProtocolError(
+            "Source-slice build summary inventory mismatch"
+        )
+
+    _validate_derivation_project_commit(
+        repository_root=repository_root,
+        commit_sha=summary.project_repository_commit_sha,
+        content_bindings=(
+            (acquisition.manifest_path, acquisition.manifest_sha256),
+            (parser.implementation_path, parser.implementation_sha256),
+            (parser.config_path, parser.config_sha256),
+            (chunker.implementation_path, chunker.implementation_sha256),
+            (chunker.config_path, chunker.config_sha256),
+            (projection.dependency_snapshot_path, dependency_sha256),
+            (projection.uv_lock_path, projection.uv_lock_sha256),
+            (
+                protocol.review.annotation_guide_path,
+                protocol.review.annotation_guide_sha256,
+            ),
+        ),
+        orchestration_paths=V1_SOURCE_SLICE_ORCHESTRATION_PATHS,
+        tools=(parser, chunker),
+        uv_lock_path=projection.uv_lock_path,
+        manifest_authority=ManifestAuthority(
+            manifest=acquisition_manifest,
+            manifest_sha256=acquisition.manifest_sha256,
+            manifest_path=acquisition.manifest_path,
+        ),
+        require_current_replay_environment=(
+            require_current_replay_environment
+        ),
+    )
+
+
+def _validate_source_slice_build_spec_binding(
+    protocol: GoldenGraphProtocol,
+    *,
+    summary: SourceSliceBuildSummary,
+) -> None:
+    if summary.build_spec_protocol_sha256 != source_slice_build_spec_sha256(
+        protocol
+    ):
+        raise GoldenGraphProtocolError(
+            "Source-slice build summary derivation identity mismatch"
+        )
+
+
+def _validate_derivation_project_commit(
+    *,
+    repository_root: Path,
+    commit_sha: str,
+    content_bindings: tuple[tuple[str, str], ...],
+    orchestration_paths: tuple[str, ...],
+    tools: tuple[ToolIdentity, ...],
+    uv_lock_path: str,
+    manifest_authority: ManifestAuthority,
+    require_current_replay_environment: bool,
+) -> None:
+    """Validate historical Git blobs, optionally against the live checkout."""
+
+    if (
+        commit_sha == "0" * 40
+        or len(commit_sha) != 40
+        or any(character not in "0123456789abcdef" for character in commit_sha)
+    ):
+        raise GoldenGraphProtocolError(
+            "Source-slice derivation commit cannot be a placeholder"
+        )
+    git_marker = repository_root / ".git"
+    if not git_marker.exists():
+        raise GoldenGraphProtocolError(
+            "Source-slice derivation commit requires a Git repository"
+        )
+
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("GIT_")
+    }
+    commands = [("cat-file", "-e", f"{commit_sha}^{{commit}}")]
+    if require_current_replay_environment:
+        commands.append(("merge-base", "--is-ancestor", commit_sha, "HEAD"))
+    for command in commands:
+        try:
+            completed = subprocess.run(
+                ["git", "-C", str(repository_root), *command],
+                check=False,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise GoldenGraphProtocolError(
+                "Cannot verify Source-slice derivation project commit"
+            ) from exc
+        if completed.returncode != 0:
+            raise GoldenGraphProtocolError(
+                "Source-slice derivation project commit is absent or unreachable"
+            )
+
+    historical_blobs: dict[str, bytes] = {}
+    for logical_path, expected_sha256 in content_bindings:
+        payload = _read_git_blob(
+            repository_root,
+            commit_sha,
+            logical_path,
+            environment,
+        )
+        if hashlib.sha256(payload).hexdigest() != expected_sha256:
+            raise GoldenGraphProtocolError(
+                "Recorded derivation blob SHA-256 mismatch: "
+                f"{logical_path}"
+            )
+        historical_blobs[logical_path] = payload
+    for logical_path in orchestration_paths:
+        historical_blobs.setdefault(
+            logical_path,
+            _read_git_blob(
+                repository_root,
+                commit_sha,
+                logical_path,
+                environment,
+            ),
+        )
+
+    _validate_tool_lock_versions(
+        tools,
+        _parse_uv_lock_bytes(historical_blobs[uv_lock_path]),
+    )
+    try:
+        decoded_manifest = json.loads(
+            historical_blobs[manifest_authority.manifest_path].decode("utf-8"),
+            object_pairs_hook=_object_without_duplicate_keys,
+        )
+        recorded_manifest = parse_manifest(decoded_manifest)
+    except (
+        UnicodeError,
+        json.JSONDecodeError,
+        ManifestError,
+        RecursionError,
+        TypeError,
+        ValueError,
+        OverflowError,
+    ) as exc:
+        raise GoldenGraphProtocolError(
+            "Recorded acquisition manifest blob is invalid"
+        ) from exc
+    if recorded_manifest != manifest_authority.manifest:
+        raise GoldenGraphProtocolError(
+            "Acquisition authority differs from the recorded manifest blob"
+        )
+
+    if not require_current_replay_environment:
+        return
+    current_paths = dict.fromkeys(
+        [
+            *(path for path, _digest in content_bindings),
+            *orchestration_paths,
+        ]
+    )
+    for logical_path in current_paths:
+        current_path = _resolve_bound_repository_file(
+            repository_root,
+            logical_path,
+            require_tracked=True,
+        )
+        committed_object = _git_stdout(
+            repository_root,
+            ("rev-parse", "--verify", f"{commit_sha}:{logical_path}"),
+            environment,
+        )
+        current_object = _git_stdout(
+            repository_root,
+            ("hash-object", "--", str(current_path)),
+            environment,
+        )
+        if committed_object != current_object:
+            raise GoldenGraphProtocolError(
+                "Bound derivation leaf differs from the recorded project commit: "
+                f"{logical_path}"
+            )
+
+
+def _git_stdout(
+    repository_root: Path,
+    command: tuple[str, ...],
+    environment: Mapping[str, str],
+) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repository_root), *command],
+            check=False,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise GoldenGraphProtocolError(
+            "Cannot verify Source-slice derivation project leaf"
+        ) from exc
+    if completed.returncode != 0 or len(completed.stdout) > 256:
+        raise GoldenGraphProtocolError(
+            "Source-slice derivation project leaf is absent"
+        )
+    try:
+        value = completed.stdout.decode("ascii").strip()
+    except UnicodeError as exc:
+        raise GoldenGraphProtocolError(
+            "Source-slice derivation project identity is invalid"
+        ) from exc
+    if not value or any(character not in "0123456789abcdef" for character in value):
+        raise GoldenGraphProtocolError(
+            "Source-slice derivation project identity is invalid"
+        )
+    return value
+
+
+def _read_git_blob(
+    repository_root: Path,
+    commit_sha: str,
+    logical_path: str,
+    environment: Mapping[str, str],
+) -> bytes:
+    """Read one bounded regular-file blob without consulting the worktree."""
+
+    relative = PurePosixPath(logical_path)
+    if (
+        relative.is_absolute()
+        or not relative.parts
+        or any(part in {"", ".", ".."} for part in relative.parts)
+        or "\\" in logical_path
+        or ":" in logical_path
+        or "\0" in logical_path
+    ):
+        raise GoldenGraphProtocolError(
+            f"Invalid recorded derivation path: {logical_path}"
+        )
+    object_name = f"{commit_sha}:{relative.as_posix()}"
+    try:
+        size_result = subprocess.run(
+            ["git", "-C", str(repository_root), "cat-file", "-s", object_name],
+            check=False,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        size_text = size_result.stdout.decode("ascii").strip()
+        if (
+            size_result.returncode != 0
+            or len(size_text) > 20
+            or not size_text.isdecimal()
+        ):
+            raise GoldenGraphProtocolError(
+                f"Recorded derivation blob is absent: {logical_path}"
+            )
+        expected_size = int(size_text)
+        if expected_size > _MAX_BOUND_ARTIFACT_BYTES:
+            raise GoldenGraphProtocolError(
+                f"Recorded derivation blob exceeds the byte limit: {logical_path}"
+            )
+        blob_result = subprocess.run(
+            ["git", "-C", str(repository_root), "cat-file", "blob", object_name],
+            check=False,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (OSError, UnicodeError, subprocess.TimeoutExpired) as exc:
+        raise GoldenGraphProtocolError(
+            f"Cannot read recorded derivation blob: {logical_path}"
+        ) from exc
+    if blob_result.returncode != 0 or len(blob_result.stdout) != expected_size:
+        raise GoldenGraphProtocolError(
+            f"Recorded derivation blob is absent or unstable: {logical_path}"
+        )
+    return blob_result.stdout
+
+
+def _require_clean_current_git_head(repository_root: Path) -> str:
+    """Return full HEAD only for a clean replay worktree."""
+
+    if not (repository_root / ".git").exists():
+        raise GoldenGraphProtocolError(
+            "Replay readiness requires a Git repository"
+        )
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("GIT_")
+    }
+    head = _git_stdout(repository_root, ("rev-parse", "HEAD"), environment)
+    try:
+        status = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository_root),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=all",
+            ],
+            check=False,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise GoldenGraphProtocolError(
+            "Cannot inspect replay worktree cleanliness"
+        ) from exc
+    if status.returncode != 0:
+        raise GoldenGraphProtocolError(
+            "Cannot inspect replay worktree cleanliness"
+        )
+    if status.stdout:
+        raise GoldenGraphProtocolError(
+            "Replay readiness requires a clean Git worktree"
+        )
+    if len(head) != 40:
+        raise GoldenGraphProtocolError("Replay readiness requires a full Git SHA")
+    return head
+
+
+def _validate_ontology(
+    protocol: GoldenGraphProtocol,
+    *,
+    require_current_replay_environment: bool,
+) -> None:
     ontology = protocol.ontology
     if tuple(ontology.relation_types) != _V1_RELATION_TYPES:
         raise GoldenGraphProtocolError(
@@ -786,6 +1451,8 @@ def _validate_ontology(protocol: GoldenGraphProtocol) -> None:
         raise GoldenGraphProtocolError(
             "Support roles differ from the production Concept graph"
         )
+    if not require_current_replay_environment:
+        return
     runtime_contracts = (
         ("relation type", _V1_RELATION_TYPES, get_args(ConceptRelationType)),
         ("support basis", _V1_SUPPORT_BASES, get_args(RelationSupportBasis)),
@@ -837,17 +1504,19 @@ def _validate_review(
     protocol: GoldenGraphProtocol,
     *,
     repository_root: Path,
+    require_current_replay_environment: bool,
 ) -> None:
     review = protocol.review
     if review.annotation_guide_sha256 == _ZERO_SHA256:
         raise GoldenGraphProtocolError(
             "Frozen protocol requires a non-placeholder annotation guide hash"
         )
-    if _sha256_repository_file(
-        repository_root,
-        review.annotation_guide_path,
-    ) != review.annotation_guide_sha256:
-        raise GoldenGraphProtocolError("Annotation guide SHA-256 mismatch")
+    if require_current_replay_environment:
+        if _sha256_repository_file(
+            repository_root,
+            review.annotation_guide_path,
+        ) != review.annotation_guide_sha256:
+            raise GoldenGraphProtocolError("Annotation guide SHA-256 mismatch")
 
 
 def _validate_evaluation(protocol: GoldenGraphProtocol) -> None:
@@ -988,28 +1657,35 @@ def _load_uv_lock_versions(
         )
         if hashlib.sha256(payload).hexdigest() != expected_sha256:
             raise GoldenGraphProtocolError("uv.lock SHA-256 mismatch")
-        decoded = tomllib.loads(payload.decode("utf-8"))
-        packages = decoded.get("package")
-        lock_version = decoded.get("version")
-        if type(lock_version) is not int or lock_version != 1 or not isinstance(
-            packages, list
-        ):
-            raise GoldenGraphProtocolError("uv.lock has an unsupported structure")
-        versions: dict[str, set[str]] = {}
-        for package in packages:
-            if not isinstance(package, dict):
-                raise GoldenGraphProtocolError("uv.lock contains an invalid package")
-            name = package.get("name")
-            version = package.get("version")
-            if not isinstance(name, str) or not isinstance(version, str):
-                raise GoldenGraphProtocolError(
-                    "uv.lock package identity must contain name and version"
-                )
-            versions.setdefault(name.casefold(), set()).add(version)
+        return _parse_uv_lock_bytes(payload)
     except (CanonicalArtifactError, OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         if isinstance(exc, GoldenGraphProtocolError):
             raise
         raise GoldenGraphProtocolError(f"Cannot parse uv.lock: {exc}") from exc
+
+
+def _parse_uv_lock_bytes(payload: bytes) -> Mapping[str, frozenset[str]]:
+    try:
+        decoded = tomllib.loads(payload.decode("utf-8"))
+    except (UnicodeError, tomllib.TOMLDecodeError) as exc:
+        raise GoldenGraphProtocolError(f"Cannot parse uv.lock: {exc}") from exc
+    packages = decoded.get("package")
+    lock_version = decoded.get("version")
+    if type(lock_version) is not int or lock_version != 1 or not isinstance(
+        packages, list
+    ):
+        raise GoldenGraphProtocolError("uv.lock has an unsupported structure")
+    versions: dict[str, set[str]] = {}
+    for package in packages:
+        if not isinstance(package, dict):
+            raise GoldenGraphProtocolError("uv.lock contains an invalid package")
+        name = package.get("name")
+        version = package.get("version")
+        if not isinstance(name, str) or not isinstance(version, str):
+            raise GoldenGraphProtocolError(
+                "uv.lock package identity must contain name and version"
+            )
+        versions.setdefault(name.casefold(), set()).add(version)
     return {name: frozenset(values) for name, values in versions.items()}
 
 
@@ -1145,14 +1821,19 @@ def _require_exact_child_spelling(
         )
 
 
-def _validate_tool_distribution(tool, dependencies: DependencySnapshot) -> None:
+def _validate_tool_distribution(
+    tool,
+    dependencies: DependencySnapshot,
+    *,
+    require_installed: bool,
+) -> None:
     packages = {item.name.casefold(): item.version for item in dependencies.packages}
     package_version = packages.get(tool.distribution_name.casefold())
     if package_version != tool.version:
         raise GoldenGraphProtocolError(
             f"Tool version differs from dependency snapshot: {tool.implementation}"
         )
-    if tool.distribution_name == "project-source":
+    if not require_installed or tool.distribution_name == "project-source":
         return
     try:
         installed_version = importlib.metadata.version(tool.distribution_name)
@@ -1460,11 +2141,17 @@ def _recover_frozen_protocol_publication(
             "Cannot inspect or recover frozen protocol publication"
         ) from exc
 
-    return load_frozen_protocol(
+    frozen_authority = load_historical_frozen_protocol(
         output_path,
         authority,
         repository_root=repository_root,
     )
+    validate_protocol_for_freeze(
+        frozen_authority.protocol,
+        authority,
+        repository_root=repository_root,
+    )
+    return frozen_authority
 
 
 def _publish_or_converge_recovery_leaf(

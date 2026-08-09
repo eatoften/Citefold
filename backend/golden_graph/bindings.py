@@ -232,3 +232,48 @@ class ChunkManifest(StrictBindingModel):
                 "Exact locator occurrences must be unique across different Chunks"
             )
         return self
+
+
+class SourceSliceBuildSummary(StrictBindingModel):
+    """Redacted derivation receipt bound by the golden-graph protocol.
+
+    ``project_repository_commit_sha`` identifies the complete clean project
+    tree that performed the derivation.  The protocol authority validates the
+    commit in addition to the individually hashed parser, chunker, config, and
+    dependency leaves.
+    """
+
+    schema_version: Literal[1]
+    artifact_role: Literal["golden_graph_source_slice_build_summary"]
+    project_repository_commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    build_spec_protocol_sha256: str = Field(pattern=SHA256_PATTERN)
+    corpus_id: str = Field(pattern=SAFE_ID_PATTERN)
+    asset_id: str = Field(pattern=SAFE_ID_PATTERN)
+    manifest_sha256: str = Field(pattern=SHA256_PATTERN)
+    raw_asset_sha256: str = Field(pattern=SHA256_PATTERN)
+    parser_config_sha256: str = Field(pattern=SHA256_PATTERN)
+    chunker_config_sha256: str = Field(pattern=SHA256_PATTERN)
+    parser_implementation_sha256: str = Field(pattern=SHA256_PATTERN)
+    chunker_implementation_sha256: str = Field(pattern=SHA256_PATTERN)
+    dependency_snapshot_sha256: str = Field(pattern=SHA256_PATTERN)
+    uv_lock_sha256: str = Field(pattern=SHA256_PATTERN)
+    semantic_source_catalog_sha256: str = Field(pattern=SHA256_PATTERN)
+    chunk_manifest_sha256: str = Field(pattern=SHA256_PATTERN)
+    page_count: int = Field(ge=1, le=10_000)
+    included_page_count: int = Field(ge=1, le=10_000)
+    excluded_page_count: int = Field(ge=0, le=10_000)
+    blank_page_count: int = Field(ge=0, le=10_000)
+    parse_failed_page_count: int = Field(ge=0, le=10_000)
+    chunk_count: int = Field(ge=1, le=1_000)
+
+    @model_validator(mode="after")
+    def validate_page_totals(self) -> "SourceSliceBuildSummary":
+        classified = (
+            self.included_page_count
+            + self.excluded_page_count
+            + self.blank_page_count
+            + self.parse_failed_page_count
+        )
+        if classified != self.page_count:
+            raise ValueError("Source-slice page classifications must be exhaustive")
+        return self

@@ -1,0 +1,1 @@
+{"algorithm":"utf8_sliding_window_v1","artifact_role":"golden_graph_utf8_chunker_config","cross_page_chunks":false,"max_chunk_utf8_bytes":4096,"max_chunks":1000,"overlap_utf8_bytes":512,"page_coverage_policy":"complete_union_overlap_allowed-v1","schema_version":1,"utf8_boundary_policy":"codepoint_safe_max_end_forward_start_v1"}

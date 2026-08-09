@@ -142,9 +142,13 @@ sealed partitions, a fail-closed acquisition boundary, and a separate CC0
 counterfactual trust fixture. The
 [G0.2 executable protocol boundary](docs/modules/golden-graph-evaluation-protocol.md)
 now provides strict canonical artifacts, dependency and Source-slice binding,
-registered claim rules, and no-overwrite freeze authority. The CS336 Lecture 3
-artifact is still deliberately a draft and reports **no accuracy result**:
-its exact Source slice and later human gold must be frozen before path results,
+registered claim rules, and no-overwrite freeze authority. The
+[G0.2b Source-slice builder](docs/modules/golden-graph-source-slice-builder.md)
+adds bounded PDF projection, exact verified-code execution, production-compatible
+Source/Locator identities, redacted derivation leaves, and a reloadable ignored
+private materialization. The CS336 Lecture 3 artifact is still deliberately a
+draft and reports **no accuracy result**: its whole 68-page scope is registered,
+but the derived leaves and later human gold must be frozen before path results,
 and later evaluation must keep four downstream authorities separate: the
 protocol definition plus Source-slice freeze, a partition-bound
 `GoldBundleSeal`, an automatic-proposal/Chat run family (`RunSpecSeal` plus

@@ -210,11 +210,16 @@ class ProjectionIdentity(StrictProtocolModel):
     )
     chunk_manifest_path: str = Field(min_length=1, max_length=500)
     chunk_manifest_sha256: str | None = Field(pattern=SHA256_PATTERN)
+    source_slice_build_summary_path: str = Field(min_length=1, max_length=500)
+    source_slice_build_summary_sha256: str | None = Field(
+        pattern=SHA256_PATTERN
+    )
 
     @field_validator(
         "dependency_snapshot_path",
         "source_catalog_path",
         "chunk_manifest_path",
+        "source_slice_build_summary_path",
     )
     @classmethod
     def validate_artifact_path(cls, value: str) -> str:

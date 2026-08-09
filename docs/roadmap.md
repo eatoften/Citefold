@@ -105,12 +105,13 @@ G0.2a also implements the
 strict schemas, canonical JSON and sidecar hashes, acquisition/tool/dependency
 cross-checks, redacted semantic Source/Chunk envelopes, registered metric and
 claim scope, and no-overwrite persisted freeze authority. The checked-in
-Lecture 3 protocol remains a draft rather than silently choosing pages or
-claiming that labels already exist.
+Lecture 3 protocol remains a draft with an explicit whole-deck scope rather
+than claiming that labels or derived leaves already exist.
 
-G0 is still open: the exact Lecture 3 page scope, bounded parser/chunker output,
-semantic Source/Chunk identities, statistical interval rules, and numerical
-lower-confidence-bound floors must be frozen next. G2 must separately seal
+G0 is still open: the fixed 68-page Lecture 3 specification must publish and
+replay its bounded parser/chunker output, semantic Source/Chunk/build-summary
+identities, statistical interval rules, and numerical lower-confidence-bound
+floors. G2 must separately seal
 human label lineage and aliases; future automatic-proposal/Chat evaluation must
 separately create a pre-annotation `RunSpecSeal`, a post-gold sealed
 `PredictionBundle`/`ResultBundle` that references it, and an append-only access

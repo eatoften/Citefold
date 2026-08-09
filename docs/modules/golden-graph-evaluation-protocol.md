@@ -76,28 +76,54 @@ unknown fields and malformed identities, but they permit different work:
 | `draft` | schema/runner tests, authoring-tool development, CC0 smoke tests | any frozen, held-out, accuracy, or golden-graph result |
 | `frozen` | create empty blinded packets and collect the registered human decisions toward a separate G2 seal | claiming gold exists, or materializing/publishing a final gold graph before `GoldBundleSeal` |
 
-The CS336 Lecture 3 protocol begins as `draft`. Its exact page scope and
-exclusion reasons are intentionally absent until the maintainer reads the
-Source and makes that choice. A freeze attempt must fail rather than infer a
-page range, use the whole deck silently, or treat an LLM choice as a human
-decision.
+The CS336 Lecture 3 protocol remains `draft`, but its Source scope is now an
+explicit whole-deck anti-cherry-picking contract: all 68 physical pages are
+included after the deterministic v1 parse verified that each was successful
+and non-blank. No model or ad hoc CLI choice defines that scope. A freeze
+attempt must still fail until the three derived public leaves and their hashes
+are bound; human Concept and Relation decisions remain outside this protocol.
 
 Changing a frozen asset, page range, parser, chunker, annotation rule, metric,
 threshold, or artifact lineage creates a new protocol version. It never edits
 the meaning of an existing hash.
 
 `protocol_status="frozen"` alone is not authority. `freeze_protocol` accepts
-only a draft, validates every registered leaf, creates the JSON and sidecar
-without replacing existing bytes, then calls `load_frozen_protocol` to re-read
-the persisted bytes and leaves. Each file is fully written and `fsync`ed under
+only a draft, validates every registered leaf plus the current tracked
+derivation/runtime identities, creates the JSON and sidecar without replacing
+existing bytes, then calls `load_historical_frozen_protocol` to re-read the
+persisted bytes and historical leaves. It repeats that live-leaf/runtime gate
+after publication so a race cannot return authority after code or dependency
+drift. This publication gate intentionally does not claim a clean worktree or
+currently available private PDF; those belong to explicit replay readiness.
+Each file is fully
+written and `fsync`ed under
 a same-directory temporary name before an atomic, no-replace hard link exposes
 the canonical name. A process kill therefore leaves either no canonical file
 or complete bytes. An identical retry can repair an exact JSON/sidecar pair
 interruption; conflicting bytes fail closed. The canonical output path is
 derived from `protocol_id`, so one identity cannot be silently published under
 multiple names. Only the resulting `FrozenProtocolAuthority` receipt may cross
-a frozen-input boundary, and consumers must reload it before use if any leaf
-could have drifted.
+a frozen-input boundary, and consumers must reload it before use if any public
+leaf could have drifted.
+
+Historical validity and replay readiness are separate capabilities.
+`load_historical_frozen_protocol` issues `FrozenProtocolAuthority` after
+validating canonical public leaves, stable protocol
+semantics, and exact blobs in the recorded Git commit without requiring the
+current checkout, installed `pypdf`, Python, Unicode database, or annotation
+guide to equal that old environment. `require_current_replay_readiness` first
+reloads that historical authority, then requires the current tracked closure,
+tool/config/lock/runtime identities, a clean Git worktree, and the exact private
+authoring asset. It returns a token-gated, process-local
+`ReplayReadyFrozenProtocolAuthority`. The older exported
+`load_frozen_protocol` name remains a strict compatibility wrapper that also
+runs the current tracked-leaf/runtime gate, so existing callers are not
+silently weakened. Only a completed rebuild proves output equality; the
+readiness receipt can become stale immediately after issuance. Installed
+third-party distribution bytes are not supply-chain attested: v1 binds the
+exact lockfile, declared/installed version, parser adapter bytes, Python, and
+Unicode version. An isolated environment built from the lock is still required
+for stronger artifact-level dependency attestation.
 
 A public reload is read-only: it boundedly waits for an active publisher to
 drop its temporary hard-link name, then requires each JSON/sidecar leaf to have
@@ -130,7 +156,8 @@ checks:
   actually present in `uv.lock` (G0.2b resolves and executes the callable
   contract);
 - the dependency-lock path and hash;
-- exact-key dependency, semantic Source catalog, and semantic Chunk manifest
+- exact-key dependency, semantic Source catalog, semantic Chunk manifest, and
+  Source-slice build summary
   envelopes plus their sidecars;
 - parser/chunker code and config hashes, dependency snapshot, lock,
   and installed distribution versions;
@@ -150,17 +177,22 @@ checks:
 
 The v1 `DependencySnapshot` is a tool-only exact set: it contains exactly the
 parser and chunker distributions registered by the protocol, not an arbitrary
-environment inventory. When G0.2b executes an entrypoint that imports
-repository-local helpers, it must bind a complete source-tree manifest/hash or
-keep the implementation self-contained; hashing only the entrypoint file is
-not sufficient lineage.
+environment inventory. G0.2b closes repository-local code lineage by requiring
+a clean Git `HEAD`, recording that project commit in the redacted build
+summary, and executing parser/Chunker code from the exact captured bytes whose
+hashes were registered. Historical loading validates the exact input blobs and
+v1 orchestration closure inside that recorded commit. Publication/replay gates
+additionally require the current tracked leaves and runtime to remain
+compatible. Normal later code evolution therefore cannot erase historical
+authority, while a requested rerun still fails closed. Hashing only an
+entrypoint label is never sufficient.
 
-A matching asset hash proves byte identity, not PDF safety. The later Source
-catalog builder must enforce parser resource limits and record exclusions for
-image-only or failed pages. It must not turn an unverified OCR transcription
+A matching asset hash proves byte identity, not PDF safety. The G0.2b Source
+catalog builder enforces parser resource limits and records exclusions for
+image-only or failed pages. It cannot turn an unverified OCR transcription
 into ordinary PDF text evidence. G0.2a validates structural lineage and
-registered hashes; G0.2b must replay or receipt the actual raw-PDF-to-page and
-page-to-Chunk derivation before the real CS336 Source slice freezes.
+registered hashes; the real G0.2b raw-PDF-to-page and page-to-Chunk replay must
+still publish its receipt before the CS336 Source slice freezes.
 
 ## Canonical artifact contract
 
@@ -246,7 +278,8 @@ rights/claim approval.
 
 A small synthetic structural packet bound through a real on-disk acquisition
 manifest may exercise the complete protocol-freeze state in CI. It proves
-schema, deep in-memory immutability, canonicalization, authority reload,
+schema, deep in-memory immutability, canonicalization, historical authority
+reload, replay-readiness separation across later Git commits,
 crash/concurrency recovery, full page coverage, lock/config lineage, and guard
 behavior. It does not become the public-course golden graph and does not
 establish Concept or Relation proposal accuracy. The existing counterfactual
