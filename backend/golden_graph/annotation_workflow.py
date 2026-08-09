@@ -14,9 +14,6 @@ import hashlib
 from itertools import combinations
 import json
 from pathlib import Path
-import re
-import tempfile
-import unicodedata
 
 from pydantic import ValidationError
 
@@ -28,13 +25,27 @@ from .annotation_artifacts import (
     preflight_canonical_artifact,
     publish_canonical_artifact,
 )
+from .annotation_attestation import (
+    AnnotationAttestationError,
+    verify_and_build_detached_key_attestation,
+    verify_embedded_detached_key_attestation,
+)
+from .annotation_evidence import (
+    AnnotationEvidenceError,
+    AnnotationEvidenceSourceAuthority,
+    bind_annotation_evidence_source,
+    evidence_span_sort_key,
+    reject_public_source_copy,
+    resolve_evidence_selection,
+    validate_public_evidence_span,
+)
 from .annotation_models import (
+    CONCEPT_ATTESTATION_NAMESPACE,
     ConceptAnnotationWorksheet,
     ConceptInventory,
     ConceptInventorySeal,
     ConceptInventorySealRequest,
     DetachedKeyAttestationArtifact,
-    DetachedKeyAttestationReference,
     EvidenceSelectionDraft,
     EvidenceSpan,
     GoldAliasEntry,
@@ -44,48 +55,26 @@ from .annotation_models import (
     SealedConcept,
     relation_pair_id,
 )
-from .canonical_io import (
-    CanonicalArtifactError,
-    canonical_json_bytes,
-    read_bounded_regular_bytes,
-)
+from .canonical_io import canonical_json_bytes
 from .protocol import FrozenProtocolAuthority
 from .reviewer_policy import (
     ReviewerKeyPolicyAuthority,
     ReviewerKeyPolicyError,
-    require_active_reviewer_key_policy,
-    require_attestation_matches_reviewer_policy,
+    revalidate_active_reviewer_key_policy,
 )
 from .source_slice_builder import PrivateSourceSliceMaterializationReceipt
-from .ssh_attestation import (
-    ExternalMaintainerAttestationError,
-    ExternalMaintainerAttestationReceipt,
-    verify_external_maintainer_attestation,
-)
+from .ssh_attestation import ExternalMaintainerAttestationReceipt
 
 
-CONCEPT_ATTESTATION_NAMESPACE = "video-course-cards-g2-concepts-v1"
 CONCEPT_REVIEWER_ATTESTATION = (
     "I personally authored this prediction-blind Concept inventory and approve "
     "its redacted commitment for maintainer signing."
 )
-PUBLIC_SOURCE_COPY_WINDOW = 80
-PUBLIC_SOURCE_TOKEN_WINDOW = 12
 MAX_WORKSHEET_BYTES = 2 * 1024 * 1024
 
 _PREPARED_TOKEN = object()
 _SIGNED_TOKEN = object()
 _SEALED_TOKEN = object()
-_PERCENT_ESCAPE = re.compile(r"%[0-9A-Fa-f]{2}")
-_LOCAL_PATH_OR_EMAIL = re.compile(
-    r"(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/][^\\/\s]+|"
-    r"/(?:Applications|Users|Volumes|dev|etc|home|mnt|opt|private|proc|"
-    r"root|run|srv|sys|tmp|var)(?:[\\/]|$)|backend[\\/]data[\\/]|"
-    r"file(?:://|%3a%2f%2f)|~[\\/]|(?:\.\.[\\/])+|"
-    r"(?:%2e){2}(?:%2f|%5c)|[A-Za-z]%3a(?:%2f|%5c)|"
-    r"[^\s@]+@[^\s@]+\.[^\s@]+)",
-    re.IGNORECASE,
-)
 
 
 class ConceptAnnotationWorkflowError(ValueError):
@@ -196,6 +185,7 @@ def new_concept_annotation_worksheet(
 ) -> ConceptAnnotationWorksheet:
     """Create an empty private worksheet; no labels or attestation are filled."""
 
+    _bind_annotation_source(source_materialization)
     _validate_upstream(frozen_protocol, source_materialization)
     _validate_reviewer_key_policy(frozen_protocol, reviewer_key_policy)
     _require_active_policy(reviewer_key_policy)
@@ -271,6 +261,7 @@ def prepare_concept_inventory(
 ) -> PreparedConceptInventory:
     """Resolve one complete private worksheet into redacted unsigned leaves."""
 
+    source_authority = _bind_annotation_source(source_materialization)
     _validate_upstream(frozen_protocol, source_materialization)
     _validate_reviewer_key_policy(frozen_protocol, reviewer_key_policy)
     _require_active_policy(reviewer_key_policy)
@@ -298,10 +289,6 @@ def prepare_concept_inventory(
         )
     _reject_future_reviewer_attestation(worksheet.reviewer_attested_at_utc)
 
-    source_texts = tuple(
-        chunk.text
-        for chunk in source_materialization.materialization.course_source_chunks
-    )
     public_concept_values = tuple(
         value
         for decision in worksheet.candidates
@@ -315,7 +302,10 @@ def prepare_concept_inventory(
         )
         if value is not None
     )
-    _reject_public_source_copy(public_concept_values, source_texts)
+    _reject_public_source_copy(
+        public_concept_values,
+        source_authority=source_authority,
+    )
     concepts: list[SealedConcept] = []
     excluded_count = 0
     for decision in worksheet.candidates:
@@ -329,11 +319,11 @@ def prepare_concept_inventory(
                 (
                     _resolve_evidence_selection(
                         selection,
-                        source_materialization=source_materialization,
+                        source_authority=source_authority,
                     )
                     for selection in decision.evidence
                 ),
-                key=_evidence_key,
+                key=evidence_span_sort_key,
             )
         )
         concepts.append(
@@ -422,77 +412,20 @@ def signoff_prepared_concept_inventory(
 
     _require_prepared_consistent(prepared)
     _validate_prepared_policy_binding(prepared, reviewer_key_policy)
-    challenge = canonical_json_bytes(prepared.seal_request)
-    allowed_signers = (
-        reviewer_key_policy.policy.allowed_signers_policy_utf8.encode("ascii")
-    )
     try:
-        with tempfile.TemporaryDirectory(
-            prefix="vcc-g2-registered-reviewer-policy-"
-        ) as temporary_directory:
-            allowed_signers_path = Path(temporary_directory) / "allowed_signers"
-            with allowed_signers_path.open("xb") as stream:
-                stream.write(allowed_signers)
-                stream.flush()
-            receipt = verify_external_maintainer_attestation(
-                challenge_bytes=challenge,
-                namespace=CONCEPT_ATTESTATION_NAMESPACE,
-                expected_signer_identity=prepared.seal_request.reviewer_id,
-                allowed_signers_path=allowed_signers_path,
-                signature_path=signature_path,
-            )
-        signature = read_bounded_regular_bytes(
-            signature_path,
-            max_bytes=64 * 1024,
-            label="detached SSH signature",
+        verified_attestation = verify_and_build_detached_key_attestation(
+            challenge=prepared.seal_request,
+            expected_namespace=CONCEPT_ATTESTATION_NAMESPACE,
+            reviewer_key_policy=reviewer_key_policy,
+            signature_path=signature_path,
         )
-        require_attestation_matches_reviewer_policy(
-            reviewer_key_policy,
-            signer_identity=receipt.signer_identity,
-            namespace=CONCEPT_ATTESTATION_NAMESPACE,
-            allowed_signers_sha256=receipt.allowed_signers_sha256,
-            public_key_fingerprint=receipt.public_key_fingerprint,
-        )
-    except (
-        ExternalMaintainerAttestationError,
-        CanonicalArtifactError,
-        ReviewerKeyPolicyError,
-        OSError,
-    ) as exc:
+    except AnnotationAttestationError:
         raise ConceptAnnotationWorkflowError(
             "Concept-inventory key attestation could not be verified"
-        ) from exc
-    if (
-        hashlib.sha256(allowed_signers).hexdigest()
-        != receipt.allowed_signers_sha256
-        or hashlib.sha256(signature).hexdigest() != receipt.signature_sha256
-        or receipt.public_key_fingerprint is None
-    ):
-        raise ConceptAnnotationWorkflowError(
-            "Concept-inventory attestation bytes changed during verification"
-        )
-    try:
-        allowed_signers_text = allowed_signers.decode("ascii")
-        signature_text = signature.decode("ascii")
-    except UnicodeError as exc:
-        raise ConceptAnnotationWorkflowError(
-            "Concept-inventory attestation files must be ASCII"
-        ) from exc
-    attestation_artifact = DetachedKeyAttestationArtifact(
-        schema_version=1,
-        artifact_role="golden_graph_detached_key_attestation",
-        signer_identity=receipt.signer_identity,
-        namespace=CONCEPT_ATTESTATION_NAMESPACE,
-        signed_payload_sha256=receipt.challenge_sha256,
-        allowed_signers_policy_utf8=allowed_signers_text,
-        allowed_signers_sha256=receipt.allowed_signers_sha256,
-        signature_armored=signature_text,
-        signature_sha256=receipt.signature_sha256,
-        public_key_fingerprint=receipt.public_key_fingerprint,
-        key_control_only_not_proof_of_humanity=True,
-    )
+        ) from None
+    attestation_artifact = verified_attestation.artifact
     attestation_sha256 = _model_sha(attestation_artifact)
-    reference = _attestation_reference(attestation_artifact)
+    reference = verified_attestation.reference
     seal = ConceptInventorySeal(
         schema_version=1,
         artifact_role="golden_graph_concept_inventory_seal",
@@ -542,6 +475,7 @@ def publish_concept_inventory_stage(
 ) -> SealedConceptInventoryAuthority:
     """Publish the six-leaf G2.1 DAG without overwrite, then reload it."""
 
+    _bind_annotation_source(source_materialization)
     _validate_upstream(frozen_protocol, source_materialization)
     _validate_reviewer_key_policy(frozen_protocol, reviewer_key_policy)
     _require_active_policy(reviewer_key_policy)
@@ -621,6 +555,7 @@ def load_sealed_concept_inventory(
 ) -> SealedConceptInventoryAuthority:
     """Reload and deeply verify a persisted Concept seal and complete pairs."""
 
+    source_authority = _bind_annotation_source(source_materialization)
     _validate_upstream(frozen_protocol, source_materialization)
     _validate_reviewer_key_policy(frozen_protocol, reviewer_key_policy)
     inventory = load_canonical_artifact(
@@ -656,6 +591,7 @@ def load_sealed_concept_inventory(
     _validate_loaded_inventory_binding(
         frozen_protocol=frozen_protocol,
         source_materialization=source_materialization,
+        source_authority=source_authority,
         reviewer_key_policy=reviewer_key_policy,
         inventory=inventory,
     )
@@ -676,12 +612,19 @@ def load_sealed_concept_inventory(
         raise ConceptAnnotationWorkflowError(
             "Published Concept seal request has inconsistent bindings"
         )
-    key_receipt = _verify_embedded_attestation(
-        attestation.artifact,
-        seal_request.artifact,
-        reviewer_key_policy=reviewer_key_policy,
-    )
-    expected_reference = _attestation_reference(attestation.artifact)
+    try:
+        verified_attestation = verify_embedded_detached_key_attestation(
+            challenge=seal_request.artifact,
+            expected_namespace=CONCEPT_ATTESTATION_NAMESPACE,
+            reviewer_key_policy=reviewer_key_policy,
+            artifact=attestation.artifact,
+        )
+    except AnnotationAttestationError:
+        raise ConceptAnnotationWorkflowError(
+            "Embedded Concept-inventory key attestation is invalid"
+        ) from None
+    key_receipt = verified_attestation.receipt
+    expected_reference = verified_attestation.reference
     expected_seal = ConceptInventorySeal(
         schema_version=1,
         artifact_role="golden_graph_concept_inventory_seal",
@@ -756,6 +699,17 @@ def default_concept_stage_paths(
     )
 
 
+def _bind_annotation_source(
+    source_materialization: PrivateSourceSliceMaterializationReceipt,
+) -> AnnotationEvidenceSourceAuthority:
+    try:
+        return bind_annotation_evidence_source(source_materialization)
+    except AnnotationEvidenceError:
+        raise ConceptAnnotationWorkflowError(
+            "G2.1 requires a deeply validated private Source authority"
+        ) from None
+
+
 def _validate_upstream(
     frozen_protocol: FrozenProtocolAuthority,
     source_materialization: PrivateSourceSliceMaterializationReceipt,
@@ -772,10 +726,10 @@ def _validate_upstream(
         source_materialization.__post_init__()
         protocol = frozen_protocol.protocol
         materialization = source_materialization.materialization
-    except (AttributeError, TypeError, ValueError) as exc:
+    except (AttributeError, TypeError, ValueError):
         raise ConceptAnnotationWorkflowError(
             "G2.1 requires loader-issued protocol and Source authorities"
-        ) from exc
+        ) from None
     if (
         protocol.protocol_status != "frozen"
         or materialization.protocol_id != protocol.protocol_id
@@ -801,10 +755,10 @@ def _validate_reviewer_key_policy(
         reviewer_key_policy.__post_init__()
         policy = reviewer_key_policy.policy
         protocol = frozen_protocol.protocol
-    except (AttributeError, TypeError, ValueError) as exc:
+    except (AttributeError, TypeError, ValueError):
         raise ConceptAnnotationWorkflowError(
             "G2.1 requires a repository-issued reviewer-key policy authority"
-        ) from exc
+        ) from None
     if (
         policy.protocol_id != protocol.protocol_id
         or policy.frozen_protocol_sha256 != frozen_protocol.protocol_sha256
@@ -826,11 +780,11 @@ def _validate_prepared_policy_binding(
         )
     try:
         reviewer_key_policy.__post_init__()
-        require_active_reviewer_key_policy(reviewer_key_policy)
-    except (AttributeError, TypeError, ValueError) as exc:
+        revalidate_active_reviewer_key_policy(reviewer_key_policy)
+    except (AttributeError, ReviewerKeyPolicyError, TypeError, ValueError):
         raise ConceptAnnotationWorkflowError(
             "A repository-issued reviewer-key policy authority is required"
-        ) from exc
+        ) from None
     expected = (
         reviewer_key_policy.policy_sha256,
         reviewer_key_policy.registration_commit_sha,
@@ -861,11 +815,11 @@ def _require_active_policy(
     reviewer_key_policy: ReviewerKeyPolicyAuthority,
 ) -> None:
     try:
-        require_active_reviewer_key_policy(reviewer_key_policy)
-    except ReviewerKeyPolicyError as exc:
+        revalidate_active_reviewer_key_policy(reviewer_key_policy)
+    except ReviewerKeyPolicyError:
         raise ConceptAnnotationWorkflowError(
             "G2.1 authoring requires an active current reviewer-key policy"
-        ) from exc
+        ) from None
 
 
 def _validate_worksheet_binding(
@@ -908,78 +862,22 @@ def _validate_worksheet_binding(
 def _resolve_evidence_selection(
     selection: EvidenceSelectionDraft,
     *,
-    source_materialization: PrivateSourceSliceMaterializationReceipt,
+    source_authority: AnnotationEvidenceSourceAuthority,
 ) -> EvidenceSpan:
-    materialization = source_materialization.materialization
-    chunks = {
-        chunk.ordinal: chunk for chunk in materialization.course_source_chunks
-    }
-    manifest_chunks = {
-        chunk.ordinal: chunk for chunk in materialization.chunk_manifest.chunks
-    }
-    chunk = chunks.get(selection.chunk_ordinal)
-    manifest_chunk = manifest_chunks.get(selection.chunk_ordinal)
-    if chunk is None or manifest_chunk is None:
-        raise ConceptAnnotationWorkflowError(
-            "Concept evidence references an unknown frozen Chunk ordinal"
+    try:
+        return resolve_evidence_selection(
+            selection,
+            source_authority=source_authority,
         )
-    metadata = chunk.locator.metadata
-    logical_page_id = metadata.get("logical_page_id")
-    window_start = metadata.get("start_offset")
-    window_end = metadata.get("end_offset")
-    if (
-        logical_page_id != selection.logical_page_id
-        or chunk.text_hash != selection.semantic_chunk_sha256
-        or manifest_chunk.semantic_chunk_sha256 != selection.semantic_chunk_sha256
-        or not isinstance(window_start, int)
-        or not isinstance(window_end, int)
-    ):
-        raise ConceptAnnotationWorkflowError(
-            "Concept evidence differs from the frozen semantic Chunk"
-        )
-    chunk_bytes = chunk.text.encode("utf-8")
-    quote_bytes = selection.exact_quote.encode("utf-8")
-    if window_end - window_start != len(chunk_bytes):
-        raise ConceptAnnotationWorkflowError(
-            "Frozen Chunk byte window is internally inconsistent"
-        )
-    if selection.page_global_utf8_start is None:
-        matches = _all_byte_matches(chunk_bytes, quote_bytes)
-        if len(matches) != 1:
-            raise ConceptAnnotationWorkflowError(
-                "Concept evidence quote needs one explicit unambiguous byte start"
-            )
-        local_start = matches[0]
-        page_start = window_start + local_start
-    else:
-        page_start = selection.page_global_utf8_start
-        local_start = page_start - window_start
-    local_end = local_start + len(quote_bytes)
-    page_end = page_start + len(quote_bytes)
-    if (
-        local_start < 0
-        or local_end > len(chunk_bytes)
-        or page_end > window_end
-        or chunk_bytes[local_start:local_end] != quote_bytes
-    ):
-        raise ConceptAnnotationWorkflowError(
-            "Concept evidence span does not resolve against frozen Source bytes"
-        )
-    return EvidenceSpan(
-        chunk_ordinal=selection.chunk_ordinal,
-        logical_page_id=selection.logical_page_id,
-        semantic_chunk_sha256=selection.semantic_chunk_sha256,
-        page_utf8_start=page_start,
-        page_utf8_end=page_end,
-        offset_unit="utf8_bytes",
-        semantic_span_sha256=hashlib.sha256(quote_bytes).hexdigest(),
-    )
+    except AnnotationEvidenceError as exc:
+        raise ConceptAnnotationWorkflowError(str(exc)) from None
 
 
 def _validate_loaded_inventory_binding(
     *,
     frozen_protocol: FrozenProtocolAuthority,
     source_materialization: PrivateSourceSliceMaterializationReceipt,
+    source_authority: AnnotationEvidenceSourceAuthority,
     reviewer_key_policy: ReviewerKeyPolicyAuthority,
     inventory: CanonicalArtifactAuthority[ConceptInventory],
 ) -> None:
@@ -1002,9 +900,6 @@ def _validate_loaded_inventory_binding(
         raise ConceptAnnotationWorkflowError(
             "Published Concept inventory differs from frozen authority"
         )
-    source_texts = tuple(
-        chunk.text for chunk in materialization.course_source_chunks
-    )
     _reject_public_source_copy(
         tuple(
             value
@@ -1017,69 +912,28 @@ def _validate_loaded_inventory_binding(
                 concept.review_rationale,
             )
         ),
-        source_texts,
+        source_authority=source_authority,
     )
     for concept in inventory.artifact.concepts:
         for evidence in concept.evidence:
             _validate_public_evidence_span(
                 evidence,
-                source_materialization=source_materialization,
+                source_authority=source_authority,
             )
 
 
 def _validate_public_evidence_span(
     evidence: EvidenceSpan,
     *,
-    source_materialization: PrivateSourceSliceMaterializationReceipt,
+    source_authority: AnnotationEvidenceSourceAuthority,
 ) -> None:
-    chunks = {
-        chunk.ordinal: chunk
-        for chunk in source_materialization.materialization.course_source_chunks
-    }
-    manifest_chunks = {
-        chunk.ordinal: chunk
-        for chunk in source_materialization.materialization.chunk_manifest.chunks
-    }
-    chunk = chunks.get(evidence.chunk_ordinal)
-    manifest_chunk = manifest_chunks.get(evidence.chunk_ordinal)
-    if chunk is None or manifest_chunk is None:
-        raise ConceptAnnotationWorkflowError(
-            "Published Concept evidence references an unknown Chunk"
-        )
-    metadata = chunk.locator.metadata
-    window_start = metadata.get("start_offset")
-    window_end = metadata.get("end_offset")
-    if (
-        metadata.get("logical_page_id") != evidence.logical_page_id
-        or chunk.text_hash != evidence.semantic_chunk_sha256
-        or manifest_chunk.semantic_chunk_sha256 != evidence.semantic_chunk_sha256
-        or not isinstance(window_start, int)
-        or not isinstance(window_end, int)
-    ):
-        raise ConceptAnnotationWorkflowError(
-            "Published Concept evidence differs from frozen Chunk identity"
-        )
-    local_start = evidence.page_utf8_start - window_start
-    local_end = evidence.page_utf8_end - window_start
-    encoded = chunk.text.encode("utf-8")
-    if local_start < 0 or local_end > len(encoded) or local_end <= local_start:
-        raise ConceptAnnotationWorkflowError(
-            "Published Concept evidence is outside its frozen Chunk"
-        )
-    span = encoded[local_start:local_end]
     try:
-        decoded = span.decode("utf-8")
-    except UnicodeError as exc:
-        raise ConceptAnnotationWorkflowError(
-            "Published Concept evidence splits a UTF-8 code point"
-        ) from exc
-    if (
-        not decoded.strip()
-        or hashlib.sha256(span).hexdigest() != evidence.semantic_span_sha256
-    ):
-        raise ConceptAnnotationWorkflowError(
-            "Published Concept evidence span hash is invalid"
+        validate_public_evidence_span(
+            evidence,
+            source_authority=source_authority,
         )
+    except AnnotationEvidenceError as exc:
+        raise ConceptAnnotationWorkflowError(str(exc)) from None
 
 
 def _build_alias_table(
@@ -1190,73 +1044,6 @@ def _expected_seal_request(
     )
 
 
-def _attestation_reference(
-    artifact: DetachedKeyAttestationArtifact,
-) -> DetachedKeyAttestationReference:
-    return DetachedKeyAttestationReference(
-        signer_identity=artifact.signer_identity,
-        namespace=artifact.namespace,
-        signed_payload_sha256=artifact.signed_payload_sha256,
-        allowed_signers_sha256=artifact.allowed_signers_sha256,
-        signature_sha256=artifact.signature_sha256,
-        public_key_fingerprint=artifact.public_key_fingerprint,
-        key_control_only_not_proof_of_humanity=True,
-    )
-
-
-def _verify_embedded_attestation(
-    artifact: DetachedKeyAttestationArtifact,
-    request: ConceptInventorySealRequest,
-    *,
-    reviewer_key_policy: ReviewerKeyPolicyAuthority,
-) -> ExternalMaintainerAttestationReceipt:
-    if artifact.signed_payload_sha256 != _model_sha(request):
-        raise ConceptAnnotationWorkflowError(
-            "Detached key attestation does not bind the Concept seal request"
-        )
-    try:
-        with tempfile.TemporaryDirectory(
-            prefix="vcc-g2-concept-attestation-"
-        ) as temporary_directory:
-            root = Path(temporary_directory)
-            allowed = root / "allowed_signers"
-            signature = root / "request.sig"
-            allowed.write_bytes(artifact.allowed_signers_policy_utf8.encode("ascii"))
-            signature.write_bytes(artifact.signature_armored.encode("ascii"))
-            receipt = verify_external_maintainer_attestation(
-                challenge_bytes=canonical_json_bytes(request),
-                namespace=artifact.namespace,
-                expected_signer_identity=artifact.signer_identity,
-                allowed_signers_path=allowed,
-                signature_path=signature,
-            )
-    except (ExternalMaintainerAttestationError, OSError) as exc:
-        raise ConceptAnnotationWorkflowError(
-            "Embedded Concept-inventory key attestation is invalid"
-        ) from exc
-    if (
-        receipt.allowed_signers_sha256 != artifact.allowed_signers_sha256
-        or receipt.signature_sha256 != artifact.signature_sha256
-        or receipt.public_key_fingerprint != artifact.public_key_fingerprint
-    ):
-        raise ConceptAnnotationWorkflowError(
-            "Embedded attestation receipt differs from its public artifact"
-        )
-    try:
-        require_attestation_matches_reviewer_policy(
-            reviewer_key_policy,
-            signer_identity=receipt.signer_identity,
-            namespace=receipt.namespace,
-            allowed_signers_sha256=receipt.allowed_signers_sha256,
-            public_key_fingerprint=receipt.public_key_fingerprint,
-        )
-    except ReviewerKeyPolicyError as exc:
-        raise ConceptAnnotationWorkflowError(
-            "Embedded attestation is not authorized by reviewer-key policy"
-        ) from exc
-    return receipt
-
-
 def _require_prepared_consistent(prepared: PreparedConceptInventory) -> None:
     if (
         _model_sha(prepared.inventory) != prepared.inventory_sha256
@@ -1291,108 +1078,16 @@ def _require_signed_consistent(signed: SignedConceptInventory) -> None:
 
 def _reject_public_source_copy(
     public_values: tuple[str, ...],
-    private_source_texts: tuple[str, ...],
+    *,
+    source_authority: AnnotationEvidenceSourceAuthority,
 ) -> None:
-    normalized_sources = tuple(
-        _normalize_copy_scan(text) for text in private_source_texts
-    )
-    if any(
-        _contains_default_ignorable(value)
-        for value in public_values
-    ):
-        raise ConceptAnnotationWorkflowError(
-            "Public Concept text contains an invisible Unicode control"
+    try:
+        reject_public_source_copy(
+            public_values,
+            source_authority=source_authority,
         )
-    if any(_PERCENT_ESCAPE.search(value) for value in public_values):
-        raise ConceptAnnotationWorkflowError(
-            "Public Concept text contains a percent escape that may hide "
-            "Source text or a private path"
-        )
-    cleaned_values = tuple(_remove_default_ignorables(value) for value in public_values)
-    joined_surfaces = ("\n".join(cleaned_values), "".join(cleaned_values))
-    for surface in joined_surfaces:
-        if _LOCAL_PATH_OR_EMAIL.search(surface):
-            raise ConceptAnnotationWorkflowError(
-                "Public Concept text contains a private path or email-like value"
-            )
-    normalized = _normalize_copy_scan(" ".join(cleaned_values))
-    if len(normalized) >= PUBLIC_SOURCE_COPY_WINDOW:
-        for offset in range(len(normalized) - PUBLIC_SOURCE_COPY_WINDOW + 1):
-            window = normalized[offset : offset + PUBLIC_SOURCE_COPY_WINDOW]
-            if any(window in source for source in normalized_sources):
-                raise ConceptAnnotationWorkflowError(
-                    "Public Concept text contains a long verbatim Source fragment"
-                )
-    public_tokens = _copy_scan_tokens(normalized)
-    if len(public_tokens) >= PUBLIC_SOURCE_TOKEN_WINDOW:
-        source_token_streams = tuple(
-            _copy_scan_tokens(source) for source in normalized_sources
-        )
-        for offset in range(len(public_tokens) - PUBLIC_SOURCE_TOKEN_WINDOW + 1):
-            token_window = public_tokens[
-                offset : offset + PUBLIC_SOURCE_TOKEN_WINDOW
-            ]
-            if any(
-                _contains_token_window(source_tokens, token_window)
-                for source_tokens in source_token_streams
-            ):
-                raise ConceptAnnotationWorkflowError(
-                    "Public Concept text contains a verbatim Source token sequence"
-                )
-
-
-def _normalize_copy_scan(value: str) -> str:
-    return " ".join(_remove_default_ignorables(value).casefold().split())
-
-
-def _remove_default_ignorables(value: str) -> str:
-    normalized = unicodedata.normalize("NFKC", value)
-    return "".join(
-        character
-        for character in normalized
-        if not _is_default_ignorable(character)
-    )
-
-
-def _contains_default_ignorable(value: str) -> bool:
-    return any(
-        _is_default_ignorable(character)
-        for character in unicodedata.normalize("NFKC", value)
-    )
-
-
-def _is_default_ignorable(character: str) -> bool:
-    codepoint = ord(character)
-    return (
-        unicodedata.category(character) == "Cf"
-        or codepoint == 0x034F
-        or 0x115F <= codepoint <= 0x1160
-        or 0x17B4 <= codepoint <= 0x17B5
-        or 0x180B <= codepoint <= 0x180F
-        or 0xFE00 <= codepoint <= 0xFE0F
-        or codepoint == 0x3164
-        or codepoint == 0xFFA0
-        or 0xFFF0 <= codepoint <= 0xFFF8
-        or 0x1BCA0 <= codepoint <= 0x1BCA3
-        or 0x1D173 <= codepoint <= 0x1D17A
-        or 0xE0000 <= codepoint <= 0xE0FFF
-    )
-
-
-def _copy_scan_tokens(value: str) -> tuple[str, ...]:
-    return tuple(re.findall(r"[^\W_]+", value, flags=re.UNICODE))
-
-
-def _contains_token_window(
-    haystack: tuple[str, ...],
-    needle: tuple[str, ...],
-) -> bool:
-    if not needle or len(needle) > len(haystack):
-        return False
-    return any(
-        haystack[offset : offset + len(needle)] == needle
-        for offset in range(len(haystack) - len(needle) + 1)
-    )
+    except AnnotationEvidenceError as exc:
+        raise ConceptAnnotationWorkflowError(str(exc)) from None
 
 
 def _reject_future_reviewer_attestation(value: str | None) -> None:
@@ -1412,28 +1107,6 @@ def _reject_future_reviewer_attestation(value: str | None) -> None:
         raise ConceptAnnotationWorkflowError(
             "Reviewer attestation time cannot be in the future"
         )
-
-
-def _all_byte_matches(haystack: bytes, needle: bytes) -> tuple[int, ...]:
-    matches: list[int] = []
-    cursor = 0
-    while True:
-        found = haystack.find(needle, cursor)
-        if found < 0:
-            return tuple(matches)
-        matches.append(found)
-        cursor = found + 1
-
-
-def _evidence_key(evidence: EvidenceSpan) -> tuple[object, ...]:
-    return (
-        evidence.chunk_ordinal,
-        evidence.logical_page_id,
-        evidence.page_utf8_start,
-        evidence.page_utf8_end,
-        evidence.semantic_chunk_sha256,
-        evidence.semantic_span_sha256,
-    )
 
 
 def _issue_prepared(

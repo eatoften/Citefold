@@ -239,7 +239,12 @@ implements `prepare-reviewer-key-policy`, `verify-reviewer-key-policy`,
 redacted six-leaf public Concept DAG, treats OpenSSH signatures as key-control
 evidence only, requires its public key policy to pre-exist in reachable Git
 history, and derives the exhaustive pair manifest before Relation review. No
-real CS336 reviewer-key policy or authorized worksheet exists. This is a
+G2.2 Relation label state exists yet. Its prerequisite shared evidence/privacy
+and four-stage detached-attestation primitives are now implemented and wired
+back into G2.1, so Pass A can reuse one audited security boundary instead of
+copying Concept-specific logic. See the
+[shared annotation primitives contract](modules/golden-graph-annotation-security-primitives.md).
+No real CS336 reviewer-key policy or authorized worksheet exists. This is a
 software checkpoint, not a human-label, gold-graph, accuracy, agreement, or
 path-quality result. The staged authority decision is recorded in
 [ADR-0010](decisions/ADR-0010-staged-human-gold-and-key-control-attestation.md).

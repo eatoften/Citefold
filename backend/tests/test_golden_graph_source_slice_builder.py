@@ -39,6 +39,10 @@ from golden_graph.protocol import (
 from golden_graph.schemas import GoldenGraphProtocol
 from golden_graph.schemas import ToolIdentity
 from golden_graph import source_slice_builder
+from golden_graph.annotation_evidence import (
+    AnnotationEvidenceError,
+    bind_annotation_evidence_source,
+)
 from golden_graph.source_slice_builder import (
     SourceSliceBuildError,
     build_source_slice,
@@ -805,6 +809,31 @@ def test_private_materialization_round_trip_conflict_tamper_and_boundary(
         authority.course_source_chunks
     )
     assert "alpha beta" not in repr(written)
+    annotation_source = bind_annotation_evidence_source(loaded)
+    assert annotation_source.private_materialization_sha256 == (
+        loaded.artifact_sha256
+    )
+    assert len(annotation_source.chunks) == len(authority.course_source_chunks)
+    object.__setattr__(converged, "artifact_sha256", "0" * 64)
+    with pytest.raises(AnnotationEvidenceError) as invalid_receipt:
+        bind_annotation_evidence_source(converged)
+    assert str(invalid_receipt.value) == (
+        "A validated private Source authority is required for annotation"
+    )
+    secret = "PRIVATE-NESTED-CHUNK-SOURCE-TEXT-DO-NOT-LEAK"
+    object.__setattr__(
+        loaded.materialization.course_source_chunks[0],
+        "text",
+        secret,
+    )
+    with pytest.raises(AnnotationEvidenceError) as invalid_nested_source:
+        bind_annotation_evidence_source(loaded)
+    assert secret not in str(invalid_nested_source.value)
+    secret_path = Path("PRIVATE-REVIEWER-HOME") / "source.private.json"
+    object.__setattr__(written, "artifact_path", secret_path)
+    with pytest.raises(AnnotationEvidenceError) as invalid_source_path:
+        bind_annotation_evidence_source(written)
+    assert str(secret_path) not in str(invalid_source_path.value)
 
     wrong_scope = GoldenGraphProtocol.model_validate(
         protocol.model_copy(

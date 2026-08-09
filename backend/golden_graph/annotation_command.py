@@ -18,10 +18,10 @@ from .annotation_artifacts import (
 from .annotation_models import (
     ConceptInventory,
     ConceptInventorySealRequest,
+    G2_ATTESTATION_NAMESPACES,
     GoldAliasTable,
 )
 from .annotation_workflow import (
-    CONCEPT_ATTESTATION_NAMESPACE,
     ConceptAnnotationWorkflowError,
     ConceptStagePaths,
     default_concept_stage_paths,
@@ -109,7 +109,7 @@ def _prepare_reviewer_key_policy(args: argparse.Namespace) -> dict[str, object]:
         frozen_protocol_sha256=context.frozen_protocol.protocol_sha256,
         reviewer_id=protocol.review.reviewer_id,
         allowed_signers_policy_utf8=allowed_signers_text,
-        allowed_namespaces=(CONCEPT_ATTESTATION_NAMESPACE,),
+        allowed_namespaces=G2_ATTESTATION_NAMESPACES,
     )
     digest = publish_reviewer_key_policy(
         repository_root=context.repository_root,

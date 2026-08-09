@@ -19,6 +19,7 @@ from golden_graph.reviewer_policy import (
     load_historical_reviewer_key_policy,
     load_repository_reviewer_key_policy,
     publish_reviewer_key_policy,
+    revalidate_active_reviewer_key_policy,
     require_active_reviewer_key_policy,
     require_attestation_matches_reviewer_policy,
     reviewer_key_policy_path,
@@ -62,6 +63,104 @@ def test_registered_policy_loads_from_exact_ancestor_blob_and_sidecar(
     require_active_reviewer_key_policy(authority)
     with pytest.raises(TypeError, match="repository loader"):
         ReviewerKeyPolicyAuthority()
+
+
+def test_revalidation_refreshes_unchanged_policy_after_unrelated_head_commit(
+    tmp_path: Path,
+) -> None:
+    repository = _registered_policy_repository(tmp_path)
+    authority = _load(repository)
+
+    unchanged = revalidate_active_reviewer_key_policy(authority)
+    assert unchanged == authority
+
+    unrelated = repository.root / "UNRELATED.md"
+    unrelated.write_text(
+        "This commit does not change reviewer trust.\n",
+        encoding="utf-8",
+    )
+    _git(repository.root, "add", unrelated.name)
+    _git(repository.root, "commit", "-m", "add unrelated documentation")
+    current_head = _git_stdout(repository.root, "rev-parse", "HEAD")
+
+    refreshed = revalidate_active_reviewer_key_policy(authority)
+
+    assert refreshed.policy == authority.policy
+    assert refreshed.repository_root == authority.repository_root
+    assert refreshed.artifact_path == authority.artifact_path
+    assert refreshed.policy_sha256 == authority.policy_sha256
+    assert refreshed.registration_commit_sha == authority.registration_commit_sha
+    assert refreshed.policy_blob_oid == authority.policy_blob_oid
+    assert refreshed.verified_head_sha == current_head
+    assert refreshed.verified_head_sha != authority.verified_head_sha
+    assert refreshed.active_at_verified_head is True
+
+
+@pytest.mark.parametrize(
+    ("git_state", "policy_change"),
+    (
+        ("worktree", "removal"),
+        ("worktree", "mutation"),
+        ("staged", "removal"),
+        ("staged", "mutation"),
+        ("committed", "removal"),
+        ("committed", "mutation"),
+    ),
+    ids=(
+        "worktree-removal",
+        "worktree-mutation",
+        "staged-removal",
+        "staged-mutation",
+        "committed-removal",
+        "committed-mutation",
+    ),
+)
+def test_revalidation_rejects_policy_change_after_authority_issuance(
+    tmp_path: Path,
+    git_state: str,
+    policy_change: str,
+) -> None:
+    repository = _registered_policy_repository(tmp_path)
+    authority = _load(repository)
+    path = reviewer_key_policy_path(
+        repository.root,
+        protocol_id=PROTOCOL_ID,
+        reviewer_id=REVIEWER_ID,
+    )
+    sidecar_path = path.with_suffix(".sha256")
+    logical_paths = (
+        path.relative_to(repository.root).as_posix(),
+        sidecar_path.relative_to(repository.root).as_posix(),
+    )
+
+    if policy_change == "removal":
+        if git_state == "worktree":
+            path.unlink()
+            sidecar_path.unlink()
+        else:
+            _git(repository.root, "rm", *logical_paths)
+    else:
+        attacker_policy = _policy(seed=bytes(range(32, 64)))
+        payload = canonical_json_bytes(attacker_policy)
+        digest = hashlib.sha256(payload).hexdigest()
+        path.write_bytes(payload)
+        sidecar_path.write_bytes(f"{digest}  {path.name}\n".encode("utf-8"))
+        if git_state != "worktree":
+            _git(repository.root, "add", *logical_paths)
+
+    if git_state == "committed":
+        _git(repository.root, "commit", "-m", f"{policy_change} reviewer policy")
+
+    with pytest.raises(ReviewerKeyPolicyError):
+        revalidate_active_reviewer_key_policy(authority)
+
+
+def test_revalidation_rejects_historical_authority(tmp_path: Path) -> None:
+    repository = _registered_policy_repository(tmp_path)
+    historical = _load_historical(repository)
+
+    with pytest.raises(ReviewerKeyPolicyError, match="could not be revalidated"):
+        revalidate_active_reviewer_key_policy(historical)
 
 
 def test_self_authorized_replacement_key_is_not_registered(

@@ -42,6 +42,28 @@ _SSH_SIGNATURE_PATTERN = (
 _GIT_COMMIT_OID_PATTERN = r"^[0-9a-f]{40}$"
 _RELATION_PAIR_DOMAIN = b"video-course-cards-g2-relation-pair-v1\x00"
 
+CONCEPT_ATTESTATION_NAMESPACE = "video-course-cards-g2-concepts-v1"
+GOLD_BUNDLE_ATTESTATION_NAMESPACE = "video-course-cards-g2-gold-bundle-v1"
+RELATION_PASS_A_ATTESTATION_NAMESPACE = (
+    "video-course-cards-g2-relation-pass-a-v1"
+)
+RELATION_PASS_B_ATTESTATION_NAMESPACE = (
+    "video-course-cards-g2-relation-pass-b-v1"
+)
+G2AttestationNamespace = Literal[
+    "video-course-cards-g2-concepts-v1",
+    "video-course-cards-g2-gold-bundle-v1",
+    "video-course-cards-g2-relation-pass-a-v1",
+    "video-course-cards-g2-relation-pass-b-v1",
+]
+# ReviewerKeyPolicy requires a sorted, duplicate-free namespace sequence.
+G2_ATTESTATION_NAMESPACES: tuple[G2AttestationNamespace, ...] = (
+    CONCEPT_ATTESTATION_NAMESPACE,
+    GOLD_BUNDLE_ATTESTATION_NAMESPACE,
+    RELATION_PASS_A_ATTESTATION_NAMESPACE,
+    RELATION_PASS_B_ATTESTATION_NAMESPACE,
+)
+
 ConceptDecision = Literal["include", "exclude"]
 ConceptWorksheetStatus = Literal["draft", "complete"]
 
@@ -474,7 +496,7 @@ class DetachedKeyAttestationReference(StrictAnnotationModel):
     """Hashes and signer metadata from separately verified detached bytes."""
 
     signer_identity: str = Field(min_length=1, max_length=320)
-    namespace: str = Field(min_length=1, max_length=200)
+    namespace: G2AttestationNamespace
     signed_payload_sha256: str = Field(pattern=SHA256_PATTERN)
     allowed_signers_sha256: str = Field(pattern=SHA256_PATTERN)
     signature_sha256: str = Field(pattern=SHA256_PATTERN)
@@ -503,7 +525,7 @@ class DetachedKeyAttestationArtifact(StrictAnnotationModel):
     schema_version: Literal[1]
     artifact_role: Literal["golden_graph_detached_key_attestation"]
     signer_identity: str = Field(min_length=1, max_length=255)
-    namespace: Literal["video-course-cards-g2-concepts-v1"]
+    namespace: G2AttestationNamespace
     signed_payload_sha256: str = Field(pattern=SHA256_PATTERN)
     allowed_signers_policy_utf8: str = Field(
         pattern=_SSH_ED25519_ALLOWED_SIGNER_PATTERN,
@@ -746,6 +768,7 @@ def _is_safe_id(value: str) -> bool:
 
 
 __all__ = [
+    "CONCEPT_ATTESTATION_NAMESPACE",
     "ConceptAnnotationWorksheet",
     "ConceptDecisionDraft",
     "ConceptInventory",
@@ -756,10 +779,15 @@ __all__ = [
     "EvidenceSelectionDraft",
     "EvidenceSpan",
     "ExcludedConceptCandidate",
+    "G2AttestationNamespace",
+    "G2_ATTESTATION_NAMESPACES",
+    "GOLD_BUNDLE_ATTESTATION_NAMESPACE",
     "GoldAliasEntry",
     "GoldAliasTable",
     "RelationPair",
     "RelationPairManifest",
+    "RELATION_PASS_A_ATTESTATION_NAMESPACE",
+    "RELATION_PASS_B_ATTESTATION_NAMESPACE",
     "SealedConcept",
     "relation_pair_id",
 ]

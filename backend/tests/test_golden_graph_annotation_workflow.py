@@ -6,16 +6,20 @@ from pathlib import Path
 import shutil
 from types import SimpleNamespace
 import subprocess
+import traceback
 from urllib.parse import quote
 
 import pytest
 from pydantic import ValidationError
 
 import golden_graph.annotation_command as annotation_command
+import golden_graph.annotation_evidence as annotation_evidence
 import golden_graph.annotation_workflow as workflow
+import golden_graph.reviewer_policy as reviewer_policy
 from golden_graph.annotation_artifacts import AnnotationArtifactError
 from golden_graph.annotation_models import (
     ConceptAnnotationWorksheet,
+    G2_ATTESTATION_NAMESPACES,
     RelationPairManifest,
 )
 from golden_graph.annotation_workflow import (
@@ -87,6 +91,25 @@ def annotation_fixture(
             ),
         ),
     )
+    evidence_source = annotation_evidence._issue_annotation_evidence_source_authority(
+        private_materialization_sha256=private_sha,
+        chunks=(
+            annotation_evidence._FrozenEvidenceChunk(
+                ordinal=0,
+                logical_page_id="page-0001",
+                window_start=0,
+                window_end=len(source_bytes),
+                semantic_chunk_sha256=chunk_sha,
+                text=source_text,
+                utf8_bytes=source_bytes,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        workflow,
+        "_bind_annotation_source",
+        lambda _source_materialization: evidence_source,
+    )
     frozen = SimpleNamespace(
         protocol_sha256=protocol_sha,
         protocol=SimpleNamespace(
@@ -150,6 +173,7 @@ def annotation_fixture(
     return SimpleNamespace(
         frozen=frozen,
         source=source,
+        evidence_source=evidence_source,
         source_text=source_text,
         chunk_sha=chunk_sha,
         reviewer_key_policy=reviewer_key_policy,
@@ -463,7 +487,10 @@ def test_public_privacy_scanner_rejects_path_and_uri_families() -> None:
         "~/private/source.txt",
     ):
         with pytest.raises(ConceptAnnotationWorkflowError, match="private path"):
-            workflow._reject_public_source_copy((value,), ("unrelated source",))
+            workflow._reject_public_source_copy(
+                (value,),
+                source_authority=_privacy_authority("unrelated source"),
+            )
 
 
 def test_variation_selectors_cannot_hide_public_source_copy() -> None:
@@ -471,7 +498,10 @@ def test_variation_selectors_cannot_hide_public_source_copy() -> None:
     hidden = "\ufe0f".join(source)
 
     with pytest.raises(ConceptAnnotationWorkflowError, match="invisible"):
-        workflow._reject_public_source_copy((hidden,), (source,))
+        workflow._reject_public_source_copy(
+            (hidden,),
+            source_authority=_privacy_authority(source),
+        )
 
 
 def test_percent_escapes_cannot_hide_source_or_private_paths() -> None:
@@ -487,11 +517,14 @@ def test_percent_escapes_cannot_hide_source_or_private_paths() -> None:
         "%2525252e%2525252e%2525252fsecret.txt",
     ):
         with pytest.raises(ConceptAnnotationWorkflowError, match="percent escape"):
-            workflow._reject_public_source_copy((value,), (source,))
+            workflow._reject_public_source_copy(
+                (value,),
+                source_authority=_privacy_authority(source),
+            )
 
     workflow._reject_public_source_copy(
         ("A measured accuracy can be 100% after rounding.",),
-        (source,),
+        source_authority=_privacy_authority(source),
     )
 
 
@@ -614,6 +647,149 @@ def test_unregistered_fresh_key_cannot_self_authorize_concept_seal(
             reviewer_key_policy=annotation_fixture.reviewer_key_policy,
             signature_path=signature,
         )
+
+
+def test_stale_active_policy_cannot_authorize_after_git_revocation(
+    annotation_fixture: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    prepared = prepare_concept_inventory(
+        frozen_protocol=annotation_fixture.frozen,
+        source_materialization=annotation_fixture.source,
+        reviewer_key_policy=annotation_fixture.reviewer_key_policy,
+        worksheet=annotation_fixture.worksheet,
+    )
+    stale_policy = annotation_fixture.reviewer_key_policy
+    root = stale_policy.repository_root
+    relative_policy = stale_policy.artifact_path.relative_to(root).as_posix()
+    relative_sidecar = stale_policy.artifact_path.with_suffix(".sha256").relative_to(
+        root
+    ).as_posix()
+    subprocess.run(
+        ["git", "-C", str(root), "rm", "-q", "--", relative_policy, relative_sidecar],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(root), "commit", "-q", "-m", "revoke reviewer key"],
+        check=True,
+        capture_output=True,
+    )
+    current_head = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert current_head != stale_policy.verified_head_sha
+    signature = _sign_request(
+        tmp_path,
+        prepared.seal_request,
+        signing_key=annotation_fixture.signing_key,
+    )
+
+    with pytest.raises(
+        ConceptAnnotationWorkflowError,
+        match="repository-issued reviewer-key policy",
+    ):
+        signoff_prepared_concept_inventory(
+            prepared=prepared,
+            reviewer_key_policy=stale_policy,
+            signature_path=signature,
+        )
+
+
+def test_signoff_traceback_does_not_leak_private_signature_path(
+    annotation_fixture: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    prepared = prepare_concept_inventory(
+        frozen_protocol=annotation_fixture.frozen,
+        source_materialization=annotation_fixture.source,
+        reviewer_key_policy=annotation_fixture.reviewer_key_policy,
+        worksheet=annotation_fixture.worksheet,
+    )
+    marker = "PRIVATE-SIGNATURE-PATH-SENTINEL"
+    private_signature_path = tmp_path / marker / "missing.sig"
+
+    with pytest.raises(
+        ConceptAnnotationWorkflowError,
+        match="key attestation could not be verified",
+    ) as captured:
+        signoff_prepared_concept_inventory(
+            prepared=prepared,
+            reviewer_key_policy=annotation_fixture.reviewer_key_policy,
+            signature_path=private_signature_path,
+        )
+
+    rendered = "".join(
+        traceback.format_exception(
+            captured.type,
+            captured.value,
+            captured.tb,
+        )
+    )
+    assert marker not in rendered
+    assert str(private_signature_path) not in rendered
+
+
+def test_revoked_concept_only_policy_still_deep_reloads_its_historical_seal(
+    annotation_fixture: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    active_policy = annotation_fixture.reviewer_key_policy
+    assert active_policy.policy.allowed_namespaces == (
+        CONCEPT_ATTESTATION_NAMESPACE,
+    )
+    prepared = prepare_concept_inventory(
+        frozen_protocol=annotation_fixture.frozen,
+        source_materialization=annotation_fixture.source,
+        reviewer_key_policy=active_policy,
+        worksheet=annotation_fixture.worksheet,
+    )
+    signature = _sign_request(
+        tmp_path,
+        prepared.seal_request,
+        signing_key=annotation_fixture.signing_key,
+    )
+    signed = signoff_prepared_concept_inventory(
+        prepared=prepared,
+        reviewer_key_policy=active_policy,
+        signature_path=signature,
+    )
+    public_root = tmp_path / "historical-public"
+    public_root.mkdir()
+    paths = _paths(public_root)
+    publish_concept_inventory_stage(
+        signed=signed,
+        paths=paths,
+        public_artifact_root=public_root,
+        frozen_protocol=annotation_fixture.frozen,
+        source_materialization=annotation_fixture.source,
+        reviewer_key_policy=active_policy,
+    )
+    historical_policy = reviewer_policy._issue_policy_authority(
+        policy=active_policy.policy,
+        repository_root=active_policy.repository_root,
+        artifact_path=active_policy.artifact_path,
+        policy_sha256=active_policy.policy_sha256,
+        registration_commit_sha=active_policy.registration_commit_sha,
+        verified_head_sha=active_policy.verified_head_sha,
+        policy_blob_oid=active_policy.policy_blob_oid,
+        active_at_verified_head=False,
+    )
+
+    reloaded = load_sealed_concept_inventory(
+        paths=paths,
+        public_artifact_root=public_root,
+        frozen_protocol=annotation_fixture.frozen,
+        source_materialization=annotation_fixture.source,
+        reviewer_key_policy=historical_policy,
+    )
+
+    assert reloaded.seal.artifact == signed.seal
+    assert reloaded.reviewer_key_policy.active_at_verified_head is False
+    assert reloaded.key_control_receipt.namespace == CONCEPT_ATTESTATION_NAMESPACE
 
 
 def test_publication_preflights_all_leaves_and_publishes_seal_last(
@@ -744,6 +920,54 @@ def test_cli_requires_historical_policy_commit_and_not_caller_owned_policy() -> 
     assert prepare.allowed_signers == Path("reviewer.pub.policy")
 
 
+def test_policy_preparation_registers_every_g2_attestation_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    allowed_signers = tmp_path / "reviewer.pub.policy"
+    allowed_signers.write_text("public reviewer policy\n", encoding="ascii")
+    frozen = SimpleNamespace(
+        protocol_sha256="1" * 64,
+        protocol=SimpleNamespace(
+            protocol_id="fixture-g2-v1",
+            review=SimpleNamespace(reviewer_id="maintainer-01"),
+        ),
+    )
+    context = SimpleNamespace(repository_root=tmp_path, frozen_protocol=frozen)
+    observed: dict[str, object] = {}
+    candidate_policy = object()
+
+    def build_policy(**kwargs):
+        observed.update(kwargs)
+        return candidate_policy
+
+    monkeypatch.setattr(
+        annotation_command,
+        "_load_protocol_context",
+        lambda _args: context,
+    )
+    monkeypatch.setattr(annotation_command, "build_reviewer_key_policy", build_policy)
+    monkeypatch.setattr(
+        annotation_command,
+        "publish_reviewer_key_policy",
+        lambda **_kwargs: "2" * 64,
+    )
+    monkeypatch.setattr(
+        annotation_command,
+        "reviewer_key_policy_path",
+        lambda *_args, **_kwargs: tmp_path / "policy.json",
+    )
+
+    receipt = annotation_command._prepare_reviewer_key_policy(
+        SimpleNamespace(allowed_signers=allowed_signers)
+    )
+
+    assert observed["allowed_namespaces"] == G2_ATTESTATION_NAMESPACES
+    assert G2_ATTESTATION_NAMESPACES == tuple(sorted(G2_ATTESTATION_NAMESPACES))
+    assert len(G2_ATTESTATION_NAMESPACES) == 4
+    assert receipt["status"] == "commit_and_push_policy_before_annotation"
+
+
 def test_cli_verify_concepts_uses_historical_policy_capability(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -789,6 +1013,25 @@ def test_cli_verify_concepts_uses_historical_policy_capability(
         "authority": sealed_authority,
         "role": "golden_graph_concept_seal_verification_receipt",
     }
+
+
+def _privacy_authority(source_text: str):
+    source_bytes = source_text.encode("utf-8")
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    return annotation_evidence._issue_annotation_evidence_source_authority(
+        private_materialization_sha256="d" * 64,
+        chunks=(
+            annotation_evidence._FrozenEvidenceChunk(
+                ordinal=0,
+                logical_page_id="page-0001",
+                window_start=0,
+                window_end=len(source_bytes),
+                semantic_chunk_sha256=source_sha256,
+                text=source_text,
+                utf8_bytes=source_bytes,
+            ),
+        ),
+    )
 
 
 def _generate_signing_key(key: Path) -> None:

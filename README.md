@@ -130,7 +130,10 @@ pair enumeration, and strict reload. It requires a reviewer public-key policy
 whose exact bytes were committed before annotation. No real CS336 reviewer-key
 policy has been registered, so no authorized worksheet or human label exists;
 no `ConceptInventorySeal`, `GoldBundleSeal`, accuracy result, or path result
-exists. Automatic Understanding, Relation gold, deterministic paths, and the
+exists. The G2.2 prerequisite now centralizes exact-quote evidence resolution,
+public annotation privacy checks, and four-stage detached attestations; no
+Relation Pass A label or seal exists yet. Automatic Understanding, Relation
+gold, deterministic paths, and the
 evidence-first graph UI remain roadmap work; the current Explore graph is still a sparse
 CardRelation discovery baseline. See the
 [active roadmap](docs/roadmap.md),
@@ -140,6 +143,7 @@ CardRelation discovery baseline. See the
 [Source projection generation contract](docs/modules/source-projection-generation.md),
 [immutable graph publication contract](docs/modules/concept-graph-publication.md),
 [G2.1 human annotation workflow](docs/modules/golden-graph-human-annotation-workflow.md),
+[shared annotation security primitives](docs/modules/golden-graph-annotation-security-primitives.md),
 [learning and mastery plan](docs/project-mastery-plan.md), and
 [append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.

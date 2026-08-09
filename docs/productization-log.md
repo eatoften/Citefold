@@ -3986,3 +3986,138 @@ The maintained workflow contract and user-owned exercise are documented in
 and the [G2 learning handoff](learning/g2-human-annotation-handoff.md). The
 hash-bound [Graph Annotation Protocol](graph-annotation-protocol.md) was not
 edited; a semantic change requires a new protocol identity.
+
+## G2.2 - Shared annotation evidence and attestation primitives
+
+**Status:** Software foundation implemented and locally accepted; Relation
+Pass A and all human semantic work remain unstarted
+
+### Outcome and non-outcome
+
+This checkpoint extracts the security-sensitive operations that Concept,
+Relation Pass A, Relation Pass B, and final GoldBundle sealing must share:
+
+```text
+loader-issued private Source receipt
+-> strict annotation snapshot binder
+-> exact-quote resolution / public span replay / aggregate privacy scan
+
+typed stage request + current repository reviewer policy + detached SSHSIG
+-> shared four-namespace verifier
+-> portable Artifact / Reference + key-control-only capability
+
+persisted request + historical reviewer policy + embedded Artifact
+-> deep historical signature replay
+```
+
+G2.1 now consumes those primitives through thin Concept-specific adapters.
+Future Relation stages have one audited owner for evidence, privacy, Git policy
+currentness, and detached signature semantics rather than copying Concept code.
+
+This is not Relation Pass A. No real reviewer-key policy has been registered,
+no authorized worksheet exists, and there are still zero human Concept or
+Relation labels. No `ConceptInventorySeal`, `GoldBundleSeal`, accuracy,
+agreement, graph-quality, or path-quality result exists.
+
+### Main implementation and technology choices
+
+- Python 3.11 dataclass capabilities and strict/frozen Pydantic DTOs separate
+  private in-memory authority from canonical public artifacts.
+- Canonical UTF-8 JSON and SHA-256 bind the complete private materialization
+  snapshot before annotation. The binder strictly reparses nested product
+  models and exposes only frozen Chunk windows plus private privacy surfaces.
+- Process-local keyed HMAC tags bind every Chunk's materialization digest,
+  ordinal, locator, text bytes, and semantic hash. A keyed root binds the exact
+  Chunk count and ordered tag sequence, so equal-length mutation and coordinated
+  tail truncation fail closed.
+- Contiguous same-page Chunk windows are reconstructed while declared overlap
+  is removed. Public character and token scans therefore catch copies split
+  across fields or Source Chunk boundaries without inventing continuity across
+  real locator gaps.
+- Public privacy validation covers Windows/UNC/POSIX/container paths, email-like
+  values, file URIs, Unicode controls/default ignorables, NFKC disguises, and
+  nested or cross-field percent encoding. A normal `100%` remains valid.
+- One shared OpenSSH boundary supports typed Concept, Relation Pass A, Relation
+  Pass B, and GoldBundle namespaces. Existing Concept request/seal schemas
+  remain Concept-only, and old Concept-only policies remain usable for
+  historical Concept replay.
+- New authoring reloads the reviewer policy against current Git
+  `HEAD`/index/worktree before cryptographic work and again before capability
+  issuance. Historical replay deliberately does not reactivate a revoked key.
+- Errors crossing the evidence, signature, and Concept adapters are bounded
+  static messages; private quotes, Source text, local paths, and caller-owned
+  values are not interpolated or retained through exception causes.
+
+### Findings that changed the design
+
+1. The first extraction enforced only the policy authority's cached
+   `active_at_verified_head` bit. A later Git removal could leave a stale
+   capability authorizing new work. Authoring now replays the repository policy
+   at both sides of signature verification.
+2. The first shared evidence API accepted a duck-typed materialization and the
+   privacy API accepted caller-supplied Source strings. Both allowed a future
+   stage to choose its own trust input. The only public entry is now a strict
+   binder over the loader-issued receipt; privacy derives Source surfaces from
+   that capability.
+3. Per-field privacy scans allowed a path, percent escape, or long Source copy
+   to be split across public fields. Semantic and compact aggregate surfaces,
+   bounded decoding, and path/source rescans close those representations while
+   preserving ordinary percentages.
+4. Scanning private Chunks independently missed a twelve-token copy spanning
+   two contiguous windows. Same-page locator reconstruction now forms exact
+   continuous Source segments and validates overlap equality.
+5. A frozen dataclass alone did not stop `object.__setattr__` from replacing
+   equal-length bytes or coordinating text/bytes/hash changes. Per-Chunk keyed
+   integrity tags now bind the snapshot consumed by resolution and replay.
+6. Per-Chunk tags alone still allowed an attacker to truncate `chunks`, tags,
+   and privacy surfaces consistently. The authority-level keyed root binds the
+   exact count and ordered tag sequence.
+7. The first deep-revalidation helper was placed in
+   `source_slice_builder.py`. The real frozen-CS336 protocol regression correctly
+   failed because that file belongs to the G0.2 hash-bound derivation closure at
+   `cd06516`. Moving the consumer check into `annotation_evidence.py` preserved
+   byte-for-byte replay readiness and clarified ownership: frozen production
+   belongs to G0.2; stricter downstream consumption belongs to G2.
+8. Structural selection getters and lower signature errors could preserve
+   private caller text or paths in exception chains. Trust-boundary adapters now
+   suppress those causes and emit static classifications.
+
+### Compatibility and operational limits
+
+- Existing Concept Artifact, Reference, seal, pair-manifest, CLI receipt field
+  sets, canonical challenge vectors, and the graph annotation protocol are
+  unchanged.
+- New reviewer policies contain four sorted namespaces and therefore have a new
+  policy hash by design. No historical policy or artifact is rewritten.
+- Privacy semantics are intentionally stricter. No real CS336 Concept artifact
+  exists yet, so this checkpoint has no data migration; after public artifacts
+  exist, future privacy-semantics changes require an explicit version boundary.
+- The current binder canonicalizes and reparses a materialization with a 512 MB
+  hard ceiling, and privacy scanning is not yet indexed. Current CS336 scope is
+  comfortably below that limit. Whole-course scale will require streaming
+  replay and cached normalized character/token indexes before claiming the
+  ceiling as an operational target.
+- The keyed tags are process-local capability integrity, not persisted
+  signatures and not a sandbox against arbitrary code already executing inside
+  the Python process.
+
+### Verification and honest claim boundary
+
+- five focused suites: `117 passed` in 201.52 seconds;
+- complete backend regression: `1094 passed, 7 skipped, 1 warning` in 576.58
+  seconds;
+- the warning remains the existing Starlette `httpx` deprecation warning;
+- focused coverage includes real Ed25519 signing for all four namespaces,
+  stale-policy revocation, historical Concept-only replay, canonical
+  compatibility vectors, forged/changed/truncated Source capabilities,
+  cross-field and cross-Chunk leakage, UTF-8 evidence replay, common local path
+  families, and traceback redaction;
+- the frozen CS336 protocol test passes with the G0.2 derivation module
+  unchanged;
+- independent post-implementation review reports no remaining P0/P1 in this
+  checkpoint; remote change-level CI remains the push gate.
+
+Passing these gates establishes a reusable software trust boundary only. It
+does not create human semantic authority or any benchmark result. The next
+software consumer is sealed Relation Pass A; the next human authority gate is
+still maintainer-owned reviewer-key registration and Concept annotation.

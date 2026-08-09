@@ -6,6 +6,27 @@ from .canonical_io import (
     load_hashed_canonical_json,
     write_draft_hashed_canonical_json,
 )
+from .annotation_attestation import (
+    AnnotationAttestationError,
+    VerifiedAnnotationAttestation,
+    verify_and_build_detached_key_attestation,
+    verify_embedded_detached_key_attestation,
+)
+from .annotation_evidence import (
+    AnnotationEvidenceError,
+    AnnotationEvidenceSourceAuthority,
+    bind_annotation_evidence_source,
+    reject_public_source_copy,
+    resolve_evidence_selection,
+    validate_public_evidence_span,
+)
+from .annotation_models import (
+    CONCEPT_ATTESTATION_NAMESPACE,
+    G2_ATTESTATION_NAMESPACES,
+    GOLD_BUNDLE_ATTESTATION_NAMESPACE,
+    RELATION_PASS_A_ATTESTATION_NAMESPACE,
+    RELATION_PASS_B_ATTESTATION_NAMESPACE,
+)
 from .annotation_workflow import (
     ConceptAnnotationWorkflowError,
     SealedConceptInventoryAuthority,
@@ -36,22 +57,33 @@ from .reviewer_policy import (
     load_historical_reviewer_key_policy,
     load_repository_reviewer_key_policy,
     publish_reviewer_key_policy,
+    revalidate_active_reviewer_key_policy,
     require_active_reviewer_key_policy,
 )
 from .schemas import GoldenGraphProtocol
 
 __all__ = [
+    "AnnotationAttestationError",
+    "AnnotationEvidenceError",
+    "AnnotationEvidenceSourceAuthority",
     "CanonicalArtifactError",
+    "CONCEPT_ATTESTATION_NAMESPACE",
     "ConceptAnnotationWorkflowError",
     "GoldenGraphProtocol",
     "GoldenGraphProtocolError",
+    "G2_ATTESTATION_NAMESPACES",
+    "GOLD_BUNDLE_ATTESTATION_NAMESPACE",
     "ManifestAuthority",
     "FrozenProtocolAuthority",
     "ReplayReadyFrozenProtocolAuthority",
     "ReviewerKeyPolicy",
     "ReviewerKeyPolicyAuthority",
     "ReviewerKeyPolicyError",
+    "RELATION_PASS_A_ATTESTATION_NAMESPACE",
+    "RELATION_PASS_B_ATTESTATION_NAMESPACE",
     "SealedConceptInventoryAuthority",
+    "VerifiedAnnotationAttestation",
+    "bind_annotation_evidence_source",
     "canonical_json_bytes",
     "build_reviewer_key_policy",
     "freeze_protocol",
@@ -67,9 +99,15 @@ __all__ = [
     "prepare_concept_inventory",
     "publish_concept_inventory_stage",
     "publish_reviewer_key_policy",
+    "revalidate_active_reviewer_key_policy",
+    "reject_public_source_copy",
     "require_active_reviewer_key_policy",
     "require_current_replay_readiness",
+    "resolve_evidence_selection",
     "signoff_prepared_concept_inventory",
+    "validate_public_evidence_span",
     "validate_protocol_for_freeze",
+    "verify_and_build_detached_key_attestation",
+    "verify_embedded_detached_key_attestation",
     "write_draft_hashed_canonical_json",
 ]

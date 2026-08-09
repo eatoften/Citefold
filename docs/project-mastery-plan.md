@@ -89,7 +89,7 @@ The project has three honest resume states:
 
 | State | Allowed claim |
 | --- | --- |
-| Portfolio in progress | The Source-first notebook, Grounded Chat, citations, Notes, reliability foundation, G1 Concept-graph substrate, frozen G0.2 Source slice, and G2.1 annotation tooling may be listed as implemented; no real reviewer-key policy or authorized worksheet exists, so human gold and G2-G4 outcomes must remain in-progress/planned |
+| Portfolio in progress | The Source-first notebook, Grounded Chat, citations, Notes, reliability foundation, G1 Concept-graph substrate, frozen G0.2 Source slice, G2.1 annotation tooling, and shared G2.2 evidence/attestation primitives may be listed as implemented; no real reviewer-key policy or authorized worksheet exists, so human gold and G2-G4 outcomes must remain in-progress/planned |
 | SDE flagship ready | The product, graph program, critical polish/hardening, release, measurements, and maintainer ownership gates below all pass |
 | Applied-MLE flagship ready | The SDE flagship gates pass and MLE-E1 adds a frozen evaluation set, baselines, ablations, metrics, latency, and error analysis |
 
@@ -123,7 +123,9 @@ passed**. G0.2 has frozen and independently replayed the real 68-page CS336
 Source slice. G2.1 implements the Concept annotation/sealing workflow and has
 added a prior-commit reviewer-key trust root, but no real policy has been
 registered and no authorized worksheet or human label exists. No Concept seal,
-gold bundle, accuracy, or path result has been produced. Human
+gold bundle, accuracy, or path result has been produced. The shared G2.2
+evidence/privacy and four-stage attestation boundary is implemented, but
+Relation Pass A schemas, labels, and seals are not. Human
 G2 work, G3-G4, critical product finish, the next public release, and
 maintainer mastery remain.
 The visible maintainability baseline also includes a 5,169-line `App.tsx`, a
@@ -372,7 +374,9 @@ The visible Explore graph is still a sparse CardRelation discovery prototype.
 Behind it, G1 has implemented the Concept/Alias/Evidence/Relation lifecycle,
 current-evidence enforcement, and immutable graph publication boundary.
 G2.1's human-annotation handoff tooling is implemented, while real reviewer-key
-registration and the authorized CS336 worksheet have not started. Automatic
+registration and the authorized CS336 worksheet have not started. The shared
+G2.2 evidence/privacy and detached-attestation primitives are implemented;
+Relation Pass A itself is not. Automatic
 Understanding, actual Concept/Relation gold, deterministic tracing,
 topological learning paths, and the G4 evidence-first UI remain planned or
 human-owned work.
@@ -385,7 +389,8 @@ The accepted sequence is:
 seven verified product-core commits integrated into main at eaf9274
 -> establish the graph branch and G0 contract
 -> G1 Concept / Evidence / Relation foundation
--> G2.1 tooling -> maintainer-authored Concepts -> Relation passes -> gold bundle
+-> G2.1 tooling -> shared G2.2 security primitives
+-> maintainer-authored Concepts -> Relation passes -> gold bundle
 -> G3 BFS / relationship trace / prerequisite topological path
 -> G4 stable Path View, per-edge evidence, and graph quality gate
 -> resume Studio consolidation, product polish, hardening, and public release
@@ -644,7 +649,7 @@ Update this table only with evidence:
 | Reliability | Locally verified | M0 | Not assessed | Not assessed | draw task state machine and inject one crash case |
 | Notes | Locally verified | M0 | Not assessed | Not assessed | explain publication/versioning and add one conflict case |
 | Concept graph G0 | In progress | M0 | Not assessed | Not assessed | restate ADR-0008 and review the first contract change |
-| Concept graph G1-G4 | G1 and G2.1 tooling implemented; real key policy/worksheet absent; G3-G4 planned | M0 | Not assessed | Not assessed | draw the G2.1 artifact DAG, register the reviewer key before annotation, and explain why key control is not proof of humanity |
+| Concept graph G1-G4 | G1, G2.1 tooling, and shared G2.2 security primitives implemented; real key policy/worksheet and Relation passes absent; G3-G4 planned | M0 | Not assessed | Not assessed | draw the G2.1 artifact DAG and shared evidence/signature boundaries, register the reviewer key before annotation, and explain why key control is not proof of humanity |
 
 ### Daily checkpoint template
 
@@ -705,6 +710,7 @@ The final repository and preparation folder should contain:
 - [G2 human-annotation handoff lesson](learning/g2-human-annotation-handoff.md)
 - [Draft graph annotation protocol](graph-annotation-protocol.md)
 - [G2.1 human annotation workflow](modules/golden-graph-human-annotation-workflow.md)
+- [Shared G2 annotation security primitives](modules/golden-graph-annotation-security-primitives.md)
 - [Architecture decisions](decisions/)
 - [ADR-0008: evidence-grounded Concept graph](decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md)
 - [Graph as associative knowledge structure](Graph%20as%20associative%20knowledge%20structure.md)

@@ -124,6 +124,7 @@ class ReviewerKeyPolicyAuthority:
     """
 
     policy: ReviewerKeyPolicy
+    repository_root: Path = field(repr=False)
     artifact_path: Path
     policy_sha256: str
     registration_commit_sha: str
@@ -140,8 +141,24 @@ class ReviewerKeyPolicyAuthority:
     def __post_init__(self) -> None:
         if self._validation_token is not _POLICY_AUTHORITY_TOKEN:
             raise ValueError("Invalid reviewer-key policy authority token")
-        if not self.artifact_path.is_absolute():
-            raise ValueError("Reviewer-key policy path must be absolute")
+        if (
+            not self.repository_root.is_absolute()
+            or not self.artifact_path.is_absolute()
+        ):
+            raise ValueError("Reviewer-key policy paths must be absolute")
+        try:
+            resolved_root = self.repository_root.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError("Reviewer-key repository root is invalid") from exc
+        if resolved_root != self.repository_root or not resolved_root.is_dir():
+            raise ValueError("Reviewer-key repository root is invalid")
+        expected_path = reviewer_key_policy_path(
+            resolved_root,
+            protocol_id=self.policy.protocol_id,
+            reviewer_id=self.policy.reviewer_id,
+        )
+        if self.artifact_path != expected_path:
+            raise ValueError("Reviewer-key policy path is not repository-derived")
         if _LOWER_SHA256.fullmatch(self.policy_sha256) is None:
             raise ValueError("Reviewer-key policy SHA-256 is invalid")
         if hashlib.sha256(canonical_json_bytes(self.policy)).hexdigest() != (
@@ -396,6 +413,7 @@ def load_repository_reviewer_key_policy(
         )
     return _issue_policy_authority(
         policy=historical.policy,
+        repository_root=root,
         artifact_path=path,
         policy_sha256=historical.policy_sha256,
         registration_commit_sha=registration_commit_sha,
@@ -501,6 +519,7 @@ def load_historical_reviewer_key_policy(
         )
     return _issue_policy_authority(
         policy=policy,
+        repository_root=root,
         artifact_path=path,
         policy_sha256=policy_sha256,
         registration_commit_sha=registration_commit_sha,
@@ -520,6 +539,43 @@ def require_active_reviewer_key_policy(
         raise ReviewerKeyPolicyError(
             "An active current-HEAD reviewer-key policy authority is required"
         )
+
+
+def revalidate_active_reviewer_key_policy(
+    authority: ReviewerKeyPolicyAuthority,
+) -> ReviewerKeyPolicyAuthority:
+    """Reload current Git state before one new authoring transition.
+
+    An authority records the HEAD at which it was issued; it is not a lease.
+    Long-lived callers must use this function immediately before sensitive
+    work so committed, staged, or working-tree policy revocation takes effect.
+    Historical authorities are deliberately rejected here.
+    """
+
+    message = "Active reviewer-key policy could not be revalidated"
+    try:
+        _require_valid_policy_authority(authority)
+        require_active_reviewer_key_policy(authority)
+        refreshed = load_repository_reviewer_key_policy(
+            repository_root=authority.repository_root,
+            protocol_id=authority.policy.protocol_id,
+            frozen_protocol_sha256=authority.policy.frozen_protocol_sha256,
+            reviewer_id=authority.policy.reviewer_id,
+            registration_commit_sha=authority.registration_commit_sha,
+        )
+        if (
+            refreshed.repository_root != authority.repository_root
+            or refreshed.artifact_path != authority.artifact_path
+            or refreshed.policy != authority.policy
+            or refreshed.policy_sha256 != authority.policy_sha256
+            or refreshed.registration_commit_sha
+            != authority.registration_commit_sha
+            or refreshed.policy_blob_oid != authority.policy_blob_oid
+        ):
+            raise ReviewerKeyPolicyError(message)
+        return refreshed
+    except ReviewerKeyPolicyError:
+        raise ReviewerKeyPolicyError(message) from None
 
 
 def require_attestation_matches_reviewer_policy(
@@ -1011,6 +1067,7 @@ def _require_full_commit(value: str) -> None:
 def _issue_policy_authority(
     *,
     policy: ReviewerKeyPolicy,
+    repository_root: Path,
     artifact_path: Path,
     policy_sha256: str,
     registration_commit_sha: str,
@@ -1020,6 +1077,7 @@ def _issue_policy_authority(
 ) -> ReviewerKeyPolicyAuthority:
     authority = object.__new__(ReviewerKeyPolicyAuthority)
     object.__setattr__(authority, "policy", policy)
+    object.__setattr__(authority, "repository_root", repository_root)
     object.__setattr__(authority, "artifact_path", artifact_path)
     object.__setattr__(authority, "policy_sha256", policy_sha256)
     object.__setattr__(
@@ -1049,6 +1107,7 @@ __all__ = [
     "load_historical_reviewer_key_policy",
     "load_repository_reviewer_key_policy",
     "publish_reviewer_key_policy",
+    "revalidate_active_reviewer_key_policy",
     "require_active_reviewer_key_policy",
     "require_attestation_matches_reviewer_policy",
     "reviewer_key_policy_path",

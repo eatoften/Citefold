@@ -161,7 +161,7 @@ is an input to delayed Relation passes, not a Relation label set.
 | private mutable worksheet | candidate decisions, exact evidence quotes, optional explicit byte starts, reviewer declarations | ignored, bounded, strict JSON; mutable until preparation |
 | private prepared candidates | redacted inventory, aliases, and exact seal request awaiting inspection/signature | ignored; canonical bytes and sidecars; must match a fresh derivation at sealing |
 | private signing secret | maintainer's OpenSSH private key | outside the repository and never read by this application |
-| public reviewer trust root | protocol/reviewer/namespace-bound Ed25519 public key policy plus hash sidecar | new work requires exact equality at registration commit, current `HEAD`, index, and working tree; historical verification reads the ancestor blobs after revocation |
+| public reviewer trust root | protocol/reviewer/four-stage-namespace-bound Ed25519 public key policy plus hash sidecar | new work requires exact equality at registration commit, current `HEAD`, index, and working tree; historical verification reads the ancestor blobs after revocation |
 | public Concept stage | redacted evidence coordinates/hashes, Concept semantics, alias mapping, reviewer-policy hash/commit bindings, detached attestation verification material, seal, and complete pair IDs | six immutable canonical JSON leaves plus `.sha256` sidecars under `backend/golden_graph/artifacts/` |
 
 Public Concept evidence contains logical page/Chunk identity, half-open UTF-8
@@ -180,6 +180,12 @@ sidecar already exist in reachable Git history and current repository state. A
 signer cannot authorize a fresh key by supplying a new allowed-signers file at
 seal time. Removing the policy from current `HEAD` revokes new authoring, while
 the historical loader keeps already sealed artifacts verifiable.
+
+New policy preparation registers the Concept, Relation Pass A, Relation Pass
+B, and GoldBundle namespaces up front. Each typed request is still restricted
+to its own stage namespace, so a valid signature cannot be replayed across
+stages. Historical Concept-only policies remain valid for Concept replay but
+cannot authorize future Relation or GoldBundle work.
 
 This proves only that the holder of an allowed private key approved those
 bytes. It does not prove:
@@ -260,18 +266,26 @@ Implementation map:
 | --- | --- |
 | strict worksheet, Concept, alias, attestation, seal, and pair DTOs | `backend/golden_graph/annotation_models.py` |
 | bounded private reads and immutable public artifact I/O | `backend/golden_graph/annotation_artifacts.py` |
-| preparation, Source quote resolution, signing, DAG publication/reload | `backend/golden_graph/annotation_workflow.py` |
+| Concept preparation, stage adaptation, and DAG publication/reload | `backend/golden_graph/annotation_workflow.py` |
+| shared exact-quote resolution, span replay, and public privacy checks | `backend/golden_graph/annotation_evidence.py` |
+| shared four-stage canonical challenge, signing, and embedded verification | `backend/golden_graph/annotation_attestation.py` |
 | detached OpenSSH verification boundary | `backend/golden_graph/ssh_attestation.py` |
 | repository-registered reviewer-key trust root | `backend/golden_graph/reviewer_policy.py` |
 | six-command orchestration and redacted receipts | `backend/golden_graph/annotation_command.py` |
-| adversarial regression suites | `backend/tests/test_golden_graph_annotation_artifacts.py`, `test_golden_graph_annotation_workflow.py`, `test_golden_graph_reviewer_policy.py`, and `test_golden_graph_ssh_attestation.py` |
+| adversarial regression suites | `backend/tests/test_golden_graph_annotation_artifacts.py`, `test_golden_graph_annotation_attestation.py`, `test_golden_graph_annotation_evidence.py`, `test_golden_graph_annotation_workflow.py`, `test_golden_graph_reviewer_policy.py`, and `test_golden_graph_ssh_attestation.py` |
+
+The shared boundary and its compatibility rules are specified separately in
+[Golden Graph Annotation Security Primitives](golden-graph-annotation-security-primitives.md).
 
 ## Validation status
 
-The expanded focused G2.1 implementation suite reports **55 passed, 1
-skipped** after the reviewer-policy, security, and publication-race hardening.
-The complete local backend regression reports **1028 passed, 7 skipped, 1
-dependency deprecation warning**; remote change-level CI remains the push gate.
+At the G2.1 checkpoint, the expanded focused suite reported **55 passed, 1
+skipped** and the complete backend regression reported **1028 passed, 7
+skipped, 1 dependency deprecation warning**. After extracting and hardening the
+shared G2.2 evidence/attestation boundary, the current focused result is **117
+passed** and the complete local backend regression is **1094 passed, 7 skipped,
+1 dependency deprecation warning**; remote change-level CI remains the push
+gate.
 Environment-capability skips are reported rather than converted into passes.
 Coverage includes strict worksheet/artifact validation, Source binding and
 quote resolution, redaction, canonical/no-overwrite publication, concurrent
