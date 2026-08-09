@@ -258,6 +258,86 @@ describe('ChatPanel message stream', () => {
     expect(container.querySelector('main')).not.toBeInTheDocument()
   })
 
+  it('shows the immutable graph route used for a grounded answer', async () => {
+    const result = groundedChatResult()
+    result.conversation!.messages[1].metadata = {
+      graph_context: {
+        schema_version: 1,
+        course_id: 'course-1',
+        graph_version: 2,
+        graph_content_hash: 'a'.repeat(64),
+        result_hash: 'b'.repeat(64),
+        strategy: 'relationship_trace',
+        concepts: [
+          {
+            concept_id: 'full',
+            concept_revision: 4,
+            preferred_name: 'Full Attention',
+          },
+          {
+            concept_id: 'sparse',
+            concept_revision: 2,
+            preferred_name: 'Sparse Attention',
+          },
+          {
+            concept_id: 'sliding',
+            concept_revision: 2,
+            preferred_name: 'Sliding-window Attention',
+          },
+        ],
+        steps: [
+          {
+            ordinal: 0,
+            relation_id: 'full-sparse',
+            relation_revision: 5,
+            relation_type: 'prerequisite',
+            support_basis: 'pedagogical_inference',
+            from_concept_id: 'full',
+            to_concept_id: 'sparse',
+            traversed_against_relation_direction: false,
+          },
+          {
+            ordinal: 1,
+            relation_id: 'sparse-sliding',
+            relation_revision: 2,
+            relation_type: 'prerequisite',
+            support_basis: 'pedagogical_inference',
+            from_concept_id: 'sparse',
+            to_concept_id: 'sliding',
+            traversed_against_relation_direction: false,
+          },
+        ],
+      },
+    }
+    useChatMock.mockReturnValue(result)
+    const user = userEvent.setup()
+
+    render(
+      <ChatPanel
+        apiBaseUrl="http://127.0.0.1:8001"
+        courseId="course-1"
+        courseTitle="Course One"
+      />,
+    )
+
+    expect(screen.getByText('Published v2 - 2 hops')).toBeInTheDocument()
+    await user.click(screen.getByText('Graph-guided context'))
+    const route = document.querySelector(
+      '[aria-label="Graph route used for this answer"]',
+    )
+    expect(route).toBeInTheDocument()
+    if (!route) throw new Error('Graph route was not rendered.')
+    expect(route.querySelectorAll('li')).toHaveLength(2)
+    expect(route).toHaveTextContent('Full Attention')
+    expect(route).toHaveTextContent('Sparse Attention')
+    expect(route).toHaveTextContent('Sliding-window Attention')
+    expect(route).toHaveTextContent('pedagogical inference')
+    expect(screen.getByText(
+      'source citations above remain the only factual evidence',
+      { exact: false },
+    )).toBeInTheDocument()
+  })
+
   it('keeps the composer focusable while a message is sending', () => {
     useChatMock.mockReturnValue({
       ...chatResult(),

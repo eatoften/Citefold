@@ -605,6 +605,92 @@
   border-top: 1px solid #e3e8e5;
 }
 
+.chat-graph-context {
+  margin-top: 12px;
+  color: #345248;
+  background: #f5f8f6;
+  border: 1px solid #d5e1dc;
+  border-radius: 10px;
+}
+
+.chat-graph-context > summary {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 10px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.chat-graph-context > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-graph-context > summary > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.chat-graph-context > summary small {
+  color: var(--chat-muted);
+  font-size: 10px;
+}
+
+.chat-graph-context-body {
+  padding: 10px;
+  border-top: 1px solid #dfe7e3;
+}
+
+.chat-graph-context-body > p {
+  margin-bottom: 9px;
+  color: var(--chat-muted);
+  font-size: 11px;
+}
+
+.chat-graph-context-body ol {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-graph-context-body li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+}
+
+.chat-graph-context-body li > strong:last-child {
+  text-align: right;
+}
+
+.chat-graph-context-body li > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-graph-context-body li > span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  color: var(--chat-muted);
+  text-align: center;
+  font-size: 10px;
+  text-transform: capitalize;
+}
+
 .chat-message-note-actions button,
 .chat-message-note-actions > span {
   min-height: 31px;
@@ -886,6 +972,20 @@
 
   .chat-message {
     max-width: 96%;
+  }
+
+  .chat-graph-context-body li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  .chat-graph-context-body li > span {
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .chat-graph-context-body li > strong:last-child {
+    text-align: left;
   }
 }
 

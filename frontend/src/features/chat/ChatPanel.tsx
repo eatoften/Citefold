@@ -28,6 +28,7 @@ import type { CourseSource } from '../sources/sourceTypes'
 import { saveChatAnswerAsNote } from '../notes/noteApi'
 import type { NotebookNoteSaveState } from '../notes/noteTypes'
 import type { ChatCitation, ChatMessage } from './chatTypes'
+import { ChatGraphContextDisclosure } from './ChatGraphContextDisclosure'
 import { isAbortError } from './chatApi'
 import { useChat } from './useChat'
 import {
@@ -304,6 +305,7 @@ function AssistantMessage({
       ) : (
         <p>{message.content}</p>
       )}
+      <ChatGraphContextDisclosure metadata={message.metadata} />
       {canSaveToNotes && (
         <div className="chat-message-note-actions">
           {noteSaveState.status === 'saved' ? (

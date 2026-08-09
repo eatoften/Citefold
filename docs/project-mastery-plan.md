@@ -89,7 +89,7 @@ The project has three honest resume states:
 
 | State | Allowed claim |
 | --- | --- |
-| Portfolio in progress | The Source-first notebook, Grounded Chat, citations, Notes, reliability foundation, G1 Concept-graph substrate, frozen G0.2 Source slice, G2.1-G2.3 annotation software, and G3 deterministic backend paths may be listed as implemented; no real human gold, G4 Path View/resolver, public-course path result, or accepted performance result exists |
+| Portfolio in progress | The Source-first notebook, Grounded Chat, citations, Notes, reliability foundation, G1 Concept-graph substrate, frozen G0.2 Source slice, G2.1-G2.3 annotation software, deterministic paths, evidence-backed Path View, Draft Review/CAS publication, and bounded Graph-guided Chat may be listed as implemented; no real human gold, public quality result, accepted performance result, durable browser E2E, or release acceptance exists |
 | SDE flagship ready | The product, graph program, critical polish/hardening, release, measurements, and maintainer ownership gates below all pass |
 | Applied-MLE flagship ready | The SDE flagship gates pass and MLE-E1 adds a frozen evaluation set, baselines, ablations, metrics, latency, and error analysis |
 
@@ -132,9 +132,12 @@ upstream replay, and failure-safe publication. No real Pass A
 label or seal exists because the maintainer has not completed Concept or
 Relation annotation. G2.4 delay/readiness tooling is explicitly deferred after
 a product-priority correction. G3 does not yet have normalized cross-request
-caching or accepted 1k/10k latency evidence. Human G2 work, G4 UI and graph-
-evidence resolution, public-course evaluation, critical product finish, the
-next public release, and maintainer mastery remain.
+caching or accepted 1k/10k latency evidence. G4 now has the published
+Path/Relation/Source workspace, Draft Review/CAS publication, and bounded
+Graph-guided Chat integration over unchanged Dense Source evidence retrieval.
+Human G2 work, public-course quality evaluation, durable browser E2E,
+accessibility/performance acceptance, critical product finish, the next public
+release, and maintainer mastery remain.
 The visible maintainability baseline also includes a 5,169-line `App.tsx`, a
 3,809-line `main.py`, a tag/manual-only Windows release workflow, an empty
 backend README, and an unchanged Vite-template frontend README. These are
@@ -661,7 +664,7 @@ Update this table only with evidence:
 | Reliability | Locally verified | M0 | Not assessed | Not assessed | draw task state machine and inject one crash case |
 | Notes | Locally verified | M0 | Not assessed | Not assessed | explain publication/versioning and add one conflict case |
 | Concept graph G0 | In progress | M0 | Not assessed | Not assessed | restate ADR-0008 and review the first contract change |
-| Concept graph G1-G4 | G1, G2.1-G2.3 software, and the G3 deterministic backend implemented; real human gold, G4 UI/resolver, performance acceptance, and public-course path results absent | M0 | Not assessed | Not assessed | draw the exact-version path flow, hand-simulate BFS/Kahn and fix one bounded-path test before returning to maintainer-owned gold |
+| Concept graph G1-G4 | G1, G2.1-G2.3 software, deterministic paths, Path/Source UI, Draft Review/CAS publication, and bounded Graph-guided Chat implemented; real human gold, public quality, durable E2E, performance, and release acceptance absent | M0 | Not assessed | Not assessed | draw Source retrieval and published Trace as separate Chat inputs, explain why only Source citations are factual authority, then hand-simulate one forward and reverse path |
 
 ### Daily checkpoint template
 

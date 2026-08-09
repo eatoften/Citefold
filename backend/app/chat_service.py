@@ -27,6 +27,7 @@ from .chat_grounding import (
     insufficient_evidence_answer,
     parse_grounded_chat_output,
 )
+from .chat_graph import ChatGraphContext, load_graph_chat_context
 from .chat_prompt import (
     CHAT_PROMPT_VERSION,
     ChatHistoryEntry,
@@ -383,6 +384,14 @@ def send_chat_message(
                 model=response_model,
             )
 
+        # Resolve optional derived navigation only after Source retrieval so a
+        # graph invalidated by a concurrent Source reprojection is not carried
+        # into generation or persisted with the answer.
+        graph_context = load_graph_chat_context(
+            conversation.course_id,
+            request.content,
+            source_ids,
+        )
         chat_store.transition_turn(
             reservation.turn_id,
             generation_token=reservation.generation_token,
@@ -396,6 +405,7 @@ def send_chat_message(
                 request.content,
                 evidence,
                 history,
+                graph_context,
                 llm_client=llm_client,
                 model=response_model,
             )
@@ -439,7 +449,10 @@ def send_chat_message(
             "retrieval_query": retrieval_query,
             "evidence_count": len(evidence),
             "history_message_count": len(history),
+            "retrieval_mode": "semantic",
         }
+        if graph_context is not None:
+            metadata["graph_context"] = graph_context.model_dump(mode="json")
         _checkpoint(checkpoint)
         try:
             assistant_message = chat_store.complete_turn(
@@ -570,6 +583,7 @@ def _generate_grounded_answer(
     question: str,
     evidence,
     history: Sequence[ChatHistoryEntry],
+    graph_context: ChatGraphContext | None,
     *,
     llm_client: LocalLLMClient,
     model: str,
@@ -578,6 +592,7 @@ def _generate_grounded_answer(
         question,
         evidence,
         history,
+        graph_context,
     )
     try:
         raw_output = llm_client.create_chat_completion(
@@ -600,6 +615,7 @@ def _generate_grounded_answer(
             evidence,
             raw_output,
             history,
+            graph_context,
         )
         try:
             repaired_output = llm_client.create_chat_completion(

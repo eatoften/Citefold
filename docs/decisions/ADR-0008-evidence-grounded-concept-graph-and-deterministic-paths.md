@@ -1,6 +1,7 @@
 # ADR-0008: Build an Evidence-Grounded Concept Graph Before Expanding Studio
 
-- **Status:** Accepted; G1 implemented, G0.2 in progress, G2-G4 planned
+- **Status:** Accepted; G1/G3 and bounded G4 product slices implemented;
+  human G2 gold and G4 quality/performance/release gates remain open
 - **Date:** 2026-08-08
 - **Decision owners:** Project maintainer and Codex implementation agent
 
@@ -37,10 +38,12 @@ slice, graph expansion improved joint Recall@3 from `0.750` to `0.875`, but the
 generation experiment did not establish a reliable downstream multi-hop gain.
 These are exploratory results with candidate labels.
 
-Therefore the graph's immediate product responsibilities are knowledge
+Therefore the graph's primary product responsibilities are knowledge
 organization, relationship tracing, and prerequisite ordering. Dense Source
-retrieval remains the default Grounded Chat mechanism. A future graph-assisted
-Chat policy requires a separate experiment and decision.
+retrieval remains the Grounded Chat evidence mechanism. The bounded integration
+accepted below may expose an exact published path as untrusted context for an
+explicit two-Concept question; broad graph retrieval or routing still requires
+a separate experiment and decision.
 
 ADR-0001's Source-first rule still applies. A Concept, relation, or path is a
 derived interpretation. Factual support must return to an original Source
@@ -282,6 +285,32 @@ adjacency representation provide transactions, constraints, backup/restore,
 and `O(V + E)` traversal without a second database runtime. Neo4j or another
 graph database requires a future ADR backed by measured query or scale limits.
 
+### 10. Allow one bounded Graph-guided Chat integration
+
+Grounded Chat may attach an exact deterministic Relationship Trace from the
+active, Source-current published GraphVersion only when the **current user
+question** explicitly matches exactly two preferred Concept names or aliases.
+Every Concept and Relation on that route must have non-empty evidence whose
+complete Source set is contained by the turn's immutable selected-Source
+snapshot. A mixed selected/unselected owner makes the whole context ineligible.
+
+The Trace is untrusted navigation/explanation context, not `EVIDENCE`:
+
+- normal MiniLM Source search remains the only retrieval path and keeps its
+  ranking, failure, refusal, and retry semantics;
+- every answered sentence still cites a server-owned `E*` Source Chunk;
+- `support_basis` and reverse-traversal state accompany every path step, so a
+  pedagogical inference or backward traversal cannot masquerade as a
+  Source-asserted directed fact;
+- the exact graph version, content hash, result hash, Concepts, revisions, and
+  steps are persisted in message metadata for historical explanation;
+- no single-Concept neighborhood, multi-anchor routing, graph evidence fusion,
+  entity linker, new database column, cache, or graph-for-all policy is added.
+
+This is a bounded product integration, not evidence that graph expansion
+improves retrieval or answer quality. Any broader routing or graph-derived
+evidence policy requires a separately frozen experiment and decision.
+
 ## Alternatives considered
 
 ### Continue with P1.2 Studio first
@@ -364,7 +393,10 @@ and human acceptance.
     transport metadata.
 14. Node and edge evidence navigation goes through the server-owned citation/source resolver.
 15. Proposal and review provenance is retained after acceptance.
-16. Grounded Chat keeps Dense Source retrieval by default until a separate gate changes it.
+16. Grounded Chat keeps Dense Source retrieval as its only evidence-selection
+    mechanism. The bounded explicit-name Trace cannot mutate the server-
+    retrieved evidence set, ranking, or scores and cannot serve as a citation;
+    it may influence how the model organizes the cited evidence.
 17. Learner state does not affect path ranking before G4 accepts the static path baseline.
 
 ## Validation gates
@@ -493,8 +525,8 @@ maintainer-authored Concept/Relation gold remains pending.
 
 ### G3 - Deterministic traversal and path engine
 
-**Status:** Backend algorithm/API slice implemented; materialization performance
-and G4 product integration pending.
+**Status:** Backend algorithm/API slice implemented and consumed by G4;
+materialization performance acceptance remains pending.
 
 - bounded N-hop Local Graph and typed/directional A-to-B Relationship Trace;
 - prerequisite ancestor closure, cycle detection, topological layers, and one
@@ -504,16 +536,19 @@ and G4 product integration pending.
 
 ### G4 - Product integration and graph quality gate
 
-**Status:** Planned.
+**Status:** In progress; evidence paths, Source navigation, Draft Review/CAS
+publication, and bounded Graph-guided Chat are implemented and browser-accepted.
 
 - separate Overview, Local, Trace, and Learning Path experiences;
 - stable layered path layout and node/edge evidence navigation;
 - candidate review/edit workflow;
+- bounded explicit-name published Trace context for Grounded Chat without
+  changing Dense Source evidence retrieval;
 - browser, desktop, narrow-screen, keyboard, accessibility, performance,
   integrity, graph-quality, and complete non-regression acceptance.
 
 After G4, the project resumes P1.2 Studio and decides separately whether to add
-learner-conditioned paths or graph-assisted Chat.
+learner-conditioned paths or broader entity-linked graph retrieval for Chat.
 
 ## Consequences
 
@@ -541,7 +576,9 @@ and reversible. The old Explore experience was retained through G3. On
 2026-08-09, the first G4 Concept Path -> Relation -> Source slice passed manual
 browser acceptance and became the explicit product replacement; the now-dead
 CardRelation `GraphView` was removed while its Git history and backend data/API
-compatibility were preserved. Full G4 quality and release acceptance remain
+compatibility were preserved. The Draft Review/CAS publication loop and the
+bounded explicit-name Graph-guided Chat continuation were then accepted under
+the same Source-first authority. Full G4 quality and release acceptance remain
 open.
 
 ## Related records

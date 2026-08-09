@@ -2,6 +2,10 @@ import type {
   SourceLocator,
   SourceType,
 } from '../sources/sourceTypes'
+import type {
+  ConceptRelationType,
+  RelationSupportBasis,
+} from '../concept-graph/conceptGraphTypes'
 
 export type ChatConversationStatus = 'active' | 'archived'
 
@@ -37,6 +41,34 @@ export type ChatCitation = {
 
 export type ChatMessageStatus = 'generating' | 'complete' | 'failed'
 export type ChatAnswerStatus = 'answered' | 'abstained'
+
+export type ChatGraphConcept = {
+  concept_id: string
+  concept_revision: number
+  preferred_name: string
+}
+
+export type ChatGraphStep = {
+  ordinal: number
+  relation_id: string
+  relation_revision: number
+  relation_type: ConceptRelationType
+  support_basis: RelationSupportBasis
+  from_concept_id: string
+  to_concept_id: string
+  traversed_against_relation_direction: boolean
+}
+
+export type ChatGraphContext = {
+  schema_version: 1
+  course_id: string
+  graph_version: number
+  graph_content_hash: string
+  result_hash: string
+  strategy: 'relationship_trace'
+  concepts: ChatGraphConcept[]
+  steps: ChatGraphStep[]
+}
 
 export type ChatMessage = {
   id: string

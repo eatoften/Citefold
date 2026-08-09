@@ -50,7 +50,7 @@ commit, and remote push are all complete.
 | G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | Complete - G1.1 candidates, G1.2 lifecycle/reliability, and G1.3 immutable publication implemented |
 | G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | In progress - G2.1 Concept tooling, shared G2.2 security primitives, and G2.3 Pass A software implemented; real reviewer-key registration, Concept seal, and Relation labels/seal absent |
 | G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | Product capability implemented and consumed by G4; cache/performance acceptance pending |
-| G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | In progress - Path/Relation/Source and Draft Review/edit/rebind/CAS-publish vertical slices are browser-accepted; graph-aware Chat, durable E2E, public quality, accessibility, and performance gates remain |
+| G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | In progress - Path/Relation/Source, Draft Review/edit/rebind/CAS-publish, and bounded Graph-guided Chat vertical slices are browser-accepted; durable E2E, public quality, accessibility, and performance gates remain |
 | P1.2 Studio | Study, Review, and Course Map become a coherent output library | Deferred until G4 |
 | P1.3 Product polish | Onboarding, previews, search, empty/error states, accessibility, localization | Deferred until G4 |
 | P1.4 Structural hardening | Large frontend slice extraction, shared API-client consolidation, and remaining release optimization | Deferred until G4 except release-blocking work |
@@ -75,10 +75,12 @@ Human gold and the deferred G2 authority work still must finish before
 public-course quality claims, but they no longer block building the remaining
 product behavior. The Concept-first Draft Review, Relation review/rebinding,
 publication preview, and CAS-safe publish loop now exists in Studio. The
-immediate next product milestone is to let grounded Chat consume the exact
-published GraphVersion as structured Concept/path context while original Source
-Chunks and sentence-level citations remain the answer authority. Evaluation
-machinery stays bounded to what is needed to verify that product behavior.
+bounded Chat continuation now consumes an exact published Trace only when the
+current question explicitly names two fully Source-scoped Concepts. It leaves
+Dense retrieval unchanged and persists the route for explanation while Source
+Chunks and sentence citations remain the answer authority. The next G4 gate is
+durable browser/accessibility acceptance plus measured graph quality and path
+performance, not broader routing or more evaluation machinery.
 
 The architecture and alternatives are recorded in
 [ADR-0008](decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md).
@@ -365,6 +367,11 @@ Deliverables:
 - [x] provide Concept/Relation edit, evidence-visible accept/reject, stale-edge
   rebinding to current endpoint revisions, publication preview, and CAS-safe
   GraphVersion publication from the product;
+- [x] provide bounded Graph-guided Chat for questions that explicitly name two
+  fully Source-scoped Concepts: the exact published Trace is immutable answer
+  metadata and untrusted navigation context; Dense retrieval remains the
+  unchanged evidence selector, while cited canonical Source Chunks and
+  server-owned sentence snapshots remain the only factual authority;
 - [ ] add one durable browser E2E and pass desktop, narrow-screen, keyboard,
   and accessibility acceptance;
 - [ ] pass public graph-integrity/path/Locator quality, cold/warm performance,

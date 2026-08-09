@@ -14,9 +14,11 @@ import app.main as main
 import app.rag_service as rag_service
 import app.source_search_service as source_search_service
 from app.chat import ChatMessageCreate
+from app.chat_graph import ChatGraphContext
 from app.chat_grounding import INSUFFICIENT_EVIDENCE_MESSAGE
 from app.chat_service import (
     SAFE_GENERATION_MESSAGE,
+    SAFE_RETRIEVAL_MESSAGE,
     SAFE_SOURCE_CHANGED_MESSAGE,
     SAFE_TIMEOUT_MESSAGE,
 )
@@ -39,6 +41,7 @@ from app.llm_client import LLMTimeoutError
 from app.rag import RagRetrieveResponse
 from app.source_asset import SourceAsset
 from app.source_asset_store import create_source_asset
+from app.source_search_service import SourceSearchError
 
 
 class RecordingLLM:
@@ -238,6 +241,39 @@ def _patch_chat_dependencies(
 def _generation_payload(llm_call) -> dict[str, object]:
     messages, _ = llm_call
     return json.loads(messages[1].content)
+
+
+def _graph_context(course_id: str) -> ChatGraphContext:
+    return ChatGraphContext(
+        course_id=course_id,
+        graph_version=2,
+        graph_content_hash="a" * 64,
+        result_hash="b" * 64,
+        concepts=[
+            {
+                "concept_id": "sparse",
+                "concept_revision": 2,
+                "preferred_name": "Sparse Attention",
+            },
+            {
+                "concept_id": "full",
+                "concept_revision": 4,
+                "preferred_name": "Full Attention",
+            },
+        ],
+        steps=[
+            {
+                "ordinal": 0,
+                "relation_id": "full-sparse",
+                "relation_revision": 5,
+                "relation_type": "prerequisite",
+                "support_basis": "pedagogical_inference",
+                "from_concept_id": "sparse",
+                "to_concept_id": "full",
+                "traversed_against_relation_direction": True,
+            }
+        ],
+    )
 
 
 def test_conversation_create_list_and_restart_persistence() -> None:
@@ -481,6 +517,117 @@ def test_follow_up_history_enters_retrieval_and_generation(
             "content": first_answer,
         },
     ]
+
+
+def test_published_graph_path_is_context_not_source_evidence(
+    monkeypatch,
+) -> None:
+    course = _create_course()
+    source, _, results = _project_pdf_source(
+        course_id=course.id,
+        asset_id="graph-context",
+        texts=["Sparse attention reduces the cost of full attention."],
+    )
+    llm = RecordingLLM(
+        [
+            _answered_output(
+                [("Sparse attention can reduce attention cost.", ["E1"])]
+            )
+        ]
+    )
+    search = RecordingSearch(results)
+    _patch_chat_dependencies(monkeypatch, llm=llm, search=search)
+    graph_calls: list[tuple[str, str, list[str]]] = []
+
+    def load_context(course_id, question, source_ids):
+        graph_calls.append((course_id, question, list(source_ids)))
+        return _graph_context(course_id)
+
+    monkeypatch.setattr(
+        chat_service,
+        "load_graph_chat_context",
+        load_context,
+    )
+    client = TestClient(main.app)
+    conversation = _create_conversation(
+        client,
+        course.id,
+        source_ids=[source.id],
+    )
+    question = "How are Sparse Attention and Full Attention connected?"
+
+    response = _send_message(
+        client,
+        conversation["id"],
+        content=question,
+        request_id="graph-context-request",
+    )
+
+    assert response.status_code == 200, response.text
+    assert graph_calls == [(course.id, question, [source.id])]
+    prompt = _generation_payload(llm.calls[0])
+    assert prompt["evidence_untrusted"][0]["quote"] == results[0].quote
+    assert "score" not in prompt["evidence_untrusted"][0]
+    assert prompt["concept_graph_plan_untrusted"]["steps"] == [
+        {
+            "ordinal": 0,
+            "relation_type": "prerequisite",
+            "support_basis": "pedagogical_inference",
+            "from_concept_id": "sparse",
+            "to_concept_id": "full",
+            "traversed_against_relation_direction": True,
+        }
+    ]
+    assistant = response.json()["assistant_message"]
+    assert assistant["metadata"]["retrieval_mode"] == "semantic"
+    assert assistant["metadata"]["graph_context"] == (
+        _graph_context(course.id).model_dump(mode="json")
+    )
+    assert assistant["citations"][0]["score"] == results[0].score
+
+
+def test_graph_context_does_not_mask_semantic_retrieval_failure(
+    monkeypatch,
+) -> None:
+    course = _create_course()
+    source, _, _ = _project_pdf_source(
+        course_id=course.id,
+        asset_id="graph-retrieval-failure",
+        texts=["The Source remains the only factual authority."],
+    )
+    llm = RecordingLLM([])
+    monkeypatch.setattr(main, "get_llm_client", lambda: llm)
+    monkeypatch.setattr(
+        chat_service,
+        "load_graph_chat_context",
+        lambda course_id, question, source_ids: _graph_context(course_id),
+    )
+
+    def fail_search(course_id, request, *, embedder=None):
+        raise SourceSearchError("private embedding failure")
+
+    monkeypatch.setattr(
+        source_search_service,
+        "search_course_sources",
+        fail_search,
+    )
+    client = TestClient(main.app)
+    conversation = _create_conversation(
+        client,
+        course.id,
+        source_ids=[source.id],
+    )
+
+    response = _send_message(
+        client,
+        conversation["id"],
+        content="How are Full Attention and Sparse Attention connected?",
+        request_id="graph-retrieval-failure-request",
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": SAFE_RETRIEVAL_MESSAGE}
+    assert llm.calls == []
 
 
 def test_answer_has_sentence_level_citations_and_typed_locators(

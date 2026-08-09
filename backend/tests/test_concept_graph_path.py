@@ -5,6 +5,7 @@ import hashlib
 
 import pytest
 
+from app.chat_graph import build_graph_chat_context
 from app.concept_graph_path import (
     GraphPathConceptNotFoundError,
     GraphPathIntegrityError,
@@ -190,6 +191,85 @@ def test_trace_is_shortest_stable_and_respects_direction_and_symmetry() -> None:
     )
     assert symmetric.status == "found"
     assert symmetric.steps[0].traversed_against_relation_direction is False
+
+
+def test_chat_graph_context_uses_one_exact_fully_source_scoped_trace() -> None:
+    snapshot = _snapshot()
+
+    context = build_graph_chat_context(
+        snapshot,
+        "How are Concept A and Concept D connected?",
+        selected_source_ids=["asset:path-fixture"],
+    )
+
+    assert context is not None
+    assert context.strategy == "relationship_trace"
+    assert context.graph_version == 1
+    assert [item.concept_id for item in context.concepts] == [
+        "a",
+        "b",
+        "d",
+    ]
+    assert [item.relation_id for item in context.steps] == [
+        "r-ab",
+        "r-bd",
+    ]
+    assert all(
+        item.support_basis == "source_asserted" for item in context.steps
+    )
+    reverse_context = build_graph_chat_context(
+        snapshot,
+        "How are Concept D and Concept A connected?",
+        selected_source_ids=["asset:path-fixture"],
+    )
+    assert reverse_context is not None
+    assert [item.concept_id for item in reverse_context.concepts] == [
+        "d",
+        "b",
+        "a",
+    ]
+    assert all(
+        item.traversed_against_relation_direction
+        for item in reverse_context.steps
+    )
+    assert build_graph_chat_context(
+        snapshot,
+        "How are Concept A and Concept D connected?",
+        selected_source_ids=["asset:not-selected"],
+    ) is None
+    assert build_graph_chat_context(
+        snapshot,
+        "Explain something else.",
+        selected_source_ids=["asset:path-fixture"],
+    ) is None
+    assert build_graph_chat_context(
+        snapshot,
+        "Compare Concept A, Concept B, and Concept D.",
+        selected_source_ids=["asset:path-fixture"],
+    ) is None
+
+    private_evidence = _evidence("private").model_copy(
+        update={
+            "evidence_id": "evidence-private",
+            "source_id": "asset:not-selected",
+        }
+    )
+    mixed_concept = snapshot.concepts[0].model_copy(
+        update={
+            "evidence": [
+                *snapshot.concepts[0].evidence,
+                private_evidence,
+            ]
+        }
+    )
+    mixed_snapshot = snapshot.model_copy(
+        update={"concepts": [mixed_concept, *snapshot.concepts[1:]]}
+    )
+    assert build_graph_chat_context(
+        mixed_snapshot,
+        "How are Concept A and Concept D connected?",
+        selected_source_ids=["asset:path-fixture"],
+    ) is None
 
 
 def test_trace_distinguishes_unreachable_from_bounded_search() -> None:
