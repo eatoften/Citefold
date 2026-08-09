@@ -12,6 +12,7 @@ from .concept_graph_publication import (
     GraphPublicationRequest,
     GraphVersionMetadata,
     GraphVersionPage,
+    PublishedGraphSnapshot,
     PublishedConceptPage,
     PublishedRelationPage,
 )
@@ -26,6 +27,7 @@ from .concept_graph_publication_store import (
     get_version,
     list_version_concepts,
     list_version_relations,
+    load_version_graph_snapshot,
     list_versions,
     preview_publication,
     publish_version,
@@ -185,6 +187,18 @@ def list_course_version_relations(
             limit=limit,
             cursor=cursor,
         )
+    )
+
+
+def load_course_graph_snapshot(
+    course_id: str,
+    version_number: int,
+) -> PublishedGraphSnapshot:
+    """Return one historical snapshot; G3 decides if it is authoritative."""
+
+    course = _require_course(course_id)
+    return _run_store(
+        lambda: load_version_graph_snapshot(course.id, version_number)
     )
 
 

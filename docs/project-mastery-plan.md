@@ -89,7 +89,7 @@ The project has three honest resume states:
 
 | State | Allowed claim |
 | --- | --- |
-| Portfolio in progress | The Source-first notebook, Grounded Chat, citations, Notes, reliability foundation, G1 Concept-graph substrate, frozen G0.2 Source slice, G2.1 annotation tooling, shared G2.2 security primitives, and G2.3 Pass A commit--reveal software may be listed as implemented; no real reviewer-key policy or authorized worksheet exists, so human gold and G3-G4 outcomes must remain in-progress/planned |
+| Portfolio in progress | The Source-first notebook, Grounded Chat, citations, Notes, reliability foundation, G1 Concept-graph substrate, frozen G0.2 Source slice, G2.1-G2.3 annotation software, and G3 deterministic backend paths may be listed as implemented; no real human gold, G4 Path View/resolver, public-course path result, or accepted performance result exists |
 | SDE flagship ready | The product, graph program, critical polish/hardening, release, measurements, and maintainer ownership gates below all pass |
 | Applied-MLE flagship ready | The SDE flagship gates pass and MLE-E1 adds a frozen evaluation set, baselines, ablations, metrics, latency, and error analysis |
 
@@ -117,9 +117,10 @@ R1-R9 makes it defensible as an applied-MLE/ML-systems flagship. A recruiter
 may see only a few lines and a short demo, so every resume sentence must map to
 a public artifact, test, commit, measurement, or video timestamp in the demo.
 
-Current checkpoint: the P0/P1.1 foundation is strong and G1 now has an
-immutable authority boundary, but the final flagship gate is **not yet
-passed**. G0.2 has frozen and independently replayed the real 68-page CS336
+Current checkpoint: the P0/P1.1 foundation is strong, G1 has an immutable
+authority boundary, and G3 now has tested exact-version backend Local, Trace,
+and Learning queries, but the final flagship gate is **not yet passed**. G0.2
+has frozen and independently replayed the real 68-page CS336
 Source slice. G2.1 implements the Concept annotation/sealing workflow and has
 added a prior-commit reviewer-key trust root, but no real policy has been
 registered and no authorized worksheet or human label exists. No Concept seal,
@@ -129,9 +130,11 @@ G2.3 now implements Relation Pass A schemas, exhaustive worksheet tooling,
 private label sealing, a nonce-salted label-free public commitment, canonical
 upstream replay, and failure-safe publication. No real Pass A
 label or seal exists because the maintainer has not completed Concept or
-Relation annotation. Human
-G2 work, G3-G4, critical product finish, the next public release, and
-maintainer mastery remain.
+Relation annotation. G2.4 delay/readiness tooling is explicitly deferred after
+a product-priority correction. G3 does not yet have normalized cross-request
+caching or accepted 1k/10k latency evidence. Human G2 work, G4 UI and graph-
+evidence resolution, public-course evaluation, critical product finish, the
+next public release, and maintainer mastery remain.
 The visible maintainability baseline also includes a 5,169-line `App.tsx`, a
 3,809-line `main.py`, a tag/manual-only Windows release workflow, an empty
 backend README, and an unchanged Vite-template frontend README. These are
@@ -382,10 +385,11 @@ registration and the authorized CS336 worksheet have not started. The shared
 G2.2 evidence/privacy and detached-attestation primitives are implemented;
 G2.3's Pass A commit--reveal software is implemented and covered by synthetic
 plus real-capability integration tests,
-but no real Pass A semantic artifact exists. Automatic
-Understanding, actual Concept/Relation gold, deterministic tracing,
-topological learning paths, and the G4 evidence-first UI remain planned or
-human-owned work.
+but no real Pass A semantic artifact exists. G3's deterministic Local,
+Relationship Trace, and prerequisite Learning Path backend is implemented over
+one exact active/current published graph version. Automatic Understanding,
+actual Concept/Relation gold, G4 Path View and evidence resolver, measured
+performance, and public-course path quality remain planned or human-owned work.
 
 ## Delivery Sequence
 
@@ -396,11 +400,11 @@ seven verified product-core commits integrated into main at eaf9274
 -> establish the graph branch and G0 contract
 -> G1 Concept / Evidence / Relation foundation
 -> G2.1 tooling -> shared G2.2 security primitives -> G2.3 Pass A tooling
--> Git-commitment authority + typed 72-hour readiness tooling
--> maintainer-authored Concepts -> Pass A commit/push -> delay -> Pass B
--> adjudication -> gold bundle
--> G3 BFS / relationship trace / prerequisite topological path
--> G4 stable Path View, per-edge evidence, and graph quality gate
+-> G3 BFS / relationship trace / prerequisite topological backend [implemented]
+-> G4 stable Path View + server-owned per-edge evidence navigation
+-> resume deferred G2.4 Git/readiness authority and maintainer-owned annotation
+-> Pass A -> delay -> Pass B -> adjudication -> gold bundle
+-> graph performance and public-course quality gate
 -> resume Studio consolidation, product polish, hardening, and public release
 
 G4 -> MLE-E1 reproducible portfolio evaluation for MLE-targeted applications
@@ -657,7 +661,7 @@ Update this table only with evidence:
 | Reliability | Locally verified | M0 | Not assessed | Not assessed | draw task state machine and inject one crash case |
 | Notes | Locally verified | M0 | Not assessed | Not assessed | explain publication/versioning and add one conflict case |
 | Concept graph G0 | In progress | M0 | Not assessed | Not assessed | restate ADR-0008 and review the first contract change |
-| Concept graph G1-G4 | G1, G2.1 Concept tooling, shared G2.2 security primitives, and G2.3 Pass A software implemented; real key policy, Concept seal, and Relation labels/seal absent; G3-G4 planned | M0 | Not assessed | Not assessed | draw the G2.1/G2.3 artifact DAGs and shared evidence/signature boundaries, register the reviewer key before annotation, and explain why key control is not proof of humanity |
+| Concept graph G1-G4 | G1, G2.1-G2.3 software, and the G3 deterministic backend implemented; real human gold, G4 UI/resolver, performance acceptance, and public-course path results absent | M0 | Not assessed | Not assessed | draw the exact-version path flow, hand-simulate BFS/Kahn and fix one bounded-path test before returning to maintainer-owned gold |
 
 ### Daily checkpoint template
 
@@ -716,6 +720,8 @@ The final repository and preparation folder should contain:
 - [Technical-stack learning notebook](learning/README.md)
 - [Session 1 lesson](learning/session-01-source-card-graph-contract.md)
 - [G2 human-annotation handoff lesson](learning/g2-human-annotation-handoff.md)
+- [G3 deterministic path engine](modules/concept-graph-path-engine.md)
+- [G3 deterministic path learning handoff](learning/g3-deterministic-path-engine-handoff.md)
 - [Draft graph annotation protocol](graph-annotation-protocol.md)
 - [G2.1 human annotation workflow](modules/golden-graph-human-annotation-workflow.md)
 - [Shared G2 annotation security primitives](modules/golden-graph-annotation-security-primitives.md)

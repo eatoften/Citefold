@@ -77,6 +77,7 @@ from .concept_graph_api import router as concept_graph_router
 from .concept_graph_publication_api import (
     router as concept_graph_publication_router,
 )
+from .concept_graph_path_api import router as concept_graph_path_router
 from .card_embedding import CardEmbeddingBatchResult, CardEmbeddingStatus
 from .card_relation import (
     CardRelatedCardsResponse,
@@ -1366,6 +1367,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 app.include_router(concept_graph_router)
 app.include_router(concept_graph_publication_router)
+app.include_router(concept_graph_path_router)
 
 
 app.add_middleware(

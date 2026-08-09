@@ -72,6 +72,9 @@ Implemented:
   cancel, retry, idempotency, and restart recovery;
 - recoverable Trash for the main workspace entities, plus validated full
   workspace backup/import/restore covering SQLite and managed local files.
+- a G3 backend path engine over exact immutable GraphVersions: bounded Local
+  BFS, deterministic shortest Relationship Trace, prerequisite closure and
+  stable Kahn Learning Path, with evidence-bearing DTOs and result hashes.
 
 P0.4 reorganized the application around this product navigation:
 
@@ -139,11 +142,13 @@ nonce-salted label-free hash commitment with independent Pass A namespace
 signing. Public/private path capabilities are separated, and real-capability
 integration tests replay canonical protocol/Source/Concept/Git/SSH authority,
 revocation, no-overwrite publication, and seal-last recovery. There is
-deliberately no reveal command before Pass B. This is software
-machinery, not a real human Pass A result. Automatic Understanding, Relation
-gold, deterministic paths, and the
-evidence-first graph UI remain roadmap work; the current Explore graph is still a sparse
-CardRelation discovery baseline. See the
+deliberately no reveal command before Pass B. This is software machinery, not
+a real human Pass A result. G3 now implements the backend deterministic path
+engine and exact-version APIs. G2.4's Git-derived 72-hour readiness tooling is
+explicitly deferred while the product closes the visible graph loop. Automatic
+Understanding, Relation gold, the G4 Path View, graph-evidence resolver,
+public-course path evaluation, and performance acceptance remain roadmap work; the
+current Explore graph is still a sparse CardRelation discovery baseline. See the
 [active roadmap](docs/roadmap.md),
 [graph decision record](docs/decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md),
 [staged-human-gold decision](docs/decisions/ADR-0010-staged-human-gold-and-key-control-attestation.md),
@@ -154,6 +159,8 @@ CardRelation discovery baseline. See the
 [G2.1 human annotation workflow](docs/modules/golden-graph-human-annotation-workflow.md),
 [shared annotation security primitives](docs/modules/golden-graph-annotation-security-primitives.md),
 [Relation Pass A workflow](docs/modules/golden-graph-relation-pass-a-workflow.md),
+[G3 deterministic path engine](docs/modules/concept-graph-path-engine.md),
+[G3 maintainer handoff](docs/learning/g3-deterministic-path-engine-handoff.md),
 [learning and mastery plan](docs/project-mastery-plan.md), and
 [append-only engineering log](docs/productization-log.md) for scope,
 tradeoffs, tests, and known limitations.
@@ -197,7 +204,10 @@ with at least five independent sealed lecture clusters.
 > merge/retirement lifecycle. G1.2d adds durable initial-create receipts, and
 > G1.3 publishes immutable authoritative GraphVersions with fail-closed Source
 > authority. G2.1 supplies a separate evaluation-only human Concept handoff,
-> but no real reviewer-key policy or authorized worksheet exists yet. The
+> but no real reviewer-key policy or authorized worksheet exists yet. G3 now
+> supplies deterministic backend Local, Trace, and Learning queries over one
+> exact active/current GraphVersion. The G4 UI and server-owned Graph Evidence
+> resolver do not yet exist. The
 > current automatic Card pipeline still reads video
 > `TranscriptChunk` objects directly; no candidate is an accepted graph fact;
 > and Explore still renders a Card-to-Card `CardRelation` graph.

@@ -1,6 +1,6 @@
 # Technical-Stack Learning Notebook
 
-Last updated: 2026-08-08
+Last updated: 2026-08-09
 
 这套笔记用于让项目维护者最终能够独立解释、修改、调试和重建 Video
 Course Cards 的关键纵向系统。它不是另一本产品路线图，也不是把框架文档
@@ -60,7 +60,7 @@ M4 能比较方案、量化取舍并完成 system-design defense
 | 前端 | React 19, TypeScript 6, Vite 8 | Sources/Chat/Studio UI 与异步状态 | component boundary、effect cleanup、AbortController、stale response、typed routes | [App.tsx](../../frontend/src/App.tsx), [navigation contract](../../frontend/src/features/navigation/appRoute.ts) | M0 |
 | 前端测试 | Vitest, Testing Library, jsdom | 组件行为、路由、竞态和基础语义/键盘行为回归 | user-observable assertions、mock boundary、fake timers、Strict Mode；真实浏览器 E2E 与完整 accessibility audit 仍是缺口 | [vitest.config.ts](../../frontend/vitest.config.ts), [Graph tests](../../frontend/src/GraphView.test.tsx) | M0 |
 | 当前图探索 | react-force-graph-2d + CardRelation | similarity/manual/model-assisted Card 图 | force layout 只是视图；Card 不等于 Concept；候选边不等于事实 | [GraphView.tsx](../../frontend/src/GraphView.tsx), [card_relation_service.py](../../backend/app/card_relation_service.py) | Session 1 |
-| 目标概念路径 | relational graph + BFS/DFS/Kahn | evidence-grounded Concept、关系寻踪、前置拓扑层 | graph version、证据有效性、并发无环发布、确定性、复杂度 | [ADR-0008](../decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md) | Session 1 |
+| 概念路径 | relational graph + BFS/Kahn | evidence-grounded Local、Trace 与 prerequisite Learning Path | graph version、方向、确定性、bounded miss、复杂度 | [path engine](../modules/concept-graph-path-engine.md), [implementation](../../backend/app/concept_graph_path.py) | Draft/M0 |
 | 桌面运行时 | Tauri 2, Rust, PyInstaller | Windows 包装、本地 backend sidecar 生命周期 | process identity、port ownership、shutdown、managed paths、locked build | [backend.rs](../../frontend/src-tauri/src/backend.rs), [Cargo.toml](../../frontend/src-tauri/Cargo.toml) | M0 |
 | Topic 聚类 | scikit-learn `AgglomerativeClustering` | 从 Card 提议可编辑 Topic 分组 | feature scaling、distance threshold、cluster stability、proposal 不是真值 | [topic_suggestion_service.py](../../backend/app/topic_suggestion_service.py) | M0 |
 | ML/多模态实验 | PyTorch, ONNX Runtime, RapidOCR | OCR/CTC 与 RAG 的隔离、可复现实验 | split、artifact hash、overfit gate、metrics、negative result、product/research boundary | [multimodal lab](../../backend/multimodal_lab/README.md), [RAG study](../RAG%20retrieval%20and%20graph%20study.md) | M0 |
@@ -157,6 +157,7 @@ P1.4/G4 的真实工程缺口（例如 change-level CI 和自动化 E2E）。面
 | [Session 1](session-01-source-card-graph-contract.md) | Source、Card、Topic、Concept 与当前/目标图数据流 | G0 | M0 -> M1 | Started |
 | Session 2 | additive graph migration 与 ER/transaction contract | G1 | M1 -> M2 | Planned |
 | Session 3 | Concept API vertical slice 与 course isolation | G1 | M1 -> M2 | Planned |
+| [G3 handoff](g3-deterministic-path-engine-handoff.md) | BFS、方向、bounded Trace 与 Kahn Learning Path | G3 | M0 -> M2 | Draft |
 
 ## 专题深挖
 
@@ -165,6 +166,9 @@ P1.4/G4 的真实工程缺口（例如 change-level CI 和自动化 E2E）。面
 - [可复现、可审计的 Source Slice](deep-dive-reproducible-source-slices.md)
   （G0.2b，Draft/M0）：canonical bytes、Git provenance、public/private
   boundary、historical authority 与 replay readiness。
+- [G3 确定性路径引擎](g3-deterministic-path-engine-handoff.md)
+  （G3 backend，Draft/M0）：exact GraphVersion、BFS、Kahn、稳定破平局、
+  authority failure，以及为什么 bounded miss 不等于 unreachable。
 
 ## 复习总账
 

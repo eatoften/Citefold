@@ -108,6 +108,8 @@ def accepted_relation(
     chunk: CourseSourceChunk,
     source_id: str,
     target_id: str,
+    *,
+    evidence_quote: str = "Alpha precedes Beta",
 ):
     candidate = create_grounded_relation_candidate(
         course_id,
@@ -123,7 +125,7 @@ def accepted_relation(
             evidence=[
                 {
                     "chunk_id": chunk.id,
-                    "quote": "Alpha precedes Beta",
+                    "quote": evidence_quote,
                     "support_role": "relation_assertion",
                 }
             ],

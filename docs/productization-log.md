@@ -4230,3 +4230,72 @@ frozen 72-hour rule. Only after that boundary exists may Pass B initialization
 be implemented, and its tests must prove that it receives only public Pass A
 paths and never reads the hidden artifact. Real policy registration and every
 semantic decision remain maintainer-owned.
+
+## G3 backend - Deterministic Concept Graph paths
+
+**Status:** Backend implementation and focused tests complete locally; full
+regression, commit, push, G4 UI, and release acceptance remain pending
+
+### Product-priority correction
+
+After G2.3, the project had invested deeply in future gold-label integrity
+while the user-visible Concept path did not exist. The next G2.4 checkpoint
+(Git-derived commitment authority and 72-hour readiness) remains valid, but is
+explicitly deferred. Work moved to the smallest useful vertical product slice:
+read one reviewed GraphVersion and return reliable Local, Trace, and Learning
+results. Human gold is still required before public-course quality claims; it
+no longer blocks implementation of the product behavior it will later test.
+
+### Outcome
+
+```text
+exact course + published graph version
+-> same-read-snapshot integrity and Source-authority observation
+-> active/current authority gate
+-> deterministic adjacency
+-> Local BFS | shortest Trace BFS | prerequisite closure + Kahn
+-> evidence-bearing response + canonical result hash
+```
+
+The checkpoint adds three exact-version GET APIs. Local performs bounded N-hop
+BFS and returns the allowed-type induced subgraph. Trace distinguishes a found
+shortest path, a fully exhausted unreachable search, and a search stopped by
+hop/node limits. Learning collects the complete incoming-prerequisite closure,
+then returns stable topological layers and a stable linearization. It refuses
+to present a partial closure as an authoritative learning order.
+
+Direction is explicit, symmetric edges traverse both ways, and equal choices
+use one frozen v1 relation priority plus stable IDs. Results bind the GraphVersion
+content hash, normalized inputs, ordered identities, traversal orientation,
+layers, and terminal state. Full published Concept/Relation evidence is carried
+in the DTO, so no second evidence schema or N+1 metadata fetch was introduced.
+
+### Failures and tests
+
+The service separates missing resources, invalid bounds, oversized prerequisite
+closure, inactive/stale authority, SQLite contention, and corrupt graph state.
+Focused tests cover direction/symmetry, stable equal paths, unreachable versus
+bounded search, node truncation, cycle/duplicate/missing-endpoint rejection,
+evidence-bearing responses, exact-version lookup, and Source drift. An
+independent focused run passed `7` tests in `12.52s`; the only warning was the
+existing Starlette/httpx deprecation warning.
+
+### Honest debt and non-claims
+
+The current store first performs full snapshot validation and then hydrates the
+graph, while the engine rebuilds adjacency on every request. No cross-request
+normalized cache exists and no 1,000/10,000-node P95 result has been accepted.
+The G4 Path View, server-owned Graph Evidence target/content resolver, browser
+E2E, narrow/keyboard acceptance, real human CS336 gold, and public-course path
+quality report remain absent. This checkpoint proves a deterministic backend
+algorithm/API slice, not learning effectiveness, production-scale performance,
+or superiority over NotebookLM.
+
+### Final local verification
+
+- focused G3 engine/API suite: `7 passed`;
+- adjacent Concept graph store/API/publication/path regression: `54 passed`;
+- complete backend suite: `1125 passed, 7 skipped` in `811.87s`;
+- independent review: no P0/P1, plus 100 generated DAGs cross-checked for
+  Trace shortest-hop distance and Learning ancestor closure;
+- the sole warning remains the pre-existing Starlette/httpx deprecation.

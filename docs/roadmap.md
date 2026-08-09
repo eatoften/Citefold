@@ -49,7 +49,7 @@ commit, and remote push are all complete.
 | G0 Graph contract and baseline | Relation semantics, evidence rules, evaluation scope, and non-goals are frozen | In progress |
 | G1 Concept graph substrate | Concepts have stable identity and accepted/current relations have current locatable evidence | Complete - G1.1 candidates, G1.2 lifecycle/reliability, and G1.3 immutable publication implemented |
 | G2 Golden course graph | One bounded course slice has a human-reviewed, versioned reference graph | In progress - G2.1 Concept tooling, shared G2.2 security primitives, and G2.3 Pass A software implemented; real reviewer-key registration, Concept seal, and Relation labels/seal absent |
-| G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | Planned |
+| G3 Deterministic paths | Users can inspect N-hop neighborhoods, A-to-B traces, and prerequisite learning order | In progress - backend engine and exact-version APIs implemented; cache/performance acceptance and G4 UI pending |
 | G4 Evidence-first graph experience | Stable path views explain every node and edge and pass a graph-quality gate | Planned |
 | P1.2 Studio | Study, Review, and Course Map become a coherent output library | Deferred until G4 |
 | P1.3 Product polish | Onboarding, previews, search, empty/error states, accessibility, localization | Deferred until G4 |
@@ -66,6 +66,13 @@ Every G stage must still include scoped architecture, automated unit/integration
 tests, relevant UI/E2E checks, manual acceptance, documentation, an independent
 commit, and a confirmed remote push. Reliability, maintainability, performance,
 or security work that blocks a G stage or safe release is handled when discovered.
+
+After G2.3, implementation priority was corrected toward the user-visible
+vertical slice. G2.4's Git-derived 72-hour readiness and Pass B initialization
+remain specified but are explicitly deferred. The backend G3 path engine is
+implemented first; G4 Path View and graph-evidence navigation follow. Human
+gold and the deferred G2 authority work still must finish before public-course
+quality claims, but they no longer block building the product behavior.
 
 The architecture and alternatives are recorded in
 [ADR-0008](decisions/ADR-0008-evidence-grounded-concept-graph-and-deterministic-paths.md).
@@ -210,11 +217,12 @@ See the
 [immutable publication module](modules/concept-graph-publication.md).
 
 G1 is complete as a bounded implementation stage. A behavior-preserving G1.3b
-internal split is recorded before more publication features: move draft
+internal split remains recorded: move draft
 validation/hash construction, sealed snapshot codecs, and shared Source
 authority into separate modules without changing hashes or copying predicates.
 This maintainability debt does not weaken the published-version contract, but
-it must be paid before G3 consumes the boundary.
+the G3 backend slice now consumes that boundary without claiming the split is
+complete. The split remains due before performance acceptance or public release.
 
 Deliverables:
 
@@ -258,11 +266,13 @@ software checkpoint, not a human-label, gold-graph, accuracy, agreement, or
 path-quality result. The staged authority decision is recorded in
 [ADR-0010](decisions/ADR-0010-staged-human-gold-and-key-control-attestation.md).
 
-The next software checkpoint is not blind Pass B itself. First, the public
-Pass A commitment must gain a Git-registered commitment authority and a typed
-72-hour readiness check derived from repository history rather than trusting
-the worksheet timestamp. Pass B initialization must then accept only the
-public commitment path capability and prove it never opens private Pass A.
+G2.4 remains the next annotation-authority checkpoint: the public Pass A
+commitment must gain a Git-registered commitment authority and a typed 72-hour
+readiness check derived from repository history rather than trusting the
+worksheet timestamp. Pass B initialization must then accept only the public
+commitment path capability and prove it never opens private Pass A. This work
+is explicitly deferred while G3/G4 close the product path experience; no human
+gold or delay claim is implied by that scheduling choice.
 
 Deliverables:
 
@@ -292,17 +302,36 @@ Unsupported edges are removed even when doing so lowers coverage.
 
 #### G3 - Deterministic traversal and path engine
 
+Current checkpoint: the
+[deterministic path engine](modules/concept-graph-path-engine.md) implements a
+read-only backend over one exact active, Source-current published GraphVersion.
+It provides bounded Local BFS, shortest-hop Relationship Trace with stable
+ties and distinct unreachable/limited outcomes, and complete prerequisite
+closure with stable Kahn layers/linearization. Responses embed published
+Concept/Relation evidence and bind ordered results with a canonical hash.
+Focused pure and API/SQLite tests pass. The implementation deliberately does
+not reuse CardRelation, ask an LLM to select paths, or return a partial Learning
+Path when its closure exceeds the node bound.
+
+G3 is not yet fully accepted as a measured product stage. Snapshot validation
+currently precedes a second hydration, adjacency is rebuilt per request, and
+there is no cross-request normalized cache or accepted 1k/10k profile. G4 UI,
+server-owned graph-evidence resolution, browser E2E, and public-course quality
+evaluation also remain pending.
+
 Deliverables:
 
-- filtered N-hop BFS for Local Graph;
-- deterministic BFS for an explainable A-to-B Relationship Trace;
-- prerequisite ancestor closure, cycle detection, topological layers, and one
-  stable Kahn linearization for Learning Path;
-- evidence-bearing DTOs and APIs for every path step;
-- enforce relation/direction filters plus bounded hops/nodes and deterministic truncation;
-- tests for unreachable nodes, multiple equal paths, filters, cycles, duplicate
-  edges, missing endpoints, stable ties, adjacency materialization cost, and
-  `O(V + E)` traversal over a normalized immutable graph version.
+- [x] filtered N-hop BFS for Local Graph;
+- [x] deterministic BFS for an explainable A-to-B Relationship Trace;
+- [x] prerequisite ancestor closure, cycle detection, topological layers, and
+  one stable Kahn linearization for Learning Path;
+- [x] evidence-bearing DTOs and APIs for every path step;
+- [x] relation/direction filters, bounded hops/nodes, and deterministic truncation;
+- [x] focused correctness tests for unreachable/limited searches, equal paths,
+  filters, cycles, duplicate edges, missing endpoints, stable ties, evidence,
+  version authority, and Source drift;
+- [ ] cached adjacency materialization, its separate cost report, and measured
+  `O(V + E)` traversal/performance acceptance over a normalized immutable graph.
 
 Similarity may propose candidates but is not a learning-order edge.
 

@@ -205,3 +205,11 @@ class PublishedConceptPage(BaseModel):
 class PublishedRelationPage(BaseModel):
     items: list[PublishedRelation] = Field(default_factory=list)
     next_cursor: str | None = Field(default=None, max_length=200)
+
+
+class PublishedGraphSnapshot(BaseModel):
+    """One integrity-checked immutable graph version for G3 consumers."""
+
+    version: GraphVersionMetadata
+    concepts: list[PublishedConcept] = Field(default_factory=list)
+    relations: list[PublishedRelation] = Field(default_factory=list)

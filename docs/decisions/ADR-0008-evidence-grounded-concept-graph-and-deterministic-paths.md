@@ -209,6 +209,20 @@ with deterministic truncation. Equal-hop paths use a documented relation-type
 priority and stable IDs. BFS finds a shortest-hop trace, not necessarily the
 semantically strongest explanation.
 
+The implemented G3-v1 query registry is:
+
+| Query | Defaults | Maximum |
+| --- | --- | --- |
+| Local | `direction_mode=both`, `max_hops=2`, `max_nodes=100` | `max_hops=5`, `max_nodes=500` |
+| Trace | `direction_mode=outgoing`, `max_hops=6`, `max_nodes=200` | `max_hops=10`, `max_nodes=500` |
+| Learning | `max_nodes=200` | `max_nodes=500` |
+
+All-type traversal uses the stable priority `prerequisite`, `part_of`,
+`example_of`, `related`, `contrast_with`. These numbers and this ordering were
+registered by the G3 implementation checkpoint; they were not part of the
+earlier G0 freeze. A measured latency budget remains a separate acceptance
+gate and is not implied by the structural limits.
+
 Learning Path always follows accepted/current prerequisite direction.
 Topological layers communicate actual precedence; the linearization is only a
 stable presentation order for otherwise incomparable Concepts, not a claim of
@@ -451,7 +465,8 @@ the real Source-slice freeze and remaining confidence floors are pending.
 - Concept, Alias, ConceptEvidence, Relation, and RelationEvidence store/service/API;
 - orthogonal review/validity lifecycle, relation-evidence support roles,
   Source-revision currentness checks, and Concept merge/retirement history;
-- immutable published graph versions, draft revision CAS, and version-keyed adjacency;
+- immutable published graph versions, draft revision CAS, and version-keyed
+  source/target incident indexes;
 - prerequisite cycle validation and acceptance occur under the same
   `BEGIN IMMEDIATE` transaction as complete-snapshot evidence/currentness/
   uniqueness/endpoint rechecks and atomic graph-version publication;
@@ -459,7 +474,8 @@ the real Source-slice freeze and remaining confidence floors are pending.
 
 ### G2 - Human-reviewed golden course graph
 
-**Status:** Planned.
+**Status:** In progress; G2.1-G2.3 workflow software is implemented, while
+maintainer-authored Concept/Relation gold remains pending.
 
 - have the human maintainer normalize and freeze one evidence-bound `C_gold`
   Concept/alias inventory for a bounded course slice;
@@ -476,7 +492,8 @@ the real Source-slice freeze and remaining confidence floors are pending.
 
 ### G3 - Deterministic traversal and path engine
 
-**Status:** Planned.
+**Status:** Backend algorithm/API slice implemented; materialization performance
+and G4 product integration pending.
 
 - bounded N-hop Local Graph and typed/directional A-to-B Relationship Trace;
 - prerequisite ancestor closure, cycle detection, topological layers, and one

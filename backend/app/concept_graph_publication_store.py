@@ -22,6 +22,7 @@ from .concept_graph_publication import (
     PublishedConceptAlias,
     PublishedConceptPage,
     PublishedEvidence,
+    PublishedGraphSnapshot,
     PublishedRelation,
     PublishedRelationEvidence,
     PublishedRelationPage,
@@ -44,6 +45,7 @@ MAX_RELATION_EVIDENCE = 100_000
 MAX_ISSUES = 100
 MAX_DRAFT_SERIALIZED_BYTES = 64 * 1024 * 1024
 MAX_AUTHORITY_CHUNK_CHARS = 65_536
+GRAPH_HYDRATION_BATCH_SIZE = 500
 
 
 class ConceptGraphPublicationStoreError(RuntimeError):
@@ -461,6 +463,80 @@ def list_version_relations(
             else None
         )
         return PublishedRelationPage(items=items, next_cursor=next_cursor)
+
+
+def load_version_graph_snapshot(
+    course_id: str,
+    version_number: int,
+) -> PublishedGraphSnapshot:
+    """Load one complete immutable graph in a single SQLite read snapshot."""
+
+    ensure_db()
+    with connect() as conn:
+        conn.execute("BEGIN")
+        _require_active_course(conn, course_id)
+        version = _load_version_metadata(
+            conn,
+            course_id,
+            version_number,
+            verify=True,
+        )
+        concept_rows = conn.execute(
+            """
+            SELECT * FROM concept_graph_version_concepts
+            WHERE course_id = ? AND version_number = ?
+            ORDER BY concept_id
+            """,
+            (course_id, version_number),
+        ).fetchall()
+        relation_rows = conn.execute(
+            """
+            SELECT * FROM concept_graph_version_relations
+            WHERE course_id = ? AND version_number = ?
+            ORDER BY relation_id
+            """,
+            (course_id, version_number),
+        ).fetchall()
+        concepts = [
+            item
+            for start in range(
+                0,
+                len(concept_rows),
+                GRAPH_HYDRATION_BATCH_SIZE,
+            )
+            for item in _published_concepts_from_rows(
+                conn,
+                course_id,
+                version_number,
+                concept_rows[start : start + GRAPH_HYDRATION_BATCH_SIZE],
+            )
+        ]
+        relations = [
+            item
+            for start in range(
+                0,
+                len(relation_rows),
+                GRAPH_HYDRATION_BATCH_SIZE,
+            )
+            for item in _published_relations_from_rows(
+                conn,
+                course_id,
+                version_number,
+                relation_rows[start : start + GRAPH_HYDRATION_BATCH_SIZE],
+            )
+        ]
+        if (
+            len(concepts) != version.counts.concepts
+            or len(relations) != version.counts.relations
+        ):
+            raise PublicationIntegrityError(
+                "Published Concept graph snapshot changed while loading."
+            )
+        return PublishedGraphSnapshot(
+            version=version,
+            concepts=concepts,
+            relations=relations,
+        )
 
 
 def _preview_from_snapshot(
